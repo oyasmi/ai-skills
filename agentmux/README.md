@@ -80,6 +80,14 @@ INSTALL_SKILL=0 ./scripts/install.sh
 agentmux template list --json
 ```
 
+也可以先通过帮助探索命令：
+
+```bash
+agentmux --help
+agentmux help summon
+agentmux capture --help
+```
+
 ## 发布
 
 发布脚本：
@@ -87,6 +95,11 @@ agentmux template list --json
 ```bash
 ./scripts/release.sh
 ```
+
+GitHub Actions 也已经配置为自动打包：
+
+1. 创建 `v*` tag 时自动构建、上传 artifact，并发布 GitHub Release
+2. 支持手动触发 `AgentMux Package` workflow
 
 默认会构建这些目标：
 
@@ -120,6 +133,8 @@ dist/checksums.txt
 主配置文件路径：
 
 `~/.config/agentmux/config.yaml`
+
+如果该文件不存在，`agentmux` 会在首次执行非帮助命令时自动写入默认配置。
 
 可以先复制示例配置：
 

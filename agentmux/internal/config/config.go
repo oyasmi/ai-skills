@@ -15,6 +15,52 @@ import (
 
 const (
 	DefaultSocketPath = "/tmp/agentmux.sock"
+	DefaultConfigYAML = `version: 1
+
+defaults:
+  shell: /bin/bash -lc
+  cwd: .
+  env:
+    TERM: xterm-256color
+  capture:
+    history: 120
+    stable_ms: 1500
+    poll_ms: 250
+  max_instances: 8
+
+templates:
+  深度编码专家:
+    description: 面向复杂编码、调试、重构和测试修复任务的通用专家
+    command: codex --model $MODEL
+    model: openai/gpt-5.4
+    system_prompt: 你是深度编码专家，先建立代码上下文，再直接推进修改、验证和收尾。
+    prompt: ""
+    cwd: .
+
+  文档专家:
+    description: 面向需求梳理、设计说明、使用文档和交付说明的专家
+    command: codex --model $MODEL
+    model: openai/gpt-5.4
+    system_prompt: 你负责生成结构稳定、边界清楚、可执行的技术文档。
+    prompt: ""
+    cwd: .
+
+  工作项管理助手:
+    description: 面向任务拆分、优先级整理、进度跟踪和状态汇总的助手
+    command: claude --dangerously-skip-permissions --model $MODEL
+    model: anthropic/claude-sonnet-4.5
+    system_prompt: 你负责管理工作项，输出要短、准、可执行。
+    prompt: ""
+    cwd: .
+
+  通用终端助手:
+    description: 面向轻量命令执行和终端观察的通用模板
+    command: codex --model $MODEL
+    model: openai/gpt-5.4
+    system_prompt: ""
+    prompt: ""
+    cwd: .
+`
 )
 
 type Config struct {
@@ -161,6 +207,18 @@ func EnsureStateDir(paths Paths) error {
 	}
 	if err := os.MkdirAll(paths.StateDir, 0o755); err != nil {
 		return apperr.Wrap("config_invalid", err, "create state dir")
+	}
+	return nil
+}
+
+func EnsureDefaultConfig(path string) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return apperr.Wrap("config_invalid", err, "stat config file %s", path)
+	}
+	if err := os.WriteFile(path, []byte(DefaultConfigYAML), 0o644); err != nil {
+		return apperr.Wrap("config_invalid", err, "write default config file %s", path)
 	}
 	return nil
 }

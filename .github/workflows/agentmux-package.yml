@@ -1,0 +1,99 @@
+name: AgentMux Package
+
+on:
+  push:
+    tags:
+      - "v*"
+    paths:
+      - "agentmux/**"
+      - ".github/workflows/agentmux-package.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: agentmux-package-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Build Release Artifacts
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: agentmux
+
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: agentmux/go.mod
+          cache: true
+          cache-dependency-path: agentmux/go.sum
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            value="${GITHUB_REF_NAME}"
+          else
+            value="main-${GITHUB_SHA::7}"
+          fi
+          echo "value=$value" >> "$GITHUB_OUTPUT"
+          echo "VERSION=$value" >> "$GITHUB_ENV"
+
+      - name: Build packages
+        run: ./scripts/release.sh
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentmux-${{ steps.version.outputs.value }}
+          path: |
+            agentmux/dist/*.tar.gz
+            agentmux/dist/checksums.txt
+          if-no-files-found: error
+
+      - name: Upload dist README
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentmux-${{ steps.version.outputs.value }}-docs
+          path: agentmux/dist/README.md
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: package
+    if: github.ref_type == 'tag'
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: agentmux-${{ needs.package.outputs.version }}
+          path: dist
+
+      - name: Download dist README
+        uses: actions/download-artifact@v4
+        with:
+          name: agentmux-${{ needs.package.outputs.version }}-docs
+          path: dist
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/checksums.txt
+            dist/README.md
+          generate_release_notes: true
