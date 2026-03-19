@@ -1,0 +1,4 @@
+interface:
+  display_name: "AgentMux"
+  short_description: "Run isolated tmux-backed terminal agents"
+  default_prompt: "Use $agentmux to summon or reuse a terminal agent instance, capture stable screen text, and send the next prompt without calling tmux directly."
