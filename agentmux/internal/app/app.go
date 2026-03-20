@@ -225,12 +225,13 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 		}
 		return attachSelect(ctx, svc, stderr)
 	case "halt":
-		if len(args) < 2 {
-			return writeErr(stdout, stderr, jsonMode, "halt", "", apperr.New("invalid_arguments", "missing instance name\n\n"+haltHelp()))
-		}
-		inst, err := svc.Halt(ctx, args[1])
+		name, immediately, timeoutMS, err := parseHaltArgs(args[1:])
 		if err != nil {
-			return writeErr(stdout, stderr, jsonMode, "halt", args[1], err)
+			return writeErr(stdout, stderr, jsonMode, "halt", "", err)
+		}
+		inst, err := svc.HaltWithOptions(ctx, name, immediately, time.Duration(timeoutMS)*time.Millisecond)
+		if err != nil {
+			return writeErr(stdout, stderr, jsonMode, "halt", name, err)
 		}
 		if jsonMode {
 			_ = output.WriteJSON(stdout, output.Success{OK: true, Command: "halt", Instance: inst.Name, Status: string(inst.Status), Data: map[string]any{}})
@@ -393,6 +394,31 @@ func parseWaitArgs(args []string) (name string, stableMS, timeoutMS int, err err
 		return "", 0, 0, err
 	}
 	return name, stableMS, timeoutMS, nil
+}
+
+func parseHaltArgs(args []string) (name string, immediately bool, timeoutMS int, err error) {
+	if len(args) == 0 {
+		return "", false, 0, apperr.New("invalid_arguments", "missing instance name\n\n"+haltHelp())
+	}
+	name = args[0]
+	fs := newFlagSet("halt")
+	var timeoutRaw string
+	fs.BoolVar(&immediately, "immediately", false, "")
+	fs.StringVar(&timeoutRaw, "timeout", "5s", "")
+	if err := fs.Parse(args[1:]); err != nil {
+		return "", false, 0, err
+	}
+	if fs.NArg() > 0 {
+		return "", false, 0, apperr.New("invalid_arguments", "halt does not accept positional arguments after instance name")
+	}
+	if immediately && timeoutRaw != "5s" {
+		return "", false, 0, apperr.New("invalid_arguments", "--timeout cannot be used with --immediately")
+	}
+	timeoutMS, err = parseMillisOrDuration(timeoutRaw, "--timeout")
+	if err != nil {
+		return "", false, 0, err
+	}
+	return name, immediately, timeoutMS, nil
 }
 
 func attach(ctx context.Context, svc service.Service, name string, stderr io.Writer) int {
@@ -791,16 +817,23 @@ Examples:
 
 func haltHelp() string {
 	return strings.TrimSpace(`
-halt stops an instance by killing its tmux session and marking it exited in the registry.
+halt stops an instance gracefully by default. It sends Ctrl-C, waits up to the timeout,
+and falls back to killing the tmux session if the instance is still running.
 
 Usage:
-  agentmux halt <instance-name> [--json]
+  agentmux halt <instance-name> [--timeout <duration-or-ms>] [--immediately] [--json]
 
 Arguments:
   <instance-name>           Target instance name
 
+Flags:
+  --timeout <duration-or-ms> Graceful shutdown timeout, default 5s
+  --immediately             Skip graceful shutdown and kill the tmux session directly
+
 Examples:
   agentmux halt 编码助手-A
+  agentmux halt 编码助手-A --timeout 8s
+  agentmux halt 编码助手-A --immediately
   agentmux halt 编码助手-A --json
 `)
 }

@@ -400,12 +400,14 @@ agentmux attach
 
 用途：
 
-终止实例。
+默认优雅终止实例，必要时再强制结束。
 
 示例：
 
 ```bash
 agentmux halt 编码助手-A
+agentmux halt 编码助手-A --timeout 8s
+agentmux halt 编码助手-A --immediately
 agentmux halt 编码助手-A --json
 ```
 

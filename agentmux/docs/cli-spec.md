@@ -457,14 +457,27 @@ agentmux attach [<instance-name>]
 语法：
 
 ```bash
-agentmux halt <instance-name> [--json]
+agentmux halt <instance-name> [--timeout <duration-or-ms>] [--immediately] [--json]
 ```
 
 行为：
 
-1. 终止对应 tmux session
-2. 更新 registry 状态
-3. 默认保留 registry 记录
+1. 默认先发送一次 `C-c`
+2. 若实例仍在运行，则短暂等待后再发送第二次 `C-c`
+3. 若到 `--timeout` 仍未退出，则回退为强制结束 tmux session
+4. `--immediately` 跳过优雅停止，直接强制结束 tmux session
+5. 结束后从 registry 中删除实例记录
+
+参数：
+
+1. `--timeout <duration-or-ms>`
+2. `--immediately`
+
+规则：
+
+1. `--timeout` 默认值为 `5s`
+2. `--timeout` 支持整数毫秒或 Go duration
+3. `--immediately` 与 `--timeout` 不应同时使用
 
 JSON 示例：
 

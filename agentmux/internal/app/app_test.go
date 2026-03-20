@@ -81,6 +81,23 @@ func TestParseWaitArgsDefaults(t *testing.T) {
 	}
 }
 
+func TestParseHaltArgsDefaults(t *testing.T) {
+	name, immediately, timeoutMS, err := parseHaltArgs([]string{"demo"})
+	if err != nil {
+		t.Fatalf("parseHaltArgs: %v", err)
+	}
+	if name != "demo" || immediately || timeoutMS != 5000 {
+		t.Fatalf("unexpected parsed values: %q %v %d", name, immediately, timeoutMS)
+	}
+}
+
+func TestParseHaltArgsImmediatelyRejectsTimeout(t *testing.T) {
+	_, _, _, err := parseHaltArgs([]string{"demo", "--immediately", "--timeout", "1s"})
+	if err == nil || !strings.Contains(err.Error(), "--timeout cannot be used with --immediately") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestReadPromptText(t *testing.T) {
 	text, err := readPromptText(strings.NewReader("hello\nworld"))
 	if err != nil {

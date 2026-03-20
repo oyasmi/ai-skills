@@ -66,7 +66,7 @@
   - agentmux list，列出已拉起的agent instances，等同于list-instances
   - agentmux summon --template xxx --cwd ~/project-x，召唤agent，若没有则创建，返回一个agent的instance-name，agentmux应该要生成一个可读简短有语义的name，instance-name也允许由调用方提供(通过 --name 参数)。后续的很多操作对instace的操作都应提供instance-name。也可以不使用template而提供具体的参数来拉起agent instance。所有参数都应该提供默认值，从而允许少提供参数也尽量运行的强壮性
   - agentmux attach <instance-name>，这个是给人使用的，如果没有提供<instance-name>，则提供一个列表让人选择，比如输入3，attach到具体的命令中去实时查看
-  - agentmux halt <instance-name>
+  - agentmux halt <instance-name>，默认优雅停止，必要时再强制结束；支持 --immediately 直接强停
   - agentmux prompt <instance-name>,向agent提供输入，需要支持特殊键，如Enter等，这里可以参考tmux命令行的 send-keys 等
   - agentmux capture <instance-name>，抓取显示，应该能支持往前抓多屏，以获取完整的信息，你来设计
 6. 这个agentmux的命令还需要提供一个 SKILL ，好让openclaw/nanobot/codex等agent能够安装此技能从而学会使用。

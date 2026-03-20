@@ -16,6 +16,11 @@ import (
 	"github.com/oyasmi/agentmux/internal/tmuxctl"
 )
 
+const (
+	haltSecondInterruptDelay = 500 * time.Millisecond
+	haltPollInterval         = 100 * time.Millisecond
+)
+
 type tmuxClient interface {
 	HasSession(ctx context.Context, sessionID string) bool
 	NewSession(ctx context.Context, sessionID, cwd, command string, env map[string]string) error
@@ -292,6 +297,10 @@ func (s Service) getInstanceForCapture(ctx context.Context, name string) (instan
 }
 
 func (s Service) Halt(ctx context.Context, name string) (instance.Instance, error) {
+	return s.HaltWithOptions(ctx, name, false, 5*time.Second)
+}
+
+func (s Service) HaltWithOptions(ctx context.Context, name string, immediately bool, timeout time.Duration) (instance.Instance, error) {
 	var out instance.Instance
 	err := s.withRegistry(ctx, func(reg *instance.Registry) error {
 		inst, ok := reg.Get(name)
@@ -299,8 +308,14 @@ func (s Service) Halt(ctx context.Context, name string) (instance.Instance, erro
 			return apperr.New("instance_not_found", fmt.Sprintf("instance %q not found", name))
 		}
 		if s.Tmux.HasSession(ctx, inst.SessionID) {
-			if err := s.Tmux.KillSession(ctx, inst.SessionID); err != nil {
-				return err
+			if immediately {
+				if err := s.Tmux.KillSession(ctx, inst.SessionID); err != nil {
+					return err
+				}
+			} else {
+				if err := s.haltGracefully(ctx, inst.SessionID, timeout); err != nil {
+					return err
+				}
 			}
 		}
 		inst.Status = instance.StatusExited
@@ -313,6 +328,73 @@ func (s Service) Halt(ctx context.Context, name string) (instance.Instance, erro
 		return instance.Instance{}, err
 	}
 	return out, nil
+}
+
+func (s Service) haltGracefully(ctx context.Context, sessionID string, timeout time.Duration) error {
+	if err := s.Tmux.SendKeys(ctx, target(sessionID), "C-c"); err != nil {
+		return err
+	}
+	if !s.Tmux.HasSession(ctx, sessionID) {
+		return nil
+	}
+
+	deadline := time.Now().Add(timeout)
+	secondInterruptAt := time.Now().Add(haltSecondInterruptDelay)
+	secondSent := false
+
+	for {
+		if !s.Tmux.HasSession(ctx, sessionID) {
+			return nil
+		}
+		now := time.Now()
+		if !secondSent && !now.Before(secondInterruptAt) {
+			if err := s.Tmux.SendKeys(ctx, target(sessionID), "C-c"); err != nil {
+				return err
+			}
+			secondSent = true
+			if !s.Tmux.HasSession(ctx, sessionID) {
+				return nil
+			}
+		}
+		if !now.Before(deadline) {
+			if !secondSent {
+				if err := s.Tmux.SendKeys(ctx, target(sessionID), "C-c"); err != nil {
+					return err
+				}
+				secondSent = true
+				if !s.Tmux.HasSession(ctx, sessionID) {
+					return nil
+				}
+			}
+			break
+		}
+
+		wait := haltPollInterval
+		if remaining := time.Until(deadline); remaining < wait {
+			wait = remaining
+		}
+		if !secondSent {
+			if untilSecond := time.Until(secondInterruptAt); untilSecond > 0 && untilSecond < wait {
+				wait = untilSecond
+			}
+		}
+		if wait <= 0 {
+			continue
+		}
+
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+
+	if s.Tmux.HasSession(ctx, sessionID) {
+		return s.Tmux.KillSession(ctx, sessionID)
+	}
+	return nil
 }
 
 func (s Service) reconcileRegistry(ctx context.Context, reg *instance.Registry) {

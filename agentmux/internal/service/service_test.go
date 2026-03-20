@@ -20,6 +20,7 @@ type fakeTmux struct {
 	loads          []string
 	sendKeys       []string
 	killed         []string
+	sendKeysHook   func(*fakeTmux, string, []string)
 }
 
 func (f *fakeTmux) HasSession(_ context.Context, sessionID string) bool {
@@ -52,6 +53,9 @@ func (f *fakeTmux) PasteBuffer(context.Context, string) error {
 
 func (f *fakeTmux) SendKeys(_ context.Context, _ string, keys ...string) error {
 	f.sendKeys = append(f.sendKeys, keys...)
+	if f.sendKeysHook != nil {
+		f.sendKeysHook(f, "", keys)
+	}
 	return nil
 }
 
@@ -367,7 +371,7 @@ func TestWaitOmitsContent(t *testing.T) {
 	}
 }
 
-func TestHaltKillsSessionAndDeletesRegistryEntry(t *testing.T) {
+func TestHaltGracefullySendsDoubleInterruptBeforeKilling(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -375,12 +379,15 @@ func TestHaltKillsSessionAndDeletesRegistryEntry(t *testing.T) {
 	svc, registryPath := newTestService(t, tmux)
 	saveRunningInstance(t, registryPath, "worker", "live-session", instance.StatusIdle, true, time.Now().UTC())
 
-	inst, err := svc.Halt(ctx, "worker")
+	inst, err := svc.HaltWithOptions(ctx, "worker", false, 20*time.Millisecond)
 	if err != nil {
 		t.Fatalf("halt: %v", err)
 	}
 	if inst.Status != instance.StatusExited {
 		t.Fatalf("expected exited status, got %s", inst.Status)
+	}
+	if got := strings.Join(tmux.sendKeys, ","); got != "C-c,C-c" {
+		t.Fatalf("expected double interrupt before kill, got %s", got)
 	}
 	if len(tmux.killed) != 1 || tmux.killed[0] != "live-session" {
 		t.Fatalf("unexpected killed sessions: %v", tmux.killed)
@@ -391,6 +398,67 @@ func TestHaltKillsSessionAndDeletesRegistryEntry(t *testing.T) {
 	}
 	if _, ok := saved.Get("worker"); ok {
 		t.Fatalf("expected worker to be deleted from registry")
+	}
+}
+
+func TestHaltGracefullyStopsWithoutKillWhenSecondInterruptEndsSession(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	tmux := &fakeTmux{
+		sessions: map[string]bool{"live-session": true},
+		sendKeysHook: func(f *fakeTmux, _ string, keys []string) {
+			if len(keys) == 1 && keys[0] == "C-c" && len(f.sendKeys) == 2 {
+				delete(f.sessions, "live-session")
+			}
+		},
+	}
+	svc, registryPath := newTestService(t, tmux)
+	saveRunningInstance(t, registryPath, "worker", "live-session", instance.StatusIdle, true, time.Now().UTC())
+
+	inst, err := svc.HaltWithOptions(ctx, "worker", false, 700*time.Millisecond)
+	if err != nil {
+		t.Fatalf("halt: %v", err)
+	}
+	if inst.Status != instance.StatusExited {
+		t.Fatalf("expected exited status, got %s", inst.Status)
+	}
+	if got := strings.Join(tmux.sendKeys, ","); got != "C-c,C-c" {
+		t.Fatalf("expected two interrupts, got %s", got)
+	}
+	if len(tmux.killed) != 0 {
+		t.Fatalf("expected no force kill, got %v", tmux.killed)
+	}
+	if _, ok := tmux.sessions["live-session"]; ok {
+		t.Fatalf("expected session to be gone")
+	}
+	if saved, err := instance.Load(registryPath); err != nil {
+		t.Fatalf("reload registry: %v", err)
+	} else if _, ok := saved.Get("worker"); ok {
+		t.Fatalf("expected worker to be deleted from registry")
+	}
+}
+
+func TestHaltImmediatelyKillsSessionWithoutInterrupts(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	tmux := &fakeTmux{sessions: map[string]bool{"live-session": true}}
+	svc, registryPath := newTestService(t, tmux)
+	saveRunningInstance(t, registryPath, "worker", "live-session", instance.StatusIdle, true, time.Now().UTC())
+
+	inst, err := svc.HaltWithOptions(ctx, "worker", true, 0)
+	if err != nil {
+		t.Fatalf("halt: %v", err)
+	}
+	if inst.Status != instance.StatusExited {
+		t.Fatalf("expected exited status, got %s", inst.Status)
+	}
+	if len(tmux.sendKeys) != 0 {
+		t.Fatalf("expected no interrupts, got %v", tmux.sendKeys)
+	}
+	if len(tmux.killed) != 1 || tmux.killed[0] != "live-session" {
+		t.Fatalf("unexpected killed sessions: %v", tmux.killed)
 	}
 }
 
