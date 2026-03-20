@@ -194,9 +194,6 @@ func (c Config) Validate() error {
 		if strings.TrimSpace(tpl.Command) == "" {
 			return apperr.New("config_invalid", fmt.Sprintf("template %q command must not be empty", name))
 		}
-		if tpl.Model != "" && !strings.Contains(tpl.Model, "/") {
-			return apperr.New("config_invalid", fmt.Sprintf("template %q model must contain /", name))
-		}
 	}
 	return nil
 }

@@ -409,7 +409,7 @@ func usage() string {
 usage:
   agentmux template list [--json]
   agentmux list [--json]
-  agentmux summon --template <template-name> [--name <instance-name>] [--cwd <path>] [--model <provider/model>] [--command <shell-command>] [--system-prompt <text>] [--prompt <text>] [--json]
+  agentmux summon --template <template-name> [--name <instance-name>] [--cwd <path>] [--model <model>] [--command <shell-command>] [--system-prompt <text>] [--prompt <text>] [--json]
   agentmux inspect <instance-name> [--json]
   agentmux prompt <instance-name> [--text <text>] [--key <key>] [--enter] [--json]
   agentmux capture <instance-name> [--history <lines>] [--stable <ms>] [--timeout <duration>] [--json]
@@ -573,7 +573,7 @@ Required flags:
 Optional flags:
   --name <instance-name>    Reuse or create a specific instance name
   --cwd <path>              Override working directory
-  --model <provider/model>  Override template model
+  --model <model>           Override template model
   --command <command>       Override template command
   --system-prompt <text>    Override template system prompt
   --prompt <text>           Send a prompt in this summon call
