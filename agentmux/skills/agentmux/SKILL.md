@@ -14,8 +14,10 @@ Use `agentmux` instead of calling `tmux` directly. Treat `agentmux` as the only 
 3. Run `agentmux template list --json` before choosing a template if the available templates are not already known.
 4. Use `summon` to create or reuse an instance. Do not call `tmux new-session` yourself.
 5. Use `capture` to read screen state. Do not read raw tmux output or terminal stdout directly.
-6. Use `prompt` to send the next text or special key after you inspect current state.
-7. Use `attach` only when a human explicitly asks to watch or debug interactively.
+6. Use `wait` when you only need to block until the screen is stable and do not need returned content.
+7. Use `prompt` to send the next text or special key after you inspect current state.
+8. Use `attach` only when a human explicitly asks to watch or debug interactively.
+9. Use `version --json` when you need to confirm the installed CLI version or check whether a newer command should exist.
 
 ## Standard Workflow
 
@@ -24,7 +26,7 @@ Use `agentmux` instead of calling `tmux` directly. Treat `agentmux` as the only 
 3. Summon the target instance by template and optional name.
 4. Capture stable screen text before deciding the next action.
 5. Prompt the instance with the next instruction or key.
-6. Repeat `capture -> decide -> prompt` until the task reaches a stopping point.
+6. Repeat `capture|wait -> decide -> prompt` until the task reaches a stopping point.
 
 Typical loop:
 
@@ -61,17 +63,32 @@ Use `capture` when you need the visible screen text and recent history.
 agentmux capture 编码助手-A --history 120 --stable 1500 --timeout 30s --json
 ```
 
+Use `wait` when you only need the screen to settle and want to avoid returning large text.
+
+```bash
+agentmux wait 编码助手-A --stable 1500 --timeout 30s --json
+```
+
 Use `prompt` when the instance already exists and you want to separate control from creation.
 
 ```bash
 agentmux prompt 编码助手-A --text "继续" --enter --json
+echo "长文本" | agentmux prompt 编码助手-A --stdin --enter --json
 agentmux prompt 编码助手-A --key C-c --json
 ```
 
-Use `halt` when the instance should stop.
+Use `halt` when the instance should stop. By default it attempts graceful interruption first.
 
 ```bash
 agentmux halt 编码助手-A --json
+agentmux halt 编码助手-A --timeout 8s --json
+agentmux halt 编码助手-A --immediately --json
+```
+
+Use `version` when you need to confirm which CLI surface is available.
+
+```bash
+agentmux version --json
 ```
 
 ## Decision Rules
@@ -82,7 +99,19 @@ Prefer reusing a named instance when the user is clearly continuing previous wor
 
 Prefer short, task-specific prompts. Do not resend large repeated context if the instance already has it.
 
+Prefer `prompt --stdin` for long or multi-line text to avoid shell argument length limits.
+
+Prefer `wait` over `capture` when the only goal is to block until the instance settles.
+
 Send `C-c` before anything else when the instance is clearly stuck, waiting on the wrong action, or running an unwanted command.
+
+Prefer plain `halt` when you want the agent to stop cleanly. It now sends `C-c`, waits briefly, and only escalates if needed.
+
+Prefer `halt --timeout <duration>` when the instance may need a little time to exit after interruption.
+
+Prefer `halt --immediately` only when the user explicitly wants a hard stop or graceful interruption is no longer useful.
+
+Treat `--stable` and `--timeout` as accepting either plain millisecond integers such as `1500` or Go duration strings such as `1500ms` and `1.5s`.
 
 ## Output Handling
 
@@ -98,11 +127,15 @@ Read these top-level JSON fields first:
 
 Read `data.content` as the primary screen text for `capture`.
 
+For `wait`, read `data.stable_for_ms` and ignore content because none is returned.
+
 Treat `reused: true` as confirmation that `summon` attached to an existing instance instead of creating a new one.
 
 Treat `status: exited` as a deliberate stopped instance.
 
 Treat `status: lost` as a broken or missing runtime that may require a fresh `summon`.
+
+Treat `status: busy` as a recent-activity hint, not a permanent lock. It may automatically degrade back to `idle` if the configured busy TTL expires.
 
 ## Recovery
 
@@ -125,3 +158,12 @@ When `capture_timeout` appears, reduce the wait or capture immediately without `
 When `process_not_running` or `status: exited` appears, decide whether the user wants a fresh instance or whether work should stop.
 
 When `invalid_key` appears, retry with a supported key such as `Enter`, `C-c`, `Escape`, `Up`, `Down`, or `Tab`.
+
+When `halt` does not stop the instance fast enough, retry with a longer `--timeout` or escalate to `--immediately` if the user wants a hard kill.
+
+When a command seems unexpectedly missing, run:
+
+```bash
+agentmux version --json
+agentmux help <command>
+```
