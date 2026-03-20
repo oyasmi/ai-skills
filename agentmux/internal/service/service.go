@@ -53,7 +53,7 @@ func New(paths config.Paths, cfg config.Config) Service {
 	return Service{
 		Paths:  paths,
 		Config: cfg,
-		Tmux:   tmuxctl.Client{Socket: config.DefaultSocketPath},
+		Tmux:   tmuxctl.Client{Socket: cfg.Defaults.Tmux.Socket},
 	}
 }
 
@@ -245,6 +245,14 @@ func (s Service) Prompt(ctx context.Context, name string, text string, key strin
 }
 
 func (s Service) Capture(ctx context.Context, name string, history, stableMS, timeoutMS int) (instance.Instance, capture.Snapshot, error) {
+	return s.captureLike(ctx, name, history, stableMS, timeoutMS, true)
+}
+
+func (s Service) Wait(ctx context.Context, name string, stableMS, timeoutMS int) (instance.Instance, capture.Snapshot, error) {
+	return s.captureLike(ctx, name, -1, stableMS, timeoutMS, false)
+}
+
+func (s Service) captureLike(ctx context.Context, name string, history, stableMS, timeoutMS int, includeContent bool) (instance.Instance, capture.Snapshot, error) {
 	inst, err := s.Inspect(ctx, name)
 	if err != nil {
 		return instance.Instance{}, capture.Snapshot{}, err
@@ -279,6 +287,10 @@ func (s Service) Capture(ctx context.Context, name string, history, stableMS, ti
 	reg.Put(inst)
 	if err := s.saveRegistry(reg); err != nil {
 		return instance.Instance{}, capture.Snapshot{}, err
+	}
+	if !includeContent {
+		snap.Content = ""
+		snap.Digest = ""
 	}
 	return inst, snap, nil
 }

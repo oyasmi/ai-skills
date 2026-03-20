@@ -1,6 +1,9 @@
 package apperr
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 type Error struct {
 	Code    string
@@ -33,34 +36,8 @@ func Wrap(code string, err error, format string, args ...any) *Error {
 
 func Code(err error) string {
 	var appErr *Error
-	if err != nil && As(err, &appErr) {
+	if err != nil && errors.As(err, &appErr) {
 		return appErr.Code
 	}
 	return "internal_error"
-}
-
-func As(err error, target any) bool {
-	type as interface {
-		As(any) bool
-	}
-	if e, ok := err.(as); ok {
-		return e.As(target)
-	}
-	switch t := target.(type) {
-	case **Error:
-		cur := err
-		for cur != nil {
-			if ae, ok := cur.(*Error); ok {
-				*t = ae
-				return true
-			}
-			type unwrapper interface{ Unwrap() error }
-			u, ok := cur.(unwrapper)
-			if !ok {
-				return false
-			}
-			cur = u.Unwrap()
-		}
-	}
-	return false
 }

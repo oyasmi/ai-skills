@@ -1,6 +1,8 @@
 version: 1
 
 defaults:
+  tmux:
+    socket: /tmp/agentmux.sock
   shell: /bin/bash -lc
   cwd: .
   env:

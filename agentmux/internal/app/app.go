@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -17,6 +18,8 @@ import (
 	"github.com/oyasmi/agentmux/internal/service"
 )
 
+var Version = "dev"
+
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stdout, rootHelp())
@@ -30,6 +33,9 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(rest) == 0 {
 		fmt.Fprintln(stdout, rootHelp())
 		return 0
+	}
+	if rest[0] == "version" {
+		return dispatch(ctx, service.Service{}, jsonMode, rest, stdout, stderr)
 	}
 	paths, err := config.DiscoverPaths()
 	if err != nil {
@@ -144,9 +150,15 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 		fmt.Fprintf(stdout, "last_activity_at: %s\n", inst.LastActivityAt.Format(time.RFC3339))
 		return 0
 	case "prompt":
-		name, text, key, enter, err := parsePromptArgs(args[1:])
+		name, text, key, enter, useStdin, err := parsePromptArgs(args[1:])
 		if err != nil {
 			return writeErr(stdout, stderr, jsonMode, "prompt", "", err)
+		}
+		if useStdin {
+			text, err = readPromptText(os.Stdin)
+			if err != nil {
+				return writeErr(stdout, stderr, jsonMode, "prompt", name, err)
+			}
 		}
 		inst, err := svc.Prompt(ctx, name, text, key, enter)
 		if err != nil {
@@ -185,6 +197,28 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 		}
 		fmt.Fprint(stdout, snap.Content)
 		return 0
+	case "wait":
+		name, stableMS, timeoutMS, err := parseWaitArgs(args[1:])
+		if err != nil {
+			return writeErr(stdout, stderr, jsonMode, "wait", "", err)
+		}
+		inst, snap, err := svc.Wait(ctx, name, stableMS, timeoutMS)
+		if err != nil {
+			return writeErr(stdout, stderr, jsonMode, "wait", name, err)
+		}
+		if jsonMode {
+			_ = output.WriteJSON(stdout, output.Success{OK: true, Command: "wait", Instance: inst.Name, Status: string(inst.Status), Data: map[string]any{
+				"cursor_x":      snap.CursorX,
+				"cursor_y":      snap.CursorY,
+				"width":         snap.Width,
+				"height":        snap.Height,
+				"history_lines": snap.History,
+				"stable_for_ms": snap.StableForMS,
+			}})
+			return 0
+		}
+		fmt.Fprintf(stdout, "%s\t%s\t%dms\n", inst.Name, inst.Status, snap.StableForMS)
+		return 0
 	case "attach":
 		if len(args) >= 2 {
 			return attach(ctx, svc, args[1], stderr)
@@ -203,6 +237,16 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 			return 0
 		}
 		fmt.Fprintf(stdout, "%s\t%s\n", inst.Name, inst.Status)
+		return 0
+	case "version":
+		if len(args) > 1 {
+			return writeErr(stdout, stderr, jsonMode, "version", "", apperr.New("invalid_arguments", "version does not accept positional arguments\n\n"+versionHelp()))
+		}
+		if jsonMode {
+			_ = output.WriteJSON(stdout, output.Success{OK: true, Command: "version", Data: map[string]any{"version": Version}})
+			return 0
+		}
+		fmt.Fprintln(stdout, Version)
 		return 0
 	default:
 		return writeErr(stdout, stderr, jsonMode, "", "", apperr.New("invalid_arguments", "unknown command "+args[0]+"\n\n"+rootHelp()))
@@ -268,33 +312,26 @@ func parseSummonArgs(args []string) (service.SummonInput, error) {
 	return in, nil
 }
 
-func parsePromptArgs(args []string) (name, text, key string, enter bool, err error) {
+func parsePromptArgs(args []string) (name, text, key string, enter, useStdin bool, err error) {
 	if len(args) == 0 {
-		return "", "", "", false, apperr.New("invalid_arguments", "missing instance name\n\n"+promptHelp())
+		return "", "", "", false, false, apperr.New("invalid_arguments", "missing instance name\n\n"+promptHelp())
 	}
 	name = args[0]
-	for i := 1; i < len(args); i++ {
-		switch args[i] {
-		case "--text":
-			i++
-			if i >= len(args) {
-				return "", "", "", false, apperr.New("invalid_arguments", "missing value for --text")
-			}
-			text = args[i]
-		case "--key":
-			i++
-			if i >= len(args) {
-				return "", "", "", false, apperr.New("invalid_arguments", "missing value for --key")
-			}
-			key = args[i]
-		case "--enter":
-			enter = true
-		case "--json":
-		default:
-			return "", "", "", false, apperr.New("invalid_arguments", "unknown flag "+args[i])
-		}
+	fs := newFlagSet("prompt")
+	fs.StringVar(&text, "text", "", "")
+	fs.StringVar(&key, "key", "", "")
+	fs.BoolVar(&enter, "enter", false, "")
+	fs.BoolVar(&useStdin, "stdin", false, "")
+	if err := fs.Parse(args[1:]); err != nil {
+		return "", "", "", false, false, err
 	}
-	return name, text, key, enter, nil
+	if fs.NArg() > 0 {
+		return "", "", "", false, false, apperr.New("invalid_arguments", "prompt does not accept positional arguments after instance name")
+	}
+	if useStdin && text != "" {
+		return "", "", "", false, false, apperr.New("invalid_arguments", "--stdin cannot be used with --text")
+	}
+	return name, text, key, enter, useStdin, nil
 }
 
 func parseCaptureArgs(args []string) (name string, history, stableMS, timeoutMS int, err error) {
@@ -303,43 +340,59 @@ func parseCaptureArgs(args []string) (name string, history, stableMS, timeoutMS 
 	}
 	name = args[0]
 	history = -1
-	timeoutMS = 30000
-	for i := 1; i < len(args); i++ {
-		switch args[i] {
-		case "--history":
-			i++
-			if i >= len(args) {
-				return "", 0, 0, 0, apperr.New("invalid_arguments", "missing value for --history")
-			}
-			history, err = strconv.Atoi(args[i])
-			if err != nil {
-				return "", 0, 0, 0, apperr.New("invalid_arguments", "invalid value for --history")
-			}
-		case "--stable":
-			i++
-			if i >= len(args) {
-				return "", 0, 0, 0, apperr.New("invalid_arguments", "missing value for --stable")
-			}
-			stableMS, err = strconv.Atoi(args[i])
-			if err != nil {
-				return "", 0, 0, 0, apperr.New("invalid_arguments", "invalid value for --stable")
-			}
-		case "--timeout":
-			i++
-			if i >= len(args) {
-				return "", 0, 0, 0, apperr.New("invalid_arguments", "missing value for --timeout")
-			}
-			d, derr := time.ParseDuration(args[i])
-			if derr != nil {
-				return "", 0, 0, 0, apperr.New("invalid_arguments", "invalid value for --timeout")
-			}
-			timeoutMS = int(d.Milliseconds())
-		case "--json":
-		default:
-			return "", 0, 0, 0, apperr.New("invalid_arguments", "unknown flag "+args[i])
+	fs := newFlagSet("capture")
+	var stableRaw string
+	var timeoutRaw string
+	fs.IntVar(&history, "history", -1, "")
+	fs.StringVar(&stableRaw, "stable", "", "")
+	fs.StringVar(&timeoutRaw, "timeout", "30s", "")
+	if err := fs.Parse(args[1:]); err != nil {
+		return "", 0, 0, 0, err
+	}
+	if fs.NArg() > 0 {
+		return "", 0, 0, 0, apperr.New("invalid_arguments", "capture does not accept positional arguments after instance name")
+	}
+	if history < -1 {
+		return "", 0, 0, 0, apperr.New("invalid_arguments", "invalid value for --history: must be -1 or a non-negative integer")
+	}
+	if stableRaw != "" {
+		stableMS, err = parseMillisOrDuration(stableRaw, "--stable")
+		if err != nil {
+			return "", 0, 0, 0, err
 		}
 	}
+	timeoutMS, err = parseMillisOrDuration(timeoutRaw, "--timeout")
+	if err != nil {
+		return "", 0, 0, 0, err
+	}
 	return name, history, stableMS, timeoutMS, nil
+}
+
+func parseWaitArgs(args []string) (name string, stableMS, timeoutMS int, err error) {
+	if len(args) == 0 {
+		return "", 0, 0, apperr.New("invalid_arguments", "missing instance name\n\n"+waitHelp())
+	}
+	name = args[0]
+	fs := newFlagSet("wait")
+	var stableRaw string
+	var timeoutRaw string
+	fs.StringVar(&stableRaw, "stable", "1500", "")
+	fs.StringVar(&timeoutRaw, "timeout", "30s", "")
+	if err := fs.Parse(args[1:]); err != nil {
+		return "", 0, 0, err
+	}
+	if fs.NArg() > 0 {
+		return "", 0, 0, apperr.New("invalid_arguments", "wait does not accept positional arguments after instance name")
+	}
+	stableMS, err = parseMillisOrDuration(stableRaw, "--stable")
+	if err != nil {
+		return "", 0, 0, err
+	}
+	timeoutMS, err = parseMillisOrDuration(timeoutRaw, "--timeout")
+	if err != nil {
+		return "", 0, 0, err
+	}
+	return name, stableMS, timeoutMS, nil
 }
 
 func attach(ctx context.Context, svc service.Service, name string, stderr io.Writer) int {
@@ -417,10 +470,12 @@ usage:
   agentmux list [--json]
   agentmux summon --template <template-name> [--name <instance-name>] [--cwd <path>] [--model <model>] [--command <shell-command>] [--system-prompt <text>] [--prompt <text>] [--json]
   agentmux inspect <instance-name> [--json]
-  agentmux prompt <instance-name> [--text <text>] [--key <key>] [--enter] [--json]
-  agentmux capture <instance-name> [--history <lines>] [--stable <ms>] [--timeout <duration>] [--json]
+  agentmux prompt <instance-name> [--text <text> | --stdin] [--key <key>] [--enter] [--json]
+  agentmux capture <instance-name> [--history <lines>] [--stable <duration-or-ms>] [--timeout <duration-or-ms>] [--json]
+  agentmux wait <instance-name> [--stable <duration-or-ms>] [--timeout <duration-or-ms>] [--json]
   agentmux attach [<instance-name>]
   agentmux halt <instance-name> [--json]
+  agentmux version [--json]
 `)
 }
 
@@ -460,10 +515,14 @@ func helpForArgs(args []string) (string, bool) {
 			return promptHelp(), true
 		case "capture":
 			return captureHelp(), true
+		case "wait":
+			return waitHelp(), true
 		case "attach":
 			return attachHelp(), true
 		case "halt":
 			return haltHelp(), true
+		case "version":
+			return versionHelp(), true
 		default:
 			return rootHelp(), true
 		}
@@ -491,8 +550,10 @@ Core commands:
   inspect         Show detailed instance metadata
   prompt          Send text or a special key to an instance
   capture         Capture current screen text from an instance
+  wait            Wait until the screen is stable without returning content
   attach          Attach a human terminal to an instance
   halt            Stop an instance
+  version         Print the CLI version
 
 Global flags:
   --json          Return machine-readable JSON for command output
@@ -503,6 +564,7 @@ Examples:
   agentmux summon --template 深度编码专家 --name 编码助手-A --cwd ~/work/project
   agentmux summon --template 深度编码专家 --name 编码助手-A --prompt "先阅读项目并总结结构" --json
   agentmux capture 编码助手-A --history 120 --stable 1500 --json
+  echo "继续修复剩余失败测试" | agentmux prompt 编码助手-A --stdin --enter --json
   agentmux prompt 编码助手-A --text "继续" --enter --json
 
 Learn more:
@@ -630,6 +692,7 @@ Arguments:
 
 Flags:
   --text <text>             Send text to the instance
+  --stdin                   Read text from stdin
   --key <key>               Send one special key
   --enter                   Send Enter after --text
   --json                    Return JSON output
@@ -639,11 +702,14 @@ Supported keys:
   Enter, C-c, Escape, Up, Down, Tab
 
 Notes:
-  Provide at least one of --text or --key.
-  --enter only affects --text.
+  Provide at least one of --text, --stdin, or --key.
+  --stdin reads all of stdin as one text payload.
+  --stdin cannot be combined with --text.
+  --enter affects text input from --text or --stdin.
 
 Examples:
   agentmux prompt 编码助手-A --text "继续" --enter --json
+  echo "长文本" | agentmux prompt 编码助手-A --stdin --enter --json
   agentmux prompt 编码助手-A --key C-c --json
 `)
 }
@@ -660,8 +726,8 @@ Arguments:
 
 Flags:
   --history <lines>         Include N history lines above the visible screen
-  --stable <ms>             Wait until screen content is stable for N milliseconds
-  --timeout <duration>      Maximum wait time for stability, for example 10s or 500ms
+  --stable <duration-or-ms> Wait until screen content is stable, for example 1500, 1500ms, or 1.5s
+  --timeout <duration-or-ms> Maximum wait time for stability, for example 30s or 500ms
   --json                    Return JSON output
   -h, --help                Show this help
 
@@ -673,6 +739,32 @@ Examples:
   agentmux capture 编码助手-A
   agentmux capture 编码助手-A --history 120 --json
   agentmux capture 编码助手-A --history 120 --stable 1500 --timeout 30s --json
+`)
+}
+
+func waitHelp() string {
+	return strings.TrimSpace(`
+wait blocks until the instance screen is stable without returning captured content.
+
+Usage:
+  agentmux wait <instance-name> [flags]
+
+Arguments:
+  <instance-name>           Target instance name
+
+Flags:
+  --stable <duration-or-ms> Required stable interval, default 1500
+  --timeout <duration-or-ms> Maximum wait time, default 30s
+  --json                    Return JSON output
+  -h, --help                Show this help
+
+Output:
+  Text mode prints instance name, status, and stable duration only.
+  JSON mode returns cursor position, screen size, history lines, and stability.
+
+Examples:
+  agentmux wait 编码助手-A --stable 1500 --timeout 30s --json
+  agentmux wait 编码助手-A --stable 2s
 `)
 }
 
@@ -711,4 +803,52 @@ Examples:
   agentmux halt 编码助手-A
   agentmux halt 编码助手-A --json
 `)
+}
+
+func versionHelp() string {
+	return strings.TrimSpace(`
+version prints the current agentmux CLI version.
+
+Usage:
+  agentmux version [--json]
+
+Examples:
+  agentmux version
+  agentmux version --json
+`)
+}
+
+func newFlagSet(name string) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	return fs
+}
+
+func parseMillisOrDuration(raw, flagName string) (int, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0, nil
+	}
+	if n, err := strconv.Atoi(value); err == nil {
+		if n < 0 {
+			return 0, apperr.New("invalid_arguments", "invalid value for "+flagName+": must be non-negative")
+		}
+		return n, nil
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, apperr.New("invalid_arguments", "invalid value for "+flagName)
+	}
+	if d < 0 {
+		return 0, apperr.New("invalid_arguments", "invalid value for "+flagName+": must be non-negative")
+	}
+	return int(d.Milliseconds()), nil
+}
+
+func readPromptText(r io.Reader) (string, error) {
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return "", apperr.Wrap("internal_error", err, "read prompt text from stdin")
+	}
+	return string(b), nil
 }

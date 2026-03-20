@@ -11,7 +11,7 @@ Windows 不是首要目标。
 
 ## 特性
 
-1. 使用独立 tmux socket `/tmp/agentmux.sock`
+1. 默认使用独立 tmux socket `/tmp/agentmux.sock`，且可通过配置修改
 2. 不加载用户 `tmux.conf`
 3. `1 instance = 1 tmux session`
 4. 模板名和实例名支持中文
@@ -160,6 +160,8 @@ cp /path/to/agentmux/examples/config.yaml ~/.config/agentmux/config.yaml
 version: 1
 
 defaults:
+  tmux:
+    socket: /tmp/agentmux.sock
   shell: /bin/bash -lc
   cwd: .
   env:
@@ -212,10 +214,17 @@ agentmux inspect 编码助手-A --json
 agentmux capture 编码助手-A --history 120 --stable 1500 --timeout 30s --json
 ```
 
+只等待屏幕稳定，不返回内容：
+
+```bash
+agentmux wait 编码助手-A --stable 1500 --timeout 30s --json
+```
+
 继续发送消息：
 
 ```bash
 agentmux prompt 编码助手-A --text "继续修复剩余失败测试" --enter --json
+printf '%s\n' "很长的多行文本" "第二行" | agentmux prompt 编码助手-A --stdin --enter --json
 ```
 
 发送特殊键：
@@ -237,6 +246,13 @@ agentmux attach 编码助手-A
 agentmux halt 编码助手-A --json
 ```
 
+查看版本：
+
+```bash
+agentmux version
+agentmux version --json
+```
+
 ## 命令语义
 
 ### `summon`
@@ -253,11 +269,17 @@ agentmux halt 编码助手-A --json
 2. `--history` 控制向上抓取的历史行数
 3. `--stable` 表示等待屏幕稳定后再返回
 
+### `wait`
+
+1. 只等待屏幕稳定，不返回屏幕内容
+2. 适合上层 Agent 只想阻塞等待、避免传回大段文本时使用
+
 ### `prompt`
 
 1. `--text` 发送文本
-2. `--key` 发送白名单特殊键
-3. `--enter` 为文本发送后额外补一个 `Enter`
+2. `--stdin` 从标准输入读取完整文本
+3. `--key` 发送白名单特殊键
+4. `--enter` 为 `--text` 或 `--stdin` 发送后额外补一个 `Enter`
 
 ## 输出格式
 

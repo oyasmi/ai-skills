@@ -18,6 +18,8 @@ const (
 	DefaultConfigYAML = `version: 1
 
 defaults:
+  tmux:
+    socket: /tmp/agentmux.sock
   shell: /bin/bash -lc
   cwd: .
   env:
@@ -73,8 +75,13 @@ type Defaults struct {
 	Shell        string            `yaml:"shell"`
 	CWD          string            `yaml:"cwd"`
 	Env          map[string]string `yaml:"env"`
+	Tmux         TmuxDefaults      `yaml:"tmux"`
 	Capture      CaptureDefaults   `yaml:"capture"`
 	MaxInstances int               `yaml:"max_instances"`
+}
+
+type TmuxDefaults struct {
+	Socket string `yaml:"socket"`
 }
 
 type CaptureDefaults struct {
@@ -151,6 +158,9 @@ func Load(path string) (Config, error) {
 }
 
 func (c *Config) ApplyDefaults() {
+	if c.Defaults.Tmux.Socket == "" {
+		c.Defaults.Tmux.Socket = DefaultSocketPath
+	}
 	if c.Defaults.Shell == "" {
 		c.Defaults.Shell = "/bin/bash -lc"
 	}
@@ -183,6 +193,9 @@ func (c Config) Validate() error {
 	}
 	if c.Defaults.Capture.History < 0 || c.Defaults.Capture.StableMS < 0 || c.Defaults.Capture.PollMS < 0 {
 		return apperr.New("config_invalid", "capture settings must be non-negative")
+	}
+	if strings.TrimSpace(c.Defaults.Tmux.Socket) == "" {
+		return apperr.New("config_invalid", "tmux socket must not be empty")
 	}
 	if c.Defaults.MaxInstances < 0 {
 		return apperr.New("config_invalid", "max_instances must be positive")

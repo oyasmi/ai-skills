@@ -142,6 +142,28 @@ func TestSummonIgnoresStaleInstancesForLimit(t *testing.T) {
 	}
 }
 
+func TestNewUsesConfiguredTmuxSocket(t *testing.T) {
+	cfg := config.Config{
+		Version: 1,
+		Defaults: config.Defaults{
+			Tmux:  config.TmuxDefaults{Socket: "/tmp/custom-agentmux.sock"},
+			Shell: "/bin/bash -lc",
+		},
+		Templates: map[string]config.Template{
+			"worker": {Command: "echo test"},
+		},
+	}
+
+	svc := New(config.Paths{}, cfg)
+	client, ok := svc.Tmux.(tmuxctl.Client)
+	if !ok {
+		t.Fatalf("unexpected tmux client type %T", svc.Tmux)
+	}
+	if client.Socket != "/tmp/custom-agentmux.sock" {
+		t.Fatalf("expected configured socket, got %q", client.Socket)
+	}
+}
+
 func newTestService(t *testing.T, tmux tmuxClient) (Service, string) {
 	t.Helper()
 
@@ -150,6 +172,7 @@ func newTestService(t *testing.T, tmux tmuxClient) (Service, string) {
 	cfg := config.Config{
 		Version: 1,
 		Defaults: config.Defaults{
+			Tmux:         config.TmuxDefaults{Socket: config.DefaultSocketPath},
 			Shell:        "/bin/bash -lc",
 			CWD:          dir,
 			Env:          map[string]string{},
