@@ -12,11 +12,16 @@ import (
 )
 
 type Client struct {
-	Socket string
+	Socket         string
+	LoadUserConfig bool
 }
 
 func (c Client) baseArgs() []string {
-	return []string{"-f", "/dev/null", "-S", c.Socket}
+	args := []string{"-S", c.Socket}
+	if !c.LoadUserConfig {
+		args = append([]string{"-f", "/dev/null"}, args...)
+	}
+	return args
 }
 
 func (c Client) run(ctx context.Context, args ...string) (string, error) {

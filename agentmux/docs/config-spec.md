@@ -33,6 +33,9 @@
 version: 1
 
 defaults:
+  tmux:
+    socket: /tmp/agentmux.sock
+    load_user_config: false
   shell: /bin/bash -lc
   cwd: .
   env:
@@ -87,10 +90,33 @@ version: 1
 1. `shell`
 2. `cwd`
 3. `env`
-4. `capture`
-5. `max_instances`
+4. `tmux`
+5. `capture`
+6. `max_instances`
 
-### 4.1 `defaults.shell`
+### 4.1 `defaults.tmux`
+
+类型：
+
+```yaml
+tmux:
+  socket: /tmp/agentmux.sock
+  load_user_config: false
+```
+
+字段：
+
+1. `socket`
+2. `load_user_config`
+
+规则：
+
+1. `socket` 默认为 `/tmp/agentmux.sock`
+2. `load_user_config` 默认为 `false`
+3. 当 `load_user_config=false` 时，`agentmux` 会以 `tmux -f /dev/null -S ...` 形式启动和控制 tmux
+4. 当 `load_user_config=true` 时，`agentmux` 会读取用户默认的 tmux 配置文件
+
+### 4.2 `defaults.shell`
 
 类型：
 
@@ -103,7 +129,7 @@ shell: /bin/bash -lc
 1. 默认值建议为 `/bin/bash -lc`
 2. 用于启动模板命令
 
-### 4.2 `defaults.cwd`
+### 4.3 `defaults.cwd`
 
 类型：
 
@@ -116,7 +142,7 @@ cwd: .
 1. 可为相对路径或绝对路径
 2. 实际创建实例时应解析为绝对路径
 
-### 4.3 `defaults.env`
+### 4.4 `defaults.env`
 
 类型：
 
@@ -130,7 +156,7 @@ env:
 1. 键值均为字符串
 2. 第一版建议至少显式设置 `TERM=xterm-256color`
 
-### 4.4 `defaults.capture`
+### 4.5 `defaults.capture`
 
 类型：
 
@@ -153,7 +179,7 @@ capture:
 2. `stable_ms` 是默认稳定判定窗口
 3. `poll_ms` 是轮询间隔
 
-### 4.5 `defaults.max_instances`
+### 4.6 `defaults.max_instances`
 
 类型：
 
@@ -397,17 +423,18 @@ i_<random-or-hash>
 
 ---
 
-## 9. tmux 固定运行参数
+## 9. tmux 默认运行参数
 
-这些配置不进入 `config.yaml`，而是内建固定值：
+这些参数属于 `defaults.tmux` 的默认值：
 
-1. socket 文件：`/tmp/agentmux.sock`
-2. 不加载用户 `tmux.conf`
+1. socket 文件默认值：`/tmp/agentmux.sock`
+2. `load_user_config` 默认值：`false`
 
 理由：
 
-1. 这是运行边界，不应由普通模板随意改动
-2. 改成可配置会引入大量不必要复杂度
+1. 独立 socket 仍然是运行边界，避免和用户自己的 tmux server 混用
+2. 默认不读取用户 `tmux.conf`，可以保持 agent 运行环境更稳定、更可预测
+3. 同时保留显式开启入口，兼顾用户个性化需求
 
 ---
 

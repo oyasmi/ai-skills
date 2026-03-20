@@ -398,7 +398,7 @@ func TestNewUsesConfiguredTmuxSocket(t *testing.T) {
 	cfg := config.Config{
 		Version: 1,
 		Defaults: config.Defaults{
-			Tmux:  config.TmuxDefaults{Socket: "/tmp/custom-agentmux.sock"},
+			Tmux:  config.TmuxDefaults{Socket: "/tmp/custom-agentmux.sock", LoadUserConfig: true},
 			Shell: "/bin/bash -lc",
 		},
 		Templates: map[string]config.Template{
@@ -413,6 +413,9 @@ func TestNewUsesConfiguredTmuxSocket(t *testing.T) {
 	}
 	if client.Socket != "/tmp/custom-agentmux.sock" {
 		t.Fatalf("expected configured socket, got %q", client.Socket)
+	}
+	if !client.LoadUserConfig {
+		t.Fatalf("expected load_user_config to be propagated")
 	}
 }
 

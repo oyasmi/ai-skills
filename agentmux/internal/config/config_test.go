@@ -15,6 +15,9 @@ func TestApplyDefaultsSetsTmuxSocket(t *testing.T) {
 	if cfg.Defaults.Tmux.Socket != DefaultSocketPath {
 		t.Fatalf("expected default socket %q, got %q", DefaultSocketPath, cfg.Defaults.Tmux.Socket)
 	}
+	if cfg.Defaults.Tmux.LoadUserConfig {
+		t.Fatalf("expected default load_user_config false")
+	}
 	if cfg.Defaults.Status.BusyTTLMS == nil || *cfg.Defaults.Status.BusyTTLMS != 10000 {
 		t.Fatalf("expected default busy ttl 10000, got %v", cfg.Defaults.Status.BusyTTLMS)
 	}

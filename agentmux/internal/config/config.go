@@ -20,6 +20,7 @@ const (
 defaults:
   tmux:
     socket: /tmp/agentmux.sock
+    load_user_config: false
   status:
     busy_ttl_ms: 10000
   shell: /bin/bash -lc
@@ -84,7 +85,8 @@ type Defaults struct {
 }
 
 type TmuxDefaults struct {
-	Socket string `yaml:"socket"`
+	Socket         string `yaml:"socket"`
+	LoadUserConfig bool   `yaml:"load_user_config"`
 }
 
 type StatusDefaults struct {

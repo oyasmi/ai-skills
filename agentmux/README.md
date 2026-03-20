@@ -12,7 +12,7 @@ Windows 不是首要目标。
 ## 特性
 
 1. 默认使用独立 tmux socket `/tmp/agentmux.sock`，且可通过配置修改
-2. 不加载用户 `tmux.conf`
+2. 默认不加载用户 `tmux.conf`，可通过配置显式开启
 3. `1 instance = 1 tmux session`
 4. 模板名和实例名支持中文
 5. 关键命令支持 `--json`
@@ -174,6 +174,7 @@ version: 1
 defaults:
   tmux:
     socket: /tmp/agentmux.sock
+    load_user_config: false
   status:
     busy_ttl_ms: 10000
   shell: /bin/bash -lc

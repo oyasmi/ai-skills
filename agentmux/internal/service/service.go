@@ -53,7 +53,10 @@ func New(paths config.Paths, cfg config.Config) Service {
 	return Service{
 		Paths:  paths,
 		Config: cfg,
-		Tmux:   tmuxctl.Client{Socket: cfg.Defaults.Tmux.Socket},
+		Tmux: tmuxctl.Client{
+			Socket:         cfg.Defaults.Tmux.Socket,
+			LoadUserConfig: cfg.Defaults.Tmux.LoadUserConfig,
+		},
 	}
 }
 

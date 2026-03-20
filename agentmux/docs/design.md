@@ -67,7 +67,7 @@ agentmux/
 
 1. socket 文件路径：`/tmp/agentmux.sock`
 2. 调用 tmux 时统一显式传 `-S /tmp/agentmux.sock`
-3. 不加载用户 `tmux.conf`
+3. 默认不加载用户 `tmux.conf`，但允许通过配置显式开启
 4. 不依赖用户已有 tmux server
 
 原因：
@@ -79,7 +79,7 @@ agentmux/
 实现建议：
 
 1. 启动 server 时显式指定 socket。
-2. 使用 `tmux -f /dev/null -L` 不是第一选择，因为我们已经固定 socket，直接统一 `-S` 更清晰。
+2. 当未开启用户配置加载时，使用 `tmux -f /dev/null -S ...`；当开启时，只传 `-S ...`。
 3. 所有内部 tmux 调用都经由 `tmuxctl` 封装，禁止散落 shell 拼接。
 
 ### 3.2 实例与 tmux 的映射
@@ -705,7 +705,7 @@ skill 的重点：
 5. 去掉 `bootstrap`
 6. 默认同名复用
 7. 使用独立 socket：`/tmp/agentmux.sock`
-8. 不加载用户 `tmux.conf`
+8. 默认不加载用户 `tmux.conf`，可通过配置显式开启
 9. 增加 `inspect`
 10. 输出尽量平坦一致
 11. 模板是“角色模板”，不是 harness 名称

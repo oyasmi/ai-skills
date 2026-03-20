@@ -3,6 +3,7 @@ version: 1
 defaults:
   tmux:
     socket: /tmp/agentmux.sock
+    load_user_config: false
   status:
     busy_ttl_ms: 10000
   shell: /bin/bash -lc
