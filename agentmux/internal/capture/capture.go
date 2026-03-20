@@ -10,6 +10,11 @@ import (
 	"github.com/oyasmi/agentmux/internal/tmuxctl"
 )
 
+type tmuxClient interface {
+	CapturePane(ctx context.Context, target string, history int) (string, error)
+	PaneInfo(ctx context.Context, target string) (tmuxctl.PaneInfo, error)
+}
+
 type Snapshot struct {
 	CursorX     int
 	CursorY     int
@@ -23,7 +28,7 @@ type Snapshot struct {
 	Dead        bool
 }
 
-func WaitStable(ctx context.Context, tmux tmuxctl.Client, target string, history, stableMS, timeoutMS, pollMS int) (Snapshot, error) {
+func WaitStable(ctx context.Context, tmux tmuxClient, target string, history, stableMS, timeoutMS, pollMS int) (Snapshot, error) {
 	if pollMS <= 0 {
 		pollMS = 250
 	}
@@ -64,7 +69,7 @@ func WaitStable(ctx context.Context, tmux tmuxctl.Client, target string, history
 	}
 }
 
-func Once(ctx context.Context, tmux tmuxctl.Client, target string, history int) (Snapshot, error) {
+func Once(ctx context.Context, tmux tmuxClient, target string, history int) (Snapshot, error) {
 	content, err := tmux.CapturePane(ctx, target, history)
 	if err != nil {
 		return Snapshot{}, err

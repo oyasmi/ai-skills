@@ -58,6 +58,9 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 		if len(args) < 2 || args[1] != "list" {
 			return writeErr(stdout, stderr, jsonMode, "template", "", apperr.New("invalid_arguments", "unknown template subcommand\n\n"+templateHelp()))
 		}
+		if len(args) > 2 {
+			return writeErr(stdout, stderr, jsonMode, "template list", "", apperr.New("invalid_arguments", "template list does not accept positional arguments\n\n"+templateListHelp()))
+		}
 		items := svc.TemplateList()
 		sort.Slice(items, func(i, j int) bool { return items[i]["name"] < items[j]["name"] })
 		if jsonMode {
@@ -72,6 +75,9 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 		_ = w.Flush()
 		return 0
 	case "list":
+		if len(args) > 1 {
+			return writeErr(stdout, stderr, jsonMode, "list", "", apperr.New("invalid_arguments", "list does not accept positional arguments\n\n"+listHelp()))
+		}
 		items, err := svc.List(ctx)
 		if err != nil {
 			return writeErr(stdout, stderr, jsonMode, "list", "", err)

@@ -81,6 +81,13 @@ func (r Registry) Put(inst Instance) {
 	r.Instances[inst.Name] = inst
 }
 
+func (r Registry) Delete(name string) {
+	if r.Instances == nil {
+		return
+	}
+	delete(r.Instances, name)
+}
+
 func (r Registry) Sorted() []Instance {
 	items := make([]Instance, 0, len(r.Instances))
 	for _, inst := range r.Instances {

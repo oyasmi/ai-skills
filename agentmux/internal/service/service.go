@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -15,10 +16,22 @@ import (
 	"github.com/oyasmi/agentmux/internal/tmuxctl"
 )
 
+type tmuxClient interface {
+	HasSession(ctx context.Context, sessionID string) bool
+	NewSession(ctx context.Context, sessionID, cwd, command string, env map[string]string) error
+	KillSession(ctx context.Context, sessionID string) error
+	CapturePane(ctx context.Context, target string, history int) (string, error)
+	LoadBuffer(ctx context.Context, data string) error
+	PasteBuffer(ctx context.Context, target string) error
+	SendKeys(ctx context.Context, target string, keys ...string) error
+	Attach(sessionID string) *exec.Cmd
+	PaneInfo(ctx context.Context, target string) (tmuxctl.PaneInfo, error)
+}
+
 type Service struct {
 	Paths  config.Paths
 	Config config.Config
-	Tmux   tmuxctl.Client
+	Tmux   tmuxClient
 }
 
 type SummonInput struct {
@@ -57,8 +70,18 @@ func (s Service) TemplateList() []map[string]string {
 	return out
 }
 
-func (s Service) loadRegistry() (instance.Registry, error) {
-	return instance.Load(s.Paths.Registry)
+func (s Service) loadRegistry(ctx context.Context) (instance.Registry, error) {
+	reg, err := instance.Load(s.Paths.Registry)
+	if err != nil {
+		return instance.Registry{}, err
+	}
+	reg, changed := s.reconcileRegistry(ctx, reg)
+	if changed {
+		if err := s.saveRegistry(reg); err != nil {
+			return instance.Registry{}, err
+		}
+	}
+	return reg, nil
 }
 
 func (s Service) saveRegistry(reg instance.Registry) error {
@@ -66,28 +89,15 @@ func (s Service) saveRegistry(reg instance.Registry) error {
 }
 
 func (s Service) List(ctx context.Context) ([]instance.Instance, error) {
-	reg, err := s.loadRegistry()
+	reg, err := s.loadRegistry(ctx)
 	if err != nil {
 		return nil, err
-	}
-	changed := false
-	for name, inst := range reg.Instances {
-		next := s.reconcile(ctx, inst)
-		if next.Status != inst.Status || next.UpdatedAt != inst.UpdatedAt {
-			reg.Instances[name] = next
-			changed = true
-		}
-	}
-	if changed {
-		if err := s.saveRegistry(reg); err != nil {
-			return nil, err
-		}
 	}
 	return reg.Sorted(), nil
 }
 
 func (s Service) Inspect(ctx context.Context, name string) (instance.Instance, error) {
-	reg, err := s.loadRegistry()
+	reg, err := s.loadRegistry(ctx)
 	if err != nil {
 		return instance.Instance{}, err
 	}
@@ -122,7 +132,7 @@ func (s Service) Summon(ctx context.Context, in SummonInput) (SummonResult, erro
 	if name == "" {
 		name = naming.GenerateName(resolved.Name, filepath.Base(cwd))
 	}
-	reg, err := s.loadRegistry()
+	reg, err := s.loadRegistry(ctx)
 	if err != nil {
 		return SummonResult{}, err
 	}
@@ -186,7 +196,7 @@ func (s Service) Summon(ctx context.Context, in SummonInput) (SummonResult, erro
 }
 
 func (s Service) Prompt(ctx context.Context, name string, text string, key string, enter bool) (instance.Instance, error) {
-	reg, err := s.loadRegistry()
+	reg, err := s.loadRegistry(ctx)
 	if err != nil {
 		return instance.Instance{}, err
 	}
@@ -196,6 +206,10 @@ func (s Service) Prompt(ctx context.Context, name string, text string, key strin
 	}
 	inst = s.reconcile(ctx, inst)
 	if inst.Status == instance.StatusLost || inst.Status == instance.StatusExited {
+		reg.Delete(name)
+		if err := s.saveRegistry(reg); err != nil {
+			return instance.Instance{}, err
+		}
 		return instance.Instance{}, apperr.New("process_not_running", fmt.Sprintf("instance %q is not running", name))
 	}
 	if strings.TrimSpace(text) == "" && strings.TrimSpace(key) == "" {
@@ -246,12 +260,18 @@ func (s Service) Capture(ctx context.Context, name string, history, stableMS, ti
 	if err != nil {
 		return instance.Instance{}, capture.Snapshot{}, err
 	}
-	reg, err := s.loadRegistry()
+	reg, err := s.loadRegistry(ctx)
 	if err != nil {
 		return instance.Instance{}, capture.Snapshot{}, err
 	}
 	if snap.Dead {
+		reg.Delete(name)
+		if err := s.saveRegistry(reg); err != nil {
+			return instance.Instance{}, capture.Snapshot{}, err
+		}
 		inst.Status = instance.StatusExited
+		inst.UpdatedAt = time.Now()
+		return inst, snap, nil
 	} else if stableMS > 0 {
 		inst.Status = instance.StatusIdle
 	}
@@ -264,7 +284,7 @@ func (s Service) Capture(ctx context.Context, name string, history, stableMS, ti
 }
 
 func (s Service) Halt(ctx context.Context, name string) (instance.Instance, error) {
-	reg, err := s.loadRegistry()
+	reg, err := s.loadRegistry(ctx)
 	if err != nil {
 		return instance.Instance{}, err
 	}
@@ -279,11 +299,28 @@ func (s Service) Halt(ctx context.Context, name string) (instance.Instance, erro
 	}
 	inst.Status = instance.StatusExited
 	inst.UpdatedAt = time.Now()
-	reg.Put(inst)
+	reg.Delete(name)
 	if err := s.saveRegistry(reg); err != nil {
 		return instance.Instance{}, err
 	}
 	return inst, nil
+}
+
+func (s Service) reconcileRegistry(ctx context.Context, reg instance.Registry) (instance.Registry, bool) {
+	changed := false
+	for name, inst := range reg.Instances {
+		next := s.reconcile(ctx, inst)
+		if next.Status == instance.StatusLost || next.Status == instance.StatusExited {
+			reg.Delete(name)
+			changed = true
+			continue
+		}
+		if next.Status != inst.Status || next.UpdatedAt != inst.UpdatedAt {
+			reg.Put(next)
+			changed = true
+		}
+	}
+	return reg, changed
 }
 
 func (s Service) sendPrompt(ctx context.Context, inst *instance.Instance, text string, allowSystem bool) error {
