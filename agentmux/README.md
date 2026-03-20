@@ -28,6 +28,8 @@ Windows 不是首要目标。
 5. `tmux` socket 路径从硬编码改为配置项 `defaults.tmux.socket`
 6. `busy` 状态新增 TTL 自动退化，默认 `10s`，避免发送 prompt 后因缺少后续观测而永久停留在 `busy`
 7. `instances.json` 现在使用文件锁和原子替换写入，降低多进程并发编排时的数据丢失和文件损坏风险
+8. `capture`/`wait` 内部减少了一次重复的注册表事务，避免不必要的注册表读改写
+9. 核心路径测试已补齐到 `capture`、`prompt`、`summon reuse`、`halt` 和 `naming`
 
 ## 依赖
 

@@ -89,9 +89,9 @@ func (s Service) List(ctx context.Context) ([]instance.Instance, error) {
 func (s Service) Inspect(ctx context.Context, name string) (instance.Instance, error) {
 	var out instance.Instance
 	err := s.withRegistry(ctx, func(reg *instance.Registry) error {
-		inst, ok := reg.Get(name)
-		if !ok {
-			return apperr.New("instance_not_found", fmt.Sprintf("instance %q not found", name))
+		inst, err := s.requireActiveInstance(reg, name)
+		if err != nil {
+			return err
 		}
 		out = inst
 		return nil
@@ -231,7 +231,7 @@ func (s Service) Wait(ctx context.Context, name string, stableMS, timeoutMS int)
 }
 
 func (s Service) captureLike(ctx context.Context, name string, history, stableMS, timeoutMS int, includeContent bool) (instance.Instance, capture.Snapshot, error) {
-	inst, err := s.Inspect(ctx, name)
+	inst, err := s.getInstanceForCapture(ctx, name)
 	if err != nil {
 		return instance.Instance{}, capture.Snapshot{}, err
 	}
@@ -275,6 +275,19 @@ func (s Service) captureLike(ctx context.Context, name string, history, stableMS
 	return inst, snap, nil
 }
 
+func (s Service) getInstanceForCapture(ctx context.Context, name string) (instance.Instance, error) {
+	var out instance.Instance
+	err := s.withRegistry(ctx, func(reg *instance.Registry) error {
+		inst, err := s.requireActiveInstance(reg, name)
+		if err != nil {
+			return err
+		}
+		out = inst
+		return nil
+	})
+	return out, err
+}
+
 func (s Service) Halt(ctx context.Context, name string) (instance.Instance, error) {
 	var out instance.Instance
 	err := s.withRegistry(ctx, func(reg *instance.Registry) error {
@@ -308,6 +321,18 @@ func (s Service) reconcileRegistry(ctx context.Context, reg *instance.Registry) 
 		}
 		reg.Put(next)
 	}
+}
+
+func (s Service) requireActiveInstance(reg *instance.Registry, name string) (instance.Instance, error) {
+	inst, ok := reg.Get(name)
+	if !ok {
+		return instance.Instance{}, apperr.New("instance_not_found", fmt.Sprintf("instance %q not found", name))
+	}
+	if inst.Status == instance.StatusLost || inst.Status == instance.StatusExited {
+		reg.Delete(name)
+		return instance.Instance{}, apperr.New("process_not_running", fmt.Sprintf("instance %q is not running", name))
+	}
+	return inst, nil
 }
 
 func (s Service) sendPrompt(ctx context.Context, inst *instance.Instance, text string, allowSystem bool) error {

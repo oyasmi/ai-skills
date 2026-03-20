@@ -4,6 +4,7 @@ import (
 	"context"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,52 +14,60 @@ import (
 )
 
 type fakeTmux struct {
-	sessions map[string]bool
+	sessions       map[string]bool
+	captureContent string
+	paneInfo       tmuxctl.PaneInfo
+	loads          []string
+	sendKeys       []string
+	killed         []string
 }
 
-func (f fakeTmux) HasSession(_ context.Context, sessionID string) bool {
+func (f *fakeTmux) HasSession(_ context.Context, sessionID string) bool {
 	return f.sessions[sessionID]
 }
 
-func (f fakeTmux) NewSession(_ context.Context, sessionID, _ string, _ string, _ map[string]string) error {
+func (f *fakeTmux) NewSession(_ context.Context, sessionID, _ string, _ string, _ map[string]string) error {
 	f.sessions[sessionID] = true
 	return nil
 }
 
-func (f fakeTmux) KillSession(_ context.Context, sessionID string) error {
+func (f *fakeTmux) KillSession(_ context.Context, sessionID string) error {
+	f.killed = append(f.killed, sessionID)
 	delete(f.sessions, sessionID)
 	return nil
 }
 
-func (f fakeTmux) CapturePane(context.Context, string, int) (string, error) {
-	return "", nil
+func (f *fakeTmux) CapturePane(context.Context, string, int) (string, error) {
+	return f.captureContent, nil
 }
 
-func (f fakeTmux) LoadBuffer(context.Context, string) error {
+func (f *fakeTmux) LoadBuffer(_ context.Context, data string) error {
+	f.loads = append(f.loads, data)
 	return nil
 }
 
-func (f fakeTmux) PasteBuffer(context.Context, string) error {
+func (f *fakeTmux) PasteBuffer(context.Context, string) error {
 	return nil
 }
 
-func (f fakeTmux) SendKeys(context.Context, string, ...string) error {
+func (f *fakeTmux) SendKeys(_ context.Context, _ string, keys ...string) error {
+	f.sendKeys = append(f.sendKeys, keys...)
 	return nil
 }
 
-func (f fakeTmux) Attach(string) *exec.Cmd {
+func (f *fakeTmux) Attach(string) *exec.Cmd {
 	return nil
 }
 
-func (f fakeTmux) PaneInfo(context.Context, string) (tmuxctl.PaneInfo, error) {
-	return tmuxctl.PaneInfo{}, nil
+func (f *fakeTmux) PaneInfo(context.Context, string) (tmuxctl.PaneInfo, error) {
+	return f.paneInfo, nil
 }
 
 func TestListPrunesMissingSessions(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	svc, registryPath := newTestService(t, fakeTmux{
+	svc, registryPath := newTestService(t, &fakeTmux{
 		sessions: map[string]bool{"live-session": true},
 	})
 	now := time.Now().UTC()
@@ -106,7 +115,7 @@ func TestSummonIgnoresStaleInstancesForLimit(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	svc, registryPath := newTestService(t, fakeTmux{sessions: map[string]bool{}})
+	svc, registryPath := newTestService(t, &fakeTmux{sessions: map[string]bool{}})
 	now := time.Now().UTC()
 	reg := instance.Registry{
 		Instances: map[string]instance.Instance{
@@ -146,7 +155,7 @@ func TestInspectDowngradesExpiredBusyToIdle(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	svc, registryPath := newTestService(t, fakeTmux{
+	svc, registryPath := newTestService(t, &fakeTmux{
 		sessions: map[string]bool{"live-session": true},
 	})
 	now := time.Now().UTC()
@@ -178,7 +187,7 @@ func TestInspectKeepsBusyBeforeTTLExpires(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	svc, registryPath := newTestService(t, fakeTmux{
+	svc, registryPath := newTestService(t, &fakeTmux{
 		sessions: map[string]bool{"live-session": true},
 	})
 	now := time.Now().UTC()
@@ -210,7 +219,7 @@ func TestInspectKeepsBusyWhenBusyTTLIsZero(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	svc, registryPath := newTestService(t, fakeTmux{
+	svc, registryPath := newTestService(t, &fakeTmux{
 		sessions: map[string]bool{"live-session": true},
 	})
 	zero := 0
@@ -237,6 +246,151 @@ func TestInspectKeepsBusyWhenBusyTTLIsZero(t *testing.T) {
 	}
 	if inst.Status != instance.StatusBusy {
 		t.Fatalf("expected busy when ttl is zero, got %s", inst.Status)
+	}
+}
+
+func TestSummonReuseReturnsReusedAndSendsPrompt(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	tmux := &fakeTmux{sessions: map[string]bool{"live-session": true}}
+	svc, registryPath := newTestService(t, tmux)
+	now := time.Now().UTC()
+	reg := instance.Registry{
+		Instances: map[string]instance.Instance{
+			"worker-a": {
+				Name:            "worker-a",
+				SessionID:       "live-session",
+				Status:          instance.StatusIdle,
+				UpdatedAt:       now,
+				LastActivityAt:  now,
+				FirstPromptSent: true,
+			},
+		},
+	}
+	if err := instance.Save(registryPath, reg); err != nil {
+		t.Fatalf("save registry: %v", err)
+	}
+
+	res, err := svc.Summon(ctx, SummonInput{TemplateName: "worker", Name: "worker-a", Prompt: strPtr("continue")})
+	if err != nil {
+		t.Fatalf("summon: %v", err)
+	}
+	if !res.Reused {
+		t.Fatalf("expected reused result")
+	}
+	if len(tmux.loads) != 1 || tmux.loads[0] != "continue" {
+		t.Fatalf("expected prompt to be sent on reuse, got %v", tmux.loads)
+	}
+}
+
+func TestPromptSendsTextAndEnter(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	tmux := &fakeTmux{sessions: map[string]bool{"live-session": true}}
+	svc, registryPath := newTestService(t, tmux)
+	saveRunningInstance(t, registryPath, "worker", "live-session", instance.StatusIdle, true, time.Now().UTC())
+
+	inst, err := svc.Prompt(ctx, "worker", "fix it", "", true)
+	if err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	if inst.Status != instance.StatusBusy {
+		t.Fatalf("expected busy status, got %s", inst.Status)
+	}
+	if len(tmux.loads) != 1 || tmux.loads[0] != "fix it" {
+		t.Fatalf("unexpected load buffer calls: %v", tmux.loads)
+	}
+	if got := strings.Join(tmux.sendKeys, ","); got != "Enter,Enter" {
+		t.Fatalf("unexpected send keys: %s", got)
+	}
+}
+
+func TestPromptRejectsInvalidKey(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	svc, registryPath := newTestService(t, &fakeTmux{sessions: map[string]bool{"live-session": true}})
+	saveRunningInstance(t, registryPath, "worker", "live-session", instance.StatusIdle, true, time.Now().UTC())
+
+	_, err := svc.Prompt(ctx, "worker", "", "BadKey", false)
+	if err == nil || !strings.Contains(err.Error(), "unsupported key") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCaptureStableMarksIdleAndReturnsContent(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	tmux := &fakeTmux{
+		sessions:       map[string]bool{"live-session": true},
+		captureContent: "screen output",
+		paneInfo:       tmuxctl.PaneInfo{Width: 80, Height: 24},
+	}
+	svc, registryPath := newTestService(t, tmux)
+	svc.Config.Defaults.Capture.PollMS = 1
+	saveRunningInstance(t, registryPath, "worker", "live-session", instance.StatusBusy, true, time.Now().UTC().Add(-2*time.Second))
+
+	inst, snap, err := svc.Capture(ctx, "worker", 10, 1, 1000)
+	if err != nil {
+		t.Fatalf("capture: %v", err)
+	}
+	if inst.Status != instance.StatusIdle {
+		t.Fatalf("expected idle, got %s", inst.Status)
+	}
+	if snap.Content != "screen output" {
+		t.Fatalf("unexpected content: %q", snap.Content)
+	}
+}
+
+func TestWaitOmitsContent(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	tmux := &fakeTmux{
+		sessions:       map[string]bool{"live-session": true},
+		captureContent: "screen output",
+		paneInfo:       tmuxctl.PaneInfo{Width: 80, Height: 24},
+	}
+	svc, registryPath := newTestService(t, tmux)
+	svc.Config.Defaults.Capture.PollMS = 1
+	saveRunningInstance(t, registryPath, "worker", "live-session", instance.StatusBusy, true, time.Now().UTC().Add(-2*time.Second))
+
+	_, snap, err := svc.Wait(ctx, "worker", 1, 1000)
+	if err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if snap.Content != "" {
+		t.Fatalf("expected empty content for wait, got %q", snap.Content)
+	}
+}
+
+func TestHaltKillsSessionAndDeletesRegistryEntry(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	tmux := &fakeTmux{sessions: map[string]bool{"live-session": true}}
+	svc, registryPath := newTestService(t, tmux)
+	saveRunningInstance(t, registryPath, "worker", "live-session", instance.StatusIdle, true, time.Now().UTC())
+
+	inst, err := svc.Halt(ctx, "worker")
+	if err != nil {
+		t.Fatalf("halt: %v", err)
+	}
+	if inst.Status != instance.StatusExited {
+		t.Fatalf("expected exited status, got %s", inst.Status)
+	}
+	if len(tmux.killed) != 1 || tmux.killed[0] != "live-session" {
+		t.Fatalf("unexpected killed sessions: %v", tmux.killed)
+	}
+	saved, err := instance.Load(registryPath)
+	if err != nil {
+		t.Fatalf("reload registry: %v", err)
+	}
+	if _, ok := saved.Get("worker"); ok {
+		t.Fatalf("expected worker to be deleted from registry")
 	}
 }
 
@@ -298,4 +452,28 @@ func newTestService(t *testing.T, tmux tmuxClient) (Service, string) {
 
 func intPtr(v int) *int {
 	return &v
+}
+
+func strPtr(v string) *string {
+	return &v
+}
+
+func saveRunningInstance(t *testing.T, registryPath, name, sessionID string, status instance.Status, firstPromptSent bool, lastActivityAt time.Time) {
+	t.Helper()
+
+	reg := instance.Registry{
+		Instances: map[string]instance.Instance{
+			name: {
+				Name:            name,
+				SessionID:       sessionID,
+				Status:          status,
+				UpdatedAt:       lastActivityAt,
+				LastActivityAt:  lastActivityAt,
+				FirstPromptSent: firstPromptSent,
+			},
+		},
+	}
+	if err := instance.Save(registryPath, reg); err != nil {
+		t.Fatalf("save registry: %v", err)
+	}
 }
