@@ -20,6 +20,8 @@ const (
 defaults:
   tmux:
     socket: /tmp/agentmux.sock
+  status:
+    busy_ttl_ms: 10000
   shell: /bin/bash -lc
   cwd: .
   env:
@@ -76,12 +78,17 @@ type Defaults struct {
 	CWD          string            `yaml:"cwd"`
 	Env          map[string]string `yaml:"env"`
 	Tmux         TmuxDefaults      `yaml:"tmux"`
+	Status       StatusDefaults    `yaml:"status"`
 	Capture      CaptureDefaults   `yaml:"capture"`
 	MaxInstances int               `yaml:"max_instances"`
 }
 
 type TmuxDefaults struct {
 	Socket string `yaml:"socket"`
+}
+
+type StatusDefaults struct {
+	BusyTTLMS int `yaml:"busy_ttl_ms"`
 }
 
 type CaptureDefaults struct {
@@ -164,6 +171,9 @@ func (c *Config) ApplyDefaults() {
 	if c.Defaults.Shell == "" {
 		c.Defaults.Shell = "/bin/bash -lc"
 	}
+	if c.Defaults.Status.BusyTTLMS == 0 {
+		c.Defaults.Status.BusyTTLMS = 10000
+	}
 	if c.Defaults.CWD == "" {
 		c.Defaults.CWD = "."
 	}
@@ -193,6 +203,9 @@ func (c Config) Validate() error {
 	}
 	if c.Defaults.Capture.History < 0 || c.Defaults.Capture.StableMS < 0 || c.Defaults.Capture.PollMS < 0 {
 		return apperr.New("config_invalid", "capture settings must be non-negative")
+	}
+	if c.Defaults.Status.BusyTTLMS < 0 {
+		return apperr.New("config_invalid", "status.busy_ttl_ms must be non-negative")
 	}
 	if strings.TrimSpace(c.Defaults.Tmux.Socket) == "" {
 		return apperr.New("config_invalid", "tmux socket must not be empty")

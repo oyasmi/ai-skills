@@ -374,11 +374,27 @@ func (s Service) reconcile(ctx context.Context, inst instance.Instance) instance
 	}
 	if info.Dead {
 		inst.Status = instance.StatusExited
+	} else if s.busyExpired(inst) {
+		inst.Status = instance.StatusIdle
 	} else if inst.Status != instance.StatusBusy {
 		inst.Status = instance.StatusIdle
 	}
 	inst.UpdatedAt = time.Now()
 	return inst
+}
+
+func (s Service) busyExpired(inst instance.Instance) bool {
+	if inst.Status != instance.StatusBusy {
+		return false
+	}
+	if s.Config.Defaults.Status.BusyTTLMS <= 0 {
+		return true
+	}
+	last := inst.LastActivityAt
+	if last.IsZero() {
+		last = inst.UpdatedAt
+	}
+	return time.Since(last) >= time.Duration(s.Config.Defaults.Status.BusyTTLMS)*time.Millisecond
 }
 
 func target(sessionID string) string {

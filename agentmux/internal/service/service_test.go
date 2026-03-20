@@ -142,6 +142,70 @@ func TestSummonIgnoresStaleInstancesForLimit(t *testing.T) {
 	}
 }
 
+func TestInspectDowngradesExpiredBusyToIdle(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	svc, registryPath := newTestService(t, fakeTmux{
+		sessions: map[string]bool{"live-session": true},
+	})
+	now := time.Now().UTC()
+	reg := instance.Registry{
+		Instances: map[string]instance.Instance{
+			"worker": {
+				Name:           "worker",
+				SessionID:      "live-session",
+				Status:         instance.StatusBusy,
+				LastActivityAt: now.Add(-11 * time.Second),
+				UpdatedAt:      now,
+			},
+		},
+	}
+	if err := instance.Save(registryPath, reg); err != nil {
+		t.Fatalf("save registry: %v", err)
+	}
+
+	inst, err := svc.Inspect(ctx, "worker")
+	if err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
+	if inst.Status != instance.StatusIdle {
+		t.Fatalf("expected idle after busy ttl expiry, got %s", inst.Status)
+	}
+}
+
+func TestInspectKeepsBusyBeforeTTLExpires(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	svc, registryPath := newTestService(t, fakeTmux{
+		sessions: map[string]bool{"live-session": true},
+	})
+	now := time.Now().UTC()
+	reg := instance.Registry{
+		Instances: map[string]instance.Instance{
+			"worker": {
+				Name:           "worker",
+				SessionID:      "live-session",
+				Status:         instance.StatusBusy,
+				LastActivityAt: now.Add(-2 * time.Second),
+				UpdatedAt:      now,
+			},
+		},
+	}
+	if err := instance.Save(registryPath, reg); err != nil {
+		t.Fatalf("save registry: %v", err)
+	}
+
+	inst, err := svc.Inspect(ctx, "worker")
+	if err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
+	if inst.Status != instance.StatusBusy {
+		t.Fatalf("expected busy before ttl expiry, got %s", inst.Status)
+	}
+}
+
 func TestNewUsesConfiguredTmuxSocket(t *testing.T) {
 	cfg := config.Config{
 		Version: 1,
@@ -173,6 +237,7 @@ func newTestService(t *testing.T, tmux tmuxClient) (Service, string) {
 		Version: 1,
 		Defaults: config.Defaults{
 			Tmux:         config.TmuxDefaults{Socket: config.DefaultSocketPath},
+			Status:       config.StatusDefaults{BusyTTLMS: 10000},
 			Shell:        "/bin/bash -lc",
 			CWD:          dir,
 			Env:          map[string]string{},

@@ -3,6 +3,8 @@ version: 1
 defaults:
   tmux:
     socket: /tmp/agentmux.sock
+  status:
+    busy_ttl_ms: 10000
   shell: /bin/bash -lc
   cwd: .
   env:

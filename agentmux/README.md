@@ -19,6 +19,15 @@ Windows 不是首要目标。
 6. `summon` 默认同名复用
 7. `capture` 默认返回纯文本
 
+## 近期优化
+
+1. `prompt` 新增 `--stdin`，适合长文本与多行文本输入，避免 shell 参数长度限制
+2. 新增 `version` 命令，支持纯文本和 `--json` 输出，便于 Agent 判断功能版本
+3. 新增 `wait` 命令，只等待屏幕稳定，不返回内容，适合节省 token
+4. `capture --stable` 与 `wait --stable` 支持整数毫秒和 Go duration 两种格式，例如 `1500`、`1500ms`、`1.5s`
+5. `tmux` socket 路径从硬编码改为配置项 `defaults.tmux.socket`
+6. `busy` 状态新增 TTL 自动退化，默认 `10s`，避免发送 prompt 后因缺少后续观测而永久停留在 `busy`
+
 ## 依赖
 
 运行时依赖：
@@ -162,6 +171,8 @@ version: 1
 defaults:
   tmux:
     socket: /tmp/agentmux.sock
+  status:
+    busy_ttl_ms: 10000
   shell: /bin/bash -lc
   cwd: .
   env:
@@ -280,6 +291,12 @@ agentmux version --json
 2. `--stdin` 从标准输入读取完整文本
 3. `--key` 发送白名单特殊键
 4. `--enter` 为 `--text` 或 `--stdin` 发送后额外补一个 `Enter`
+
+### `busy` 状态
+
+1. `prompt` 后实例会进入 `busy`
+2. 若后续执行 `capture --stable` 或 `wait`，状态会正常收敛回 `idle`
+3. 若调用方没有继续观测，`busy` 会在 `defaults.status.busy_ttl_ms` 到期后自动退化为 `idle`
 
 ## 输出格式
 
