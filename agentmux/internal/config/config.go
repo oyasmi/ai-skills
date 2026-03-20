@@ -88,7 +88,7 @@ type TmuxDefaults struct {
 }
 
 type StatusDefaults struct {
-	BusyTTLMS int `yaml:"busy_ttl_ms"`
+	BusyTTLMS *int `yaml:"busy_ttl_ms"`
 }
 
 type CaptureDefaults struct {
@@ -171,8 +171,8 @@ func (c *Config) ApplyDefaults() {
 	if c.Defaults.Shell == "" {
 		c.Defaults.Shell = "/bin/bash -lc"
 	}
-	if c.Defaults.Status.BusyTTLMS == 0 {
-		c.Defaults.Status.BusyTTLMS = 10000
+	if c.Defaults.Status.BusyTTLMS == nil {
+		c.Defaults.Status.BusyTTLMS = intPtr(10000)
 	}
 	if c.Defaults.CWD == "" {
 		c.Defaults.CWD = "."
@@ -204,7 +204,7 @@ func (c Config) Validate() error {
 	if c.Defaults.Capture.History < 0 || c.Defaults.Capture.StableMS < 0 || c.Defaults.Capture.PollMS < 0 {
 		return apperr.New("config_invalid", "capture settings must be non-negative")
 	}
-	if c.Defaults.Status.BusyTTLMS < 0 {
+	if c.Defaults.Status.BusyTTLMS != nil && *c.Defaults.Status.BusyTTLMS < 0 {
 		return apperr.New("config_invalid", "status.busy_ttl_ms must be non-negative")
 	}
 	if strings.TrimSpace(c.Defaults.Tmux.Socket) == "" {
@@ -334,6 +334,10 @@ func firstNonEmpty(vs ...string) string {
 		}
 	}
 	return ""
+}
+
+func intPtr(v int) *int {
+	return &v
 }
 
 func IsNotExist(err error) bool {

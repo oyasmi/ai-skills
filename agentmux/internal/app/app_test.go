@@ -132,7 +132,7 @@ func TestRunPromptRejectsMissingInput(t *testing.T) {
 	if code == 0 {
 		t.Fatalf("expected non-zero exit code")
 	}
-	if !strings.Contains(stderr.String(), "instance \"demo\" not found") && !strings.Contains(stdout.String(), `"instance":"demo"`) {
+	if !strings.Contains(stderr.String(), "prompt requires --text or --key") {
 		t.Fatalf("unexpected output, stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 }

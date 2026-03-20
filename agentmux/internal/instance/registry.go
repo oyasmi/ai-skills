@@ -3,7 +3,9 @@ package instance
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"sort"
+	"syscall"
 	"time"
 
 	"github.com/oyasmi/agentmux/internal/apperr"
@@ -41,6 +43,10 @@ type Registry struct {
 }
 
 func Load(path string) (Registry, error) {
+	return loadUnlocked(path)
+}
+
+func loadUnlocked(path string) (Registry, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -59,6 +65,10 @@ func Load(path string) (Registry, error) {
 }
 
 func Save(path string, reg Registry) error {
+	return saveUnlocked(path, reg)
+}
+
+func saveUnlocked(path string, reg Registry) error {
 	if reg.Instances == nil {
 		reg.Instances = map[string]Instance{}
 	}
@@ -66,7 +76,61 @@ func Save(path string, reg Registry) error {
 	if err != nil {
 		return apperr.Wrap("config_invalid", err, "marshal registry")
 	}
-	return os.WriteFile(path, b, 0o644)
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "instances.json.*.tmp")
+	if err != nil {
+		return apperr.Wrap("config_invalid", err, "create registry temp file")
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(b); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return apperr.Wrap("config_invalid", err, "write registry temp file")
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return apperr.Wrap("config_invalid", err, "close registry temp file")
+	}
+	if err := os.Chmod(tmpName, 0o644); err != nil {
+		_ = os.Remove(tmpName)
+		return apperr.Wrap("config_invalid", err, "chmod registry temp file")
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		_ = os.Remove(tmpName)
+		return apperr.Wrap("config_invalid", err, "replace registry file")
+	}
+	return nil
+}
+
+func WithLocked(path string, fn func(*Registry) error) error {
+	lockPath := path + ".lock"
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return apperr.Wrap("config_invalid", err, "open registry lock file")
+	}
+	defer lockFile.Close()
+
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
+		return apperr.Wrap("config_invalid", err, "lock registry file")
+	}
+	defer func() {
+		_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+	}()
+
+	reg, err := loadUnlocked(path)
+	if err != nil {
+		return err
+	}
+	if reg.Instances == nil {
+		reg.Instances = map[string]Instance{}
+	}
+	if err := fn(&reg); err != nil {
+		return err
+	}
+	if err := saveUnlocked(path, reg); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (r Registry) Get(name string) (Instance, bool) {

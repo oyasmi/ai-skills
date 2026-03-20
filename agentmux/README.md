@@ -27,6 +27,7 @@ Windows 不是首要目标。
 4. `capture --stable` 与 `wait --stable` 支持整数毫秒和 Go duration 两种格式，例如 `1500`、`1500ms`、`1.5s`
 5. `tmux` socket 路径从硬编码改为配置项 `defaults.tmux.socket`
 6. `busy` 状态新增 TTL 自动退化，默认 `10s`，避免发送 prompt 后因缺少后续观测而永久停留在 `busy`
+7. `instances.json` 现在使用文件锁和原子替换写入，降低多进程并发编排时的数据丢失和文件损坏风险
 
 ## 依赖
 
@@ -297,6 +298,13 @@ agentmux version --json
 1. `prompt` 后实例会进入 `busy`
 2. 若后续执行 `capture --stable` 或 `wait`，状态会正常收敛回 `idle`
 3. 若调用方没有继续观测，`busy` 会在 `defaults.status.busy_ttl_ms` 到期后自动退化为 `idle`
+4. 若 `busy_ttl_ms: 0`，表示禁用自动退化，实例不会仅因 TTL 到期而自动回到 `idle`
+
+## 并发安全
+
+1. `instances.json` 的读改写现在在文件锁保护下执行
+2. 注册表写入使用临时文件加原子替换，避免出现半写入 JSON
+3. 这能显著降低多个 `agentmux` 进程并发操作同一注册表时的丢写风险
 
 ## 输出格式
 

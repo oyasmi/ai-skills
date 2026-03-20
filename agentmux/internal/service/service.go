@@ -70,47 +70,33 @@ func (s Service) TemplateList() []map[string]string {
 	return out
 }
 
-func (s Service) loadRegistry(ctx context.Context) (instance.Registry, error) {
-	reg, err := instance.Load(s.Paths.Registry)
-	if err != nil {
-		return instance.Registry{}, err
-	}
-	reg, changed := s.reconcileRegistry(ctx, reg)
-	if changed {
-		if err := s.saveRegistry(reg); err != nil {
-			return instance.Registry{}, err
-		}
-	}
-	return reg, nil
-}
-
-func (s Service) saveRegistry(reg instance.Registry) error {
-	return instance.Save(s.Paths.Registry, reg)
+func (s Service) withRegistry(ctx context.Context, fn func(*instance.Registry) error) error {
+	return instance.WithLocked(s.Paths.Registry, func(reg *instance.Registry) error {
+		s.reconcileRegistry(ctx, reg)
+		return fn(reg)
+	})
 }
 
 func (s Service) List(ctx context.Context) ([]instance.Instance, error) {
-	reg, err := s.loadRegistry(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return reg.Sorted(), nil
+	var items []instance.Instance
+	err := s.withRegistry(ctx, func(reg *instance.Registry) error {
+		items = reg.Sorted()
+		return nil
+	})
+	return items, err
 }
 
 func (s Service) Inspect(ctx context.Context, name string) (instance.Instance, error) {
-	reg, err := s.loadRegistry(ctx)
-	if err != nil {
-		return instance.Instance{}, err
-	}
-	inst, ok := reg.Get(name)
-	if !ok {
-		return instance.Instance{}, apperr.New("instance_not_found", fmt.Sprintf("instance %q not found", name))
-	}
-	inst = s.reconcile(ctx, inst)
-	reg.Put(inst)
-	if err := s.saveRegistry(reg); err != nil {
-		return instance.Instance{}, err
-	}
-	return inst, nil
+	var out instance.Instance
+	err := s.withRegistry(ctx, func(reg *instance.Registry) error {
+		inst, ok := reg.Get(name)
+		if !ok {
+			return apperr.New("instance_not_found", fmt.Sprintf("instance %q not found", name))
+		}
+		out = inst
+		return nil
+	})
+	return out, err
 }
 
 func (s Service) Summon(ctx context.Context, in SummonInput) (SummonResult, error) {
@@ -132,116 +118,108 @@ func (s Service) Summon(ctx context.Context, in SummonInput) (SummonResult, erro
 	if name == "" {
 		name = naming.GenerateName(resolved.Name, filepath.Base(cwd))
 	}
-	reg, err := s.loadRegistry(ctx)
+	var res SummonResult
+	err = s.withRegistry(ctx, func(reg *instance.Registry) error {
+		if inst, ok := reg.Get(name); ok {
+			if inst.Status == instance.StatusLost {
+				reg.Delete(name)
+			} else {
+				if prompt := strings.TrimSpace(resolved.Prompt); prompt != "" {
+					if err := s.sendPrompt(ctx, &inst, prompt, false); err != nil {
+						return err
+					}
+					reg.Put(inst)
+				}
+				res = SummonResult{Instance: inst, Reused: true}
+				return nil
+			}
+		}
+		if s.Config.Defaults.MaxInstances > 0 && len(reg.Instances) >= s.Config.Defaults.MaxInstances {
+			return apperr.New("config_invalid", "max_instances exceeded")
+		}
+		sessionID := naming.GenerateSessionID()
+		command := expandCommand(resolved.Command, resolved.Model, cwd, name, resolved.Name)
+		now := time.Now()
+		inst := instance.Instance{
+			Name:            name,
+			Template:        resolved.Name,
+			SessionID:       sessionID,
+			Model:           resolved.Model,
+			SystemPrompt:    resolved.SystemPrompt,
+			CWD:             cwd,
+			Command:         command,
+			Shell:           resolved.Shell,
+			Env:             resolved.Env,
+			Status:          instance.StatusStarting,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+			LastActivityAt:  now,
+			FirstPromptSent: false,
+		}
+		if err := s.Tmux.NewSession(ctx, sessionID, cwd, shellCommand(inst.Shell, inst.Command), inst.Env); err != nil {
+			return err
+		}
+		inst.Status = instance.StatusIdle
+		reg.Put(inst)
+		if prompt := strings.TrimSpace(resolved.Prompt); prompt != "" {
+			if err := s.sendPrompt(ctx, &inst, prompt, true); err != nil {
+				return err
+			}
+			reg.Put(inst)
+		}
+		res = SummonResult{Instance: inst, Reused: false}
+		return nil
+	})
 	if err != nil {
 		return SummonResult{}, err
 	}
-	if inst, ok := reg.Get(name); ok {
-		inst = s.reconcile(ctx, inst)
-		if inst.Status == instance.StatusLost {
-			delete(reg.Instances, name)
-		} else {
-			if prompt := strings.TrimSpace(resolved.Prompt); prompt != "" {
-				if err := s.sendPrompt(ctx, &inst, prompt, false); err != nil {
-					return SummonResult{}, err
-				}
-				reg.Put(inst)
-				if err := s.saveRegistry(reg); err != nil {
-					return SummonResult{}, err
-				}
-			}
-			return SummonResult{Instance: inst, Reused: true}, nil
-		}
-	}
-	if s.Config.Defaults.MaxInstances > 0 && len(reg.Instances) >= s.Config.Defaults.MaxInstances {
-		return SummonResult{}, apperr.New("config_invalid", "max_instances exceeded")
-	}
-	sessionID := naming.GenerateSessionID()
-	command := expandCommand(resolved.Command, resolved.Model, cwd, name, resolved.Name)
-	now := time.Now()
-	inst := instance.Instance{
-		Name:            name,
-		Template:        resolved.Name,
-		SessionID:       sessionID,
-		Model:           resolved.Model,
-		SystemPrompt:    resolved.SystemPrompt,
-		CWD:             cwd,
-		Command:         command,
-		Shell:           resolved.Shell,
-		Env:             resolved.Env,
-		Status:          instance.StatusStarting,
-		CreatedAt:       now,
-		UpdatedAt:       now,
-		LastActivityAt:  now,
-		FirstPromptSent: false,
-	}
-	if err := s.Tmux.NewSession(ctx, sessionID, cwd, shellCommand(inst.Shell, inst.Command), inst.Env); err != nil {
-		return SummonResult{}, err
-	}
-	inst.Status = instance.StatusIdle
-	reg.Put(inst)
-	if err := s.saveRegistry(reg); err != nil {
-		return SummonResult{}, err
-	}
-	if prompt := strings.TrimSpace(resolved.Prompt); prompt != "" {
-		if err := s.sendPrompt(ctx, &inst, prompt, true); err != nil {
-			return SummonResult{}, err
-		}
-		reg.Put(inst)
-		if err := s.saveRegistry(reg); err != nil {
-			return SummonResult{}, err
-		}
-	}
-	return SummonResult{Instance: inst, Reused: false}, nil
+	return res, nil
 }
 
 func (s Service) Prompt(ctx context.Context, name string, text string, key string, enter bool) (instance.Instance, error) {
-	reg, err := s.loadRegistry(ctx)
-	if err != nil {
-		return instance.Instance{}, err
-	}
-	inst, ok := reg.Get(name)
-	if !ok {
-		return instance.Instance{}, apperr.New("instance_not_found", fmt.Sprintf("instance %q not found", name))
-	}
-	inst = s.reconcile(ctx, inst)
-	if inst.Status == instance.StatusLost || inst.Status == instance.StatusExited {
-		reg.Delete(name)
-		if err := s.saveRegistry(reg); err != nil {
-			return instance.Instance{}, err
-		}
-		return instance.Instance{}, apperr.New("process_not_running", fmt.Sprintf("instance %q is not running", name))
-	}
 	if strings.TrimSpace(text) == "" && strings.TrimSpace(key) == "" {
 		return instance.Instance{}, apperr.New("invalid_arguments", "prompt requires --text or --key")
 	}
-	if strings.TrimSpace(text) != "" {
-		if err := s.sendPrompt(ctx, &inst, text, !inst.FirstPromptSent); err != nil {
-			return instance.Instance{}, err
+	var out instance.Instance
+	err := s.withRegistry(ctx, func(reg *instance.Registry) error {
+		inst, ok := reg.Get(name)
+		if !ok {
+			return apperr.New("instance_not_found", fmt.Sprintf("instance %q not found", name))
 		}
-		if enter {
-			if err := s.Tmux.SendKeys(ctx, target(inst.SessionID), "Enter"); err != nil {
-				return instance.Instance{}, err
+		if inst.Status == instance.StatusLost || inst.Status == instance.StatusExited {
+			reg.Delete(name)
+			return apperr.New("process_not_running", fmt.Sprintf("instance %q is not running", name))
+		}
+		if strings.TrimSpace(text) != "" {
+			if err := s.sendPrompt(ctx, &inst, text, !inst.FirstPromptSent); err != nil {
+				return err
+			}
+			if enter {
+				if err := s.Tmux.SendKeys(ctx, target(inst.SessionID), "Enter"); err != nil {
+					return err
+				}
 			}
 		}
-	}
-	if key != "" {
-		mapped, ok := validKey(key)
-		if !ok {
-			return instance.Instance{}, apperr.New("invalid_key", fmt.Sprintf("unsupported key %q", key))
+		if key != "" {
+			mapped, ok := validKey(key)
+			if !ok {
+				return apperr.New("invalid_key", fmt.Sprintf("unsupported key %q", key))
+			}
+			if err := s.Tmux.SendKeys(ctx, target(inst.SessionID), mapped); err != nil {
+				return err
+			}
 		}
-		if err := s.Tmux.SendKeys(ctx, target(inst.SessionID), mapped); err != nil {
-			return instance.Instance{}, err
-		}
-	}
-	inst.Status = instance.StatusBusy
-	inst.UpdatedAt = time.Now()
-	inst.LastActivityAt = inst.UpdatedAt
-	reg.Put(inst)
-	if err := s.saveRegistry(reg); err != nil {
+		inst.Status = instance.StatusBusy
+		inst.UpdatedAt = time.Now()
+		inst.LastActivityAt = inst.UpdatedAt
+		reg.Put(inst)
+		out = inst
+		return nil
+	})
+	if err != nil {
 		return instance.Instance{}, err
 	}
-	return inst, nil
+	return out, nil
 }
 
 func (s Service) Capture(ctx context.Context, name string, history, stableMS, timeoutMS int) (instance.Instance, capture.Snapshot, error) {
@@ -268,24 +246,26 @@ func (s Service) captureLike(ctx context.Context, name string, history, stableMS
 	if err != nil {
 		return instance.Instance{}, capture.Snapshot{}, err
 	}
-	reg, err := s.loadRegistry(ctx)
-	if err != nil {
-		return instance.Instance{}, capture.Snapshot{}, err
-	}
-	if snap.Dead {
-		reg.Delete(name)
-		if err := s.saveRegistry(reg); err != nil {
-			return instance.Instance{}, capture.Snapshot{}, err
+	err = s.withRegistry(ctx, func(reg *instance.Registry) error {
+		current, ok := reg.Get(name)
+		if !ok {
+			return apperr.New("instance_not_found", fmt.Sprintf("instance %q not found", name))
 		}
-		inst.Status = instance.StatusExited
+		inst = current
+		if snap.Dead {
+			reg.Delete(name)
+			inst.Status = instance.StatusExited
+			inst.UpdatedAt = time.Now()
+			return nil
+		}
+		if stableMS > 0 {
+			inst.Status = instance.StatusIdle
+		}
 		inst.UpdatedAt = time.Now()
-		return inst, snap, nil
-	} else if stableMS > 0 {
-		inst.Status = instance.StatusIdle
-	}
-	inst.UpdatedAt = time.Now()
-	reg.Put(inst)
-	if err := s.saveRegistry(reg); err != nil {
+		reg.Put(inst)
+		return nil
+	})
+	if err != nil {
 		return instance.Instance{}, capture.Snapshot{}, err
 	}
 	if !includeContent {
@@ -296,43 +276,38 @@ func (s Service) captureLike(ctx context.Context, name string, history, stableMS
 }
 
 func (s Service) Halt(ctx context.Context, name string) (instance.Instance, error) {
-	reg, err := s.loadRegistry(ctx)
+	var out instance.Instance
+	err := s.withRegistry(ctx, func(reg *instance.Registry) error {
+		inst, ok := reg.Get(name)
+		if !ok {
+			return apperr.New("instance_not_found", fmt.Sprintf("instance %q not found", name))
+		}
+		if s.Tmux.HasSession(ctx, inst.SessionID) {
+			if err := s.Tmux.KillSession(ctx, inst.SessionID); err != nil {
+				return err
+			}
+		}
+		inst.Status = instance.StatusExited
+		inst.UpdatedAt = time.Now()
+		reg.Delete(name)
+		out = inst
+		return nil
+	})
 	if err != nil {
 		return instance.Instance{}, err
 	}
-	inst, ok := reg.Get(name)
-	if !ok {
-		return instance.Instance{}, apperr.New("instance_not_found", fmt.Sprintf("instance %q not found", name))
-	}
-	if s.Tmux.HasSession(ctx, inst.SessionID) {
-		if err := s.Tmux.KillSession(ctx, inst.SessionID); err != nil {
-			return instance.Instance{}, err
-		}
-	}
-	inst.Status = instance.StatusExited
-	inst.UpdatedAt = time.Now()
-	reg.Delete(name)
-	if err := s.saveRegistry(reg); err != nil {
-		return instance.Instance{}, err
-	}
-	return inst, nil
+	return out, nil
 }
 
-func (s Service) reconcileRegistry(ctx context.Context, reg instance.Registry) (instance.Registry, bool) {
-	changed := false
+func (s Service) reconcileRegistry(ctx context.Context, reg *instance.Registry) {
 	for name, inst := range reg.Instances {
 		next := s.reconcile(ctx, inst)
 		if next.Status == instance.StatusLost || next.Status == instance.StatusExited {
 			reg.Delete(name)
-			changed = true
 			continue
 		}
-		if next.Status != inst.Status || next.UpdatedAt != inst.UpdatedAt {
-			reg.Put(next)
-			changed = true
-		}
+		reg.Put(next)
 	}
-	return reg, changed
 }
 
 func (s Service) sendPrompt(ctx context.Context, inst *instance.Instance, text string, allowSystem bool) error {
@@ -387,14 +362,17 @@ func (s Service) busyExpired(inst instance.Instance) bool {
 	if inst.Status != instance.StatusBusy {
 		return false
 	}
-	if s.Config.Defaults.Status.BusyTTLMS <= 0 {
-		return true
+	if s.Config.Defaults.Status.BusyTTLMS == nil {
+		return false
+	}
+	if *s.Config.Defaults.Status.BusyTTLMS == 0 {
+		return false
 	}
 	last := inst.LastActivityAt
 	if last.IsZero() {
 		last = inst.UpdatedAt
 	}
-	return time.Since(last) >= time.Duration(s.Config.Defaults.Status.BusyTTLMS)*time.Millisecond
+	return time.Since(last) >= time.Duration(*s.Config.Defaults.Status.BusyTTLMS)*time.Millisecond
 }
 
 func target(sessionID string) string {

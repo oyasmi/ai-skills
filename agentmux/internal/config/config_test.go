@@ -15,8 +15,8 @@ func TestApplyDefaultsSetsTmuxSocket(t *testing.T) {
 	if cfg.Defaults.Tmux.Socket != DefaultSocketPath {
 		t.Fatalf("expected default socket %q, got %q", DefaultSocketPath, cfg.Defaults.Tmux.Socket)
 	}
-	if cfg.Defaults.Status.BusyTTLMS != 10000 {
-		t.Fatalf("expected default busy ttl 10000, got %d", cfg.Defaults.Status.BusyTTLMS)
+	if cfg.Defaults.Status.BusyTTLMS == nil || *cfg.Defaults.Status.BusyTTLMS != 10000 {
+		t.Fatalf("expected default busy ttl 10000, got %v", cfg.Defaults.Status.BusyTTLMS)
 	}
 }
 
@@ -42,7 +42,7 @@ func TestValidateRejectsNegativeBusyTTL(t *testing.T) {
 		Version: 1,
 		Defaults: Defaults{
 			Tmux:   TmuxDefaults{Socket: DefaultSocketPath},
-			Status: StatusDefaults{BusyTTLMS: -1},
+			Status: StatusDefaults{BusyTTLMS: intPtr(-1)},
 		},
 		Templates: map[string]Template{
 			"worker": {Command: "echo test"},
@@ -52,5 +52,23 @@ func TestValidateRejectsNegativeBusyTTL(t *testing.T) {
 	err := cfg.Validate()
 	if err == nil || err.Error() != "status.busy_ttl_ms must be non-negative" {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestApplyDefaultsPreservesExplicitZeroBusyTTL(t *testing.T) {
+	cfg := Config{
+		Version: 1,
+		Defaults: Defaults{
+			Status: StatusDefaults{BusyTTLMS: intPtr(0)},
+		},
+		Templates: map[string]Template{
+			"worker": {Command: "echo test"},
+		},
+	}
+
+	cfg.ApplyDefaults()
+
+	if cfg.Defaults.Status.BusyTTLMS == nil || *cfg.Defaults.Status.BusyTTLMS != 0 {
+		t.Fatalf("expected explicit zero busy ttl to be preserved, got %v", cfg.Defaults.Status.BusyTTLMS)
 	}
 }
