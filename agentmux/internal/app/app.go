@@ -19,6 +19,7 @@ import (
 )
 
 var Version = "dev"
+var newService = service.New
 
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
@@ -51,7 +52,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return writeErr(stdout, stderr, jsonMode, "", "", err)
 	}
-	svc := service.New(paths, cfg)
+	svc := newService(paths, cfg)
 	return dispatch(ctx, svc, jsonMode, rest, stdout, stderr)
 }
 
