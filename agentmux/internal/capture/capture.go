@@ -64,10 +64,8 @@ func WaitUntilTitleIdle(ctx context.Context, tmux tmuxClient, target string, tim
 		if snap.Dead || titleIdle(snap.PaneTitle) {
 			return snap, nil
 		}
-		select {
-		case <-ctx.Done():
-			return Snapshot{}, ctx.Err()
-		case <-time.After(time.Duration(pollMS) * time.Millisecond):
+		if err := waitPollInterval(ctx, pollMS); err != nil {
+			return Snapshot{}, err
 		}
 	}
 }
@@ -108,11 +106,20 @@ func WaitStable(ctx context.Context, tmux tmuxClient, target string, history, st
 			stableStart = time.Now()
 		}
 		last = snap
-		select {
-		case <-ctx.Done():
-			return Snapshot{}, ctx.Err()
-		case <-time.After(time.Duration(pollMS) * time.Millisecond):
+		if err := waitPollInterval(ctx, pollMS); err != nil {
+			return Snapshot{}, err
 		}
+	}
+}
+
+func waitPollInterval(ctx context.Context, pollMS int) error {
+	timer := time.NewTimer(time.Duration(pollMS) * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 

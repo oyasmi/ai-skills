@@ -4,32 +4,41 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"strings"
+
+	"github.com/oyasmi/agentmux/internal/apperr"
 )
 
-func GenerateName(templateName, cwd string) string {
+func GenerateName(templateName, cwd string) (string, error) {
 	base := strings.TrimSpace(templateName)
 	if base == "" {
 		base = "agent"
 	}
-	suffix := randomHex(2)
+	suffix, err := randomHex(2)
+	if err != nil {
+		return "", err
+	}
 	if cwd != "" && cwd != "." && cwd != "/" {
 		parts := strings.Split(strings.TrimRight(cwd, "/"), "/")
 		last := parts[len(parts)-1]
 		if last != "" && last != "." {
-			return base + "-" + last + "-" + suffix
+			return base + "-" + last + "-" + suffix, nil
 		}
 	}
-	return base + "-" + suffix
+	return base + "-" + suffix, nil
 }
 
-func GenerateSessionID() string {
-	return "i_" + randomHex(4)
+func GenerateSessionID() (string, error) {
+	suffix, err := randomHex(4)
+	if err != nil {
+		return "", err
+	}
+	return "i_" + suffix, nil
 }
 
-func randomHex(n int) string {
+func randomHex(n int) (string, error) {
 	buf := make([]byte, n)
 	if _, err := rand.Read(buf); err != nil {
-		return "0000"
+		return "", apperr.Wrap("internal_error", err, "generate random identifier")
 	}
-	return hex.EncodeToString(buf)
+	return hex.EncodeToString(buf), nil
 }

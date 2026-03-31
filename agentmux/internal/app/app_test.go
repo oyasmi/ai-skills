@@ -108,6 +108,14 @@ func TestReadPromptText(t *testing.T) {
 	}
 }
 
+func TestReadPromptTextRejectsOversizeInput(t *testing.T) {
+	oversize := strings.Repeat("a", maxPromptInputBytes+1)
+	_, err := readPromptText(strings.NewReader(oversize))
+	if err == nil || !strings.Contains(err.Error(), "3 MiB limit") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestRunVersionJSON(t *testing.T) {
 	stateHome, configHome := setupXDGHome(t)
 	t.Setenv("XDG_STATE_HOME", stateHome)

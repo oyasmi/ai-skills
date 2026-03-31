@@ -54,11 +54,11 @@ func loadUnlocked(path string) (Registry, error) {
 		if os.IsNotExist(err) {
 			return Registry{Instances: map[string]Instance{}}, nil
 		}
-		return Registry{}, apperr.Wrap("config_invalid", err, "read registry")
+		return Registry{}, apperr.Wrap("registry_io_error", err, "read registry")
 	}
 	var r Registry
 	if err := json.Unmarshal(b, &r); err != nil {
-		return Registry{}, apperr.Wrap("config_invalid", err, "parse registry")
+		return Registry{}, apperr.Wrap("registry_parse_error", err, "parse registry")
 	}
 	if r.Instances == nil {
 		r.Instances = map[string]Instance{}
@@ -76,44 +76,44 @@ func saveUnlocked(path string, reg Registry) error {
 	}
 	b, err := json.MarshalIndent(reg, "", "  ")
 	if err != nil {
-		return apperr.Wrap("config_invalid", err, "marshal registry")
+		return apperr.Wrap("registry_io_error", err, "marshal registry")
 	}
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, "instances.json.*.tmp")
 	if err != nil {
-		return apperr.Wrap("config_invalid", err, "create registry temp file")
+		return apperr.Wrap("registry_io_error", err, "create registry temp file")
 	}
 	tmpName := tmp.Name()
 	if _, err := tmp.Write(b); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpName)
-		return apperr.Wrap("config_invalid", err, "write registry temp file")
+		return apperr.Wrap("registry_io_error", err, "write registry temp file")
 	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpName)
-		return apperr.Wrap("config_invalid", err, "close registry temp file")
+		return apperr.Wrap("registry_io_error", err, "close registry temp file")
 	}
-	if err := os.Chmod(tmpName, 0o644); err != nil {
+	if err := os.Chmod(tmpName, 0o600); err != nil {
 		_ = os.Remove(tmpName)
-		return apperr.Wrap("config_invalid", err, "chmod registry temp file")
+		return apperr.Wrap("registry_io_error", err, "chmod registry temp file")
 	}
 	if err := os.Rename(tmpName, path); err != nil {
 		_ = os.Remove(tmpName)
-		return apperr.Wrap("config_invalid", err, "replace registry file")
+		return apperr.Wrap("registry_io_error", err, "replace registry file")
 	}
 	return nil
 }
 
 func WithLocked(path string, fn func(*Registry) error) error {
 	lockPath := path + ".lock"
-	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o644)
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return apperr.Wrap("config_invalid", err, "open registry lock file")
+		return apperr.Wrap("registry_lock_error", err, "open registry lock file")
 	}
 	defer lockFile.Close()
 
 	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
-		return apperr.Wrap("config_invalid", err, "lock registry file")
+		return apperr.Wrap("registry_lock_error", err, "lock registry file")
 	}
 	defer func() {
 		_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)

@@ -39,6 +39,11 @@ Windows 不是首要目标。
 3. `wait` 用于阻塞到 agent 看起来完成当前工作
 4. `capture` 用于读取终端输出文本
 
+补充约束：
+
+1. `summon` 只会复用“同名且同模板”的实例
+2. 若同名实例来自其他模板，命令会直接报错，调用方应改用新名字
+
 ## 依赖
 
 运行时依赖：
@@ -107,6 +112,14 @@ agentmux --help
 agentmux help summon
 agentmux capture --help
 ```
+
+排查问题时，如果需要结构化调试日志，可以临时设置：
+
+```bash
+AGENTMUX_LOG_LEVEL=debug agentmux inspect 编码助手-A --json
+```
+
+调试日志会输出到 `stderr`，命令结果仍按原格式写到 `stdout`。
 
 ## 发布
 

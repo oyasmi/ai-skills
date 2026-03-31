@@ -8,23 +8,27 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oyasmi/agentmux/internal/apperr"
 	"github.com/oyasmi/agentmux/internal/config"
 	"github.com/oyasmi/agentmux/internal/instance"
 	"github.com/oyasmi/agentmux/internal/tmuxctl"
 )
 
 type fakeTmux struct {
-	sessions       map[string]bool
-	captureContent string
-	captureCalls   int
-	paneInfo       tmuxctl.PaneInfo
-	loads          []string
-	sendKeys       []string
-	killed         []string
-	sendKeysHook   func(*fakeTmux, string, []string)
+	sessions        map[string]bool
+	captureContent  string
+	captureCalls    int
+	hasSessionCalls []string
+	paneInfoCalls   []string
+	paneInfo        tmuxctl.PaneInfo
+	loads           []string
+	sendKeys        []string
+	killed          []string
+	sendKeysHook    func(*fakeTmux, string, []string)
 }
 
 func (f *fakeTmux) HasSession(_ context.Context, sessionID string) bool {
+	f.hasSessionCalls = append(f.hasSessionCalls, sessionID)
 	return f.sessions[sessionID]
 }
 
@@ -66,6 +70,7 @@ func (f *fakeTmux) Attach(string) *exec.Cmd {
 }
 
 func (f *fakeTmux) PaneInfo(context.Context, string) (tmuxctl.PaneInfo, error) {
+	f.paneInfoCalls = append(f.paneInfoCalls, "pane")
 	return f.paneInfo, nil
 }
 
@@ -458,6 +463,7 @@ func TestSummonReuseReturnsReusedAndSendsPrompt(t *testing.T) {
 		Instances: map[string]instance.Instance{
 			"worker-a": {
 				Name:            "worker-a",
+				Template:        "worker",
 				SessionID:       "live-session",
 				Status:          instance.StatusIdle,
 				UpdatedAt:       now,
@@ -479,6 +485,81 @@ func TestSummonReuseReturnsReusedAndSendsPrompt(t *testing.T) {
 	}
 	if len(tmux.loads) != 1 || tmux.loads[0] != "continue" {
 		t.Fatalf("expected prompt to be sent on reuse, got %v", tmux.loads)
+	}
+}
+
+func TestSummonRejectsReuseAcrossTemplates(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	tmux := &fakeTmux{sessions: map[string]bool{"live-session": true}}
+	svc, registryPath := newTestService(t, tmux)
+	now := time.Now().UTC()
+	reg := instance.Registry{
+		Instances: map[string]instance.Instance{
+			"worker-a": {
+				Name:      "worker-a",
+				Template:  "other-template",
+				SessionID: "live-session",
+				Status:    instance.StatusIdle,
+				UpdatedAt: now,
+			},
+		},
+	}
+	if err := instance.Save(registryPath, reg); err != nil {
+		t.Fatalf("save registry: %v", err)
+	}
+
+	_, err := svc.Summon(ctx, SummonInput{TemplateName: "worker", Name: "worker-a"})
+	if err == nil || !strings.Contains(err.Error(), "already exists with template") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if code := apperr.Code(err); code != "instance_template_mismatch" {
+		t.Fatalf("unexpected error code: %s", code)
+	}
+}
+
+func TestInspectReconcilesOnlyTargetInstance(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	tmux := &fakeTmux{sessions: map[string]bool{"live-session": true}}
+	svc, registryPath := newTestService(t, tmux)
+	now := time.Now().UTC()
+	reg := instance.Registry{
+		Instances: map[string]instance.Instance{
+			"worker": {
+				Name:      "worker",
+				SessionID: "live-session",
+				Status:    instance.StatusIdle,
+				UpdatedAt: now,
+			},
+			"other": {
+				Name:      "other",
+				SessionID: "other-session",
+				Status:    instance.StatusIdle,
+				UpdatedAt: now,
+			},
+		},
+	}
+	if err := instance.Save(registryPath, reg); err != nil {
+		t.Fatalf("save registry: %v", err)
+	}
+
+	_, err := svc.Inspect(ctx, "worker")
+	if err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
+	if got := strings.Join(tmux.hasSessionCalls, ","); got != "live-session" {
+		t.Fatalf("expected only target session to be reconciled, got %q", got)
+	}
+
+	saved, err := instance.Load(registryPath)
+	if err != nil {
+		t.Fatalf("load registry: %v", err)
+	}
+	if _, ok := saved.Get("other"); !ok {
+		t.Fatalf("expected unrelated instance to remain untouched")
 	}
 }
 

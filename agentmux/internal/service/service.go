@@ -13,6 +13,7 @@ import (
 	"github.com/oyasmi/agentmux/internal/capture"
 	"github.com/oyasmi/agentmux/internal/config"
 	"github.com/oyasmi/agentmux/internal/instance"
+	"github.com/oyasmi/agentmux/internal/logx"
 	"github.com/oyasmi/agentmux/internal/naming"
 	"github.com/oyasmi/agentmux/internal/tmuxctl"
 )
@@ -82,15 +83,26 @@ func (s Service) TemplateList() []map[string]string {
 }
 
 func (s Service) withRegistry(ctx context.Context, fn func(*instance.Registry) error) error {
+	return instance.WithLocked(s.Paths.Registry, fn)
+}
+
+func (s Service) withRegistryReconcileAll(ctx context.Context, fn func(*instance.Registry) error) error {
 	return instance.WithLocked(s.Paths.Registry, func(reg *instance.Registry) error {
 		s.reconcileRegistry(ctx, reg)
 		return fn(reg)
 	})
 }
 
+func (s Service) withRegistryReconcileOne(ctx context.Context, name string, fn func(*instance.Registry) error) error {
+	return instance.WithLocked(s.Paths.Registry, func(reg *instance.Registry) error {
+		s.reconcileOne(ctx, reg, name)
+		return fn(reg)
+	})
+}
+
 func (s Service) List(ctx context.Context) ([]instance.Instance, error) {
 	var items []instance.Instance
-	err := s.withRegistry(ctx, func(reg *instance.Registry) error {
+	err := s.withRegistryReconcileAll(ctx, func(reg *instance.Registry) error {
 		items = reg.Sorted()
 		return nil
 	})
@@ -99,7 +111,7 @@ func (s Service) List(ctx context.Context) ([]instance.Instance, error) {
 
 func (s Service) Inspect(ctx context.Context, name string) (instance.Instance, error) {
 	var out instance.Instance
-	err := s.withRegistry(ctx, func(reg *instance.Registry) error {
+	err := s.withRegistryReconcileOne(ctx, name, func(reg *instance.Registry) error {
 		inst, err := s.requireActiveInstance(reg, name)
 		if err != nil {
 			return err
@@ -127,14 +139,23 @@ func (s Service) Summon(ctx context.Context, in SummonInput) (SummonResult, erro
 	}
 	name := strings.TrimSpace(in.Name)
 	if name == "" {
-		name = naming.GenerateName(resolved.Name, filepath.Base(cwd))
+		name, err = naming.GenerateName(resolved.Name, filepath.Base(cwd))
+		if err != nil {
+			return SummonResult{}, err
+		}
 	}
 	var res SummonResult
 	err = s.withRegistry(ctx, func(reg *instance.Registry) error {
 		if inst, ok := reg.Get(name); ok {
-			if inst.Status == instance.StatusLost {
+			next := s.reconcile(ctx, inst)
+			if next.Status == instance.StatusLost || next.Status == instance.StatusExited {
 				reg.Delete(name)
 			} else {
+				inst = next
+				reg.Put(inst)
+				if inst.Template != resolved.Name {
+					return apperr.New("instance_template_mismatch", fmt.Sprintf("instance %q already exists with template %q; use a new name to summon template %q", name, inst.Template, resolved.Name))
+				}
 				if prompt := strings.TrimSpace(resolved.Prompt); prompt != "" {
 					if err := s.sendPrompt(ctx, &inst, prompt, false); err != nil {
 						return err
@@ -145,10 +166,23 @@ func (s Service) Summon(ctx context.Context, in SummonInput) (SummonResult, erro
 				return nil
 			}
 		}
+		if s.Config.Defaults.MaxInstances > 0 {
+			s.reconcileRegistry(ctx, reg)
+		}
+		if inst, ok := reg.Get(name); ok {
+			if inst.Status == instance.StatusLost {
+				reg.Delete(name)
+			} else {
+				return apperr.New("instance_exists", fmt.Sprintf("instance %q already exists", name))
+			}
+		}
 		if s.Config.Defaults.MaxInstances > 0 && len(reg.Instances) >= s.Config.Defaults.MaxInstances {
 			return apperr.New("config_invalid", "max_instances exceeded")
 		}
-		sessionID := naming.GenerateSessionID()
+		sessionID, err := naming.GenerateSessionID()
+		if err != nil {
+			return err
+		}
 		command := expandCommand(resolved.Command, resolved.Model, cwd, name, resolved.Name)
 		now := time.Now()
 		inst := instance.Instance{
@@ -193,7 +227,7 @@ func (s Service) Prompt(ctx context.Context, name string, text string, key strin
 		return instance.Instance{}, apperr.New("invalid_arguments", "prompt requires --text or --key")
 	}
 	var out instance.Instance
-	err := s.withRegistry(ctx, func(reg *instance.Registry) error {
+	err := s.withRegistryReconcileOne(ctx, name, func(reg *instance.Registry) error {
 		inst, ok := reg.Get(name)
 		if !ok {
 			return apperr.New("instance_not_found", fmt.Sprintf("instance %q not found", name))
@@ -271,7 +305,7 @@ func (s Service) captureLike(ctx context.Context, name string, history, stableMS
 	if err != nil {
 		return instance.Instance{}, capture.Snapshot{}, err
 	}
-	err = s.withRegistry(ctx, func(reg *instance.Registry) error {
+	err = s.withRegistryReconcileOne(ctx, name, func(reg *instance.Registry) error {
 		current, ok := reg.Get(name)
 		if !ok {
 			return apperr.New("instance_not_found", fmt.Sprintf("instance %q not found", name))
@@ -337,7 +371,7 @@ func (s Service) waitByPaneTitle(ctx context.Context, inst instance.Instance, ti
 
 func (s Service) getInstanceForCapture(ctx context.Context, name string) (instance.Instance, error) {
 	var out instance.Instance
-	err := s.withRegistry(ctx, func(reg *instance.Registry) error {
+	err := s.withRegistryReconcileOne(ctx, name, func(reg *instance.Registry) error {
 		inst, err := s.requireActiveInstance(reg, name)
 		if err != nil {
 			return err
@@ -354,7 +388,7 @@ func (s Service) Halt(ctx context.Context, name string) (instance.Instance, erro
 
 func (s Service) HaltWithOptions(ctx context.Context, name string, immediately bool, timeout time.Duration) (instance.Instance, error) {
 	var out instance.Instance
-	err := s.withRegistry(ctx, func(reg *instance.Registry) error {
+	err := s.withRegistryReconcileOne(ctx, name, func(reg *instance.Registry) error {
 		inst, ok := reg.Get(name)
 		if !ok {
 			return apperr.New("instance_not_found", fmt.Sprintf("instance %q not found", name))
@@ -460,6 +494,19 @@ func (s Service) reconcileRegistry(ctx context.Context, reg *instance.Registry) 
 	}
 }
 
+func (s Service) reconcileOne(ctx context.Context, reg *instance.Registry, name string) {
+	inst, ok := reg.Get(name)
+	if !ok {
+		return
+	}
+	next := s.reconcile(ctx, inst)
+	if next.Status == instance.StatusLost || next.Status == instance.StatusExited {
+		reg.Delete(name)
+		return
+	}
+	reg.Put(next)
+}
+
 func (s Service) requireActiveInstance(reg *instance.Registry, name string) (instance.Instance, error) {
 	inst, ok := reg.Get(name)
 	if !ok {
@@ -507,6 +554,11 @@ func (s Service) reconcile(ctx context.Context, inst instance.Instance) instance
 	}
 	info, err := s.Tmux.PaneInfo(ctx, target(inst.SessionID))
 	if err != nil {
+		logx.Debug("reconcile_pane_info_failed", map[string]any{
+			"instance":   inst.Name,
+			"session_id": inst.SessionID,
+			"error":      err.Error(),
+		})
 		return inst
 	}
 	inst.PaneTitle = info.PaneTitle

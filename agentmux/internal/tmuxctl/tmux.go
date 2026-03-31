@@ -111,16 +111,22 @@ type PaneInfo struct {
 	PaneTitle string
 }
 
+const paneInfoSep = "\x1f"
+
 func (c Client) PaneTitle(ctx context.Context, target string) (string, error) {
 	return c.Display(ctx, target, "#{pane_title}")
 }
 
 func (c Client) PaneInfo(ctx context.Context, target string) (PaneInfo, error) {
-	out, err := c.Display(ctx, target, "#{cursor_x}|#{cursor_y}|#{pane_width}|#{pane_height}|#{pane_dead}|#{pane_current_command}|#{pane_title}")
+	out, err := c.Display(ctx, target, "#{cursor_x}"+paneInfoSep+"#{cursor_y}"+paneInfoSep+"#{pane_width}"+paneInfoSep+"#{pane_height}"+paneInfoSep+"#{pane_dead}"+paneInfoSep+"#{pane_current_command}"+paneInfoSep+"#{pane_title}")
 	if err != nil {
 		return PaneInfo{}, err
 	}
-	parts := strings.SplitN(out, "|", 7)
+	return parsePaneInfo(out)
+}
+
+func parsePaneInfo(out string) (PaneInfo, error) {
+	parts := strings.SplitN(out, paneInfoSep, 7)
 	if len(parts) != 7 {
 		return PaneInfo{}, apperr.New("tmux_unavailable", "unexpected pane info format")
 	}

@@ -122,7 +122,7 @@ type Paths struct {
 func DiscoverPaths() (Paths, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return Paths{}, apperr.Wrap("config_invalid", err, "resolve home dir")
+		return Paths{}, apperr.Wrap("config_io_error", err, "resolve home dir")
 	}
 	configHome := os.Getenv("XDG_CONFIG_HOME")
 	if configHome == "" {
@@ -132,7 +132,7 @@ func DiscoverPaths() (Paths, error) {
 		default:
 			configHome, err = os.UserConfigDir()
 			if err != nil {
-				return Paths{}, apperr.Wrap("config_invalid", err, "resolve user config dir")
+				return Paths{}, apperr.Wrap("config_io_error", err, "resolve user config dir")
 			}
 		}
 	}
@@ -156,11 +156,11 @@ func DiscoverPaths() (Paths, error) {
 func Load(path string) (Config, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return Config{}, apperr.Wrap("config_invalid", err, "read config file %s", path)
+		return Config{}, apperr.Wrap("config_io_error", err, "read config file %s", path)
 	}
 	var cfg Config
 	if err := yaml.Unmarshal(b, &cfg); err != nil {
-		return Config{}, apperr.Wrap("config_invalid", err, "parse config file %s", path)
+		return Config{}, apperr.Wrap("config_parse_error", err, "parse config file %s", path)
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -231,10 +231,10 @@ func (c Config) Validate() error {
 
 func EnsureStateDir(paths Paths) error {
 	if err := os.MkdirAll(filepath.Dir(paths.ConfigFile), 0o755); err != nil {
-		return apperr.Wrap("config_invalid", err, "create config dir")
+		return apperr.Wrap("config_io_error", err, "create config dir")
 	}
 	if err := os.MkdirAll(paths.StateDir, 0o755); err != nil {
-		return apperr.Wrap("config_invalid", err, "create state dir")
+		return apperr.Wrap("config_io_error", err, "create state dir")
 	}
 	return nil
 }
@@ -243,10 +243,10 @@ func EnsureDefaultConfig(path string) error {
 	if _, err := os.Stat(path); err == nil {
 		return nil
 	} else if !os.IsNotExist(err) {
-		return apperr.Wrap("config_invalid", err, "stat config file %s", path)
+		return apperr.Wrap("config_io_error", err, "stat config file %s", path)
 	}
 	if err := os.WriteFile(path, []byte(DefaultConfigYAML), 0o644); err != nil {
-		return apperr.Wrap("config_invalid", err, "write default config file %s", path)
+		return apperr.Wrap("config_io_error", err, "write default config file %s", path)
 	}
 	return nil
 }
