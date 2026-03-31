@@ -17,8 +17,9 @@
 4. `inspect`
 5. `prompt`
 6. `capture`
-7. `attach`
-8. `halt`
+7. `wait`
+8. `attach`
+9. `halt`
 
 ---
 
@@ -162,6 +163,11 @@ agentmux list [--json]
 5. `CWD`
 6. `UPDATED`
 
+说明：
+
+1. `list` 是多实例状态查询接口
+2. 当调用方还不确定实例名，或想批量扫描状态时，优先使用 `list`
+
 JSON 示例：
 
 ```json
@@ -283,6 +289,11 @@ agentmux inspect <instance-name> [--json]
 10. `last_activity_at`
 11. `first_prompt_sent`
 
+说明：
+
+1. `inspect` 是单实例状态查询接口
+2. 若调用方只想知道当前 `idle/busy/exited/lost` 与相关元数据，优先使用 `inspect`
+
 JSON 示例：
 
 ```json
@@ -392,8 +403,14 @@ agentmux capture <instance-name> [flags]
 
 1. 默认抓当前屏幕可见文本
 2. `--history` 允许向上抓取更多历史行
-3. `--stable` 表示等待屏幕稳定后再抓取
-4. `--timeout` 控制等待稳定的最大时长
+3. `--stable` 表示等待“看起来工作完成”后再抓取
+4. 对支持的 harness，可以用更直接的状态信号代替屏幕静止
+5. `--timeout` 控制最大等待时长
+
+说明：
+
+1. `capture` 的职责是读取终端输出文本
+2. 它不是专门的状态查询接口
 
 默认值建议：
 
@@ -423,7 +440,59 @@ JSON 示例：
 
 ---
 
-## 4.7 `attach`
+## 4.7 `wait`
+
+用途：
+
+等待 agent 看起来完成了当前工作，但不返回屏幕内容。
+
+语法：
+
+```bash
+agentmux wait <instance-name> [--stable <duration-or-ms>] [--timeout <duration-or-ms>] [--json]
+```
+
+参数：
+
+1. `--stable <duration-or-ms>`
+2. `--timeout <duration-or-ms>`
+3. `--json`
+
+行为：
+
+1. `wait` 的语义是等待 agent 看起来完成当前工作
+2. `claude-code` 这类 harness 优先使用 `pane_title` 等直接状态信号判断是否完成
+3. 其他 harness 回退到基于屏幕静止的通用启发式
+4. `wait` 不返回屏幕文本
+
+说明：
+
+1. `wait` 是阻塞命令，不是状态查询命令
+2. 若调用方只想看当前状态而不是等待，应使用 `inspect` 或 `list`
+
+JSON 示例：
+
+```json
+{
+  "ok": true,
+  "command": "wait",
+  "instance": "编码助手-A",
+  "status": "idle",
+  "data": {
+    "cursor_x": 0,
+    "cursor_y": 23,
+    "width": 120,
+    "height": 24,
+    "history_lines": 120,
+    "stable_for_ms": 0,
+    "pane_title": "✳ Task complete"
+  }
+}
+```
+
+---
+
+## 4.8 `attach`
 
 用途：
 
@@ -448,7 +517,7 @@ agentmux attach [<instance-name>]
 
 ---
 
-## 4.8 `halt`
+## 4.9 `halt`
 
 用途：
 

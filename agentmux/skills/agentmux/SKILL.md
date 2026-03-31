@@ -14,7 +14,7 @@ Use `agentmux` instead of calling `tmux` directly. Treat `agentmux` as the only 
 3. Run `agentmux template list --json` before choosing a template if the available templates are not already known.
 4. Use `summon` to create or reuse an instance. Do not call `tmux new-session` yourself.
 5. Use `capture` to read screen state. Do not read raw tmux output or terminal stdout directly.
-6. Use `wait` when you only need to block until the screen is stable and do not need returned content.
+6. Use `wait` when you only need to block until the agent appears done and do not need returned content.
 7. Use `prompt` to send the next text or special key after you inspect current state.
 8. Use `attach` only when a human explicitly asks to watch or debug interactively.
 9. Use `version --json` when you need to confirm the installed CLI version or check whether a newer command should exist.
@@ -57,13 +57,15 @@ Use `inspect` when you need metadata such as template, cwd, model, status, or se
 agentmux inspect 编码助手-A --json
 ```
 
+Use `list` for a multi-instance status overview, and `inspect` for one instance's current status.
+
 Use `capture` when you need the visible screen text and recent history.
 
 ```bash
 agentmux capture 编码助手-A --history 120 --stable 1500 --timeout 30s --json
 ```
 
-Use `wait` when you only need the screen to settle and want to avoid returning large text.
+Use `wait` when you only need the agent to appear done and want to avoid returning large text.
 
 ```bash
 agentmux wait 编码助手-A --stable 1500 --timeout 30s --json
@@ -95,13 +97,17 @@ agentmux version --json
 
 Prefer `inspect` and `capture` before sending another message. Avoid blind prompting.
 
+Prefer `inspect` or `list` when the question is "what is the current status?".
+
+Prefer `wait` only when the question is "block until this work seems finished".
+
 Prefer reusing a named instance when the user is clearly continuing previous work in the same external agent.
 
 Prefer short, task-specific prompts. Do not resend large repeated context if the instance already has it.
 
 Prefer `prompt --stdin` for long or multi-line text to avoid shell argument length limits.
 
-Prefer `wait` over `capture` when the only goal is to block until the instance settles.
+Prefer `wait` over `capture` when the only goal is to block until the instance appears done.
 
 Send `C-c` before anything else when the instance is clearly stuck, waiting on the wrong action, or running an unwanted command.
 
@@ -127,7 +133,7 @@ Read these top-level JSON fields first:
 
 Read `data.content` as the primary screen text for `capture`.
 
-For `wait`, read `data.stable_for_ms` and ignore content because none is returned.
+For `wait`, read `data.stable_for_ms` and `data.pane_title`; no content is returned.
 
 Treat `reused: true` as confirmation that `summon` attached to an existing instance instead of creating a new one.
 

@@ -243,6 +243,8 @@ func (s Service) Wait(ctx context.Context, name string, stableMS, timeoutMS int)
 	if err != nil {
 		return instance.Instance{}, capture.Snapshot{}, err
 	}
+	// wait is semantically "wait until the agent appears done"; the detection
+	// strategy depends on what the configured harness can signal reliably.
 	if inst.HarnessType == claudeCodeHarnessType {
 		return s.waitByPaneTitle(ctx, inst, timeoutMS)
 	}
@@ -511,8 +513,14 @@ func (s Service) reconcile(ctx context.Context, inst instance.Instance) instance
 	if info.Dead {
 		inst.Status = instance.StatusExited
 	} else if inst.Status == instance.StatusBusy {
-		if inst.HarnessType == claudeCodeHarnessType && claudeCodeTitleIsIdle(info.PaneTitle) {
-			inst.Status = instance.StatusIdle
+		if inst.HarnessType == claudeCodeHarnessType {
+			switch claudeCodeTitleState(info.PaneTitle) {
+			case "idle":
+				inst.Status = instance.StatusIdle
+			case "busy", "unknown":
+				// claude-code should be governed by its title signal rather than
+				// time-based busy TTL degradation.
+			}
 		} else if s.busyExpired(inst) {
 			inst.Status = instance.StatusIdle
 		}

@@ -329,6 +329,74 @@ func TestInspectClaudeCodeBusyStaysBusyWhenPaneTitleShowsSpinner(t *testing.T) {
 	}
 }
 
+func TestInspectClaudeCodeIgnoresExpiredTTLWhenPaneTitleShowsSpinner(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	svc, registryPath := newTestService(t, &fakeTmux{
+		sessions: map[string]bool{"live-session": true},
+		paneInfo: tmuxctl.PaneInfo{PaneTitle: "⠋ Thinking"},
+	})
+	now := time.Now().UTC()
+	reg := instance.Registry{
+		Instances: map[string]instance.Instance{
+			"worker": {
+				Name:           "worker",
+				SessionID:      "live-session",
+				Status:         instance.StatusBusy,
+				HarnessType:    "claude-code",
+				LastActivityAt: now.Add(-2 * time.Minute),
+				UpdatedAt:      now,
+			},
+		},
+	}
+	if err := instance.Save(registryPath, reg); err != nil {
+		t.Fatalf("save registry: %v", err)
+	}
+
+	inst, err := svc.Inspect(ctx, "worker")
+	if err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
+	if inst.Status != instance.StatusBusy {
+		t.Fatalf("expected busy despite expired ttl, got %s", inst.Status)
+	}
+}
+
+func TestInspectClaudeCodeIgnoresExpiredTTLWhenPaneTitleIsUnknown(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	svc, registryPath := newTestService(t, &fakeTmux{
+		sessions: map[string]bool{"live-session": true},
+		paneInfo: tmuxctl.PaneInfo{PaneTitle: "Working on task"},
+	})
+	now := time.Now().UTC()
+	reg := instance.Registry{
+		Instances: map[string]instance.Instance{
+			"worker": {
+				Name:           "worker",
+				SessionID:      "live-session",
+				Status:         instance.StatusBusy,
+				HarnessType:    "claude-code",
+				LastActivityAt: now.Add(-2 * time.Minute),
+				UpdatedAt:      now,
+			},
+		},
+	}
+	if err := instance.Save(registryPath, reg); err != nil {
+		t.Fatalf("save registry: %v", err)
+	}
+
+	inst, err := svc.Inspect(ctx, "worker")
+	if err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
+	if inst.Status != instance.StatusBusy {
+		t.Fatalf("expected busy despite expired ttl and unknown title, got %s", inst.Status)
+	}
+}
+
 func TestInspectUnknownHarnessStillUsesTTLInsteadOfPaneTitle(t *testing.T) {
 	t.Parallel()
 

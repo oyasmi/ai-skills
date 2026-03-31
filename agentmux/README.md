@@ -23,7 +23,7 @@ Windows 不是首要目标。
 
 1. `prompt` 新增 `--stdin`，适合长文本与多行文本输入，避免 shell 参数长度限制
 2. 新增 `version` 命令，支持纯文本和 `--json` 输出，便于 Agent 判断功能版本
-3. 新增 `wait` 命令，只等待屏幕稳定，不返回内容，适合节省 token
+3. 新增 `wait` 命令，用于等待 agent 完成当前工作，不返回内容，适合节省 token
 4. `capture --stable` 与 `wait --stable` 支持整数毫秒和 Go duration 两种格式，例如 `1500`、`1500ms`、`1.5s`
 5. `tmux` socket 路径从硬编码改为配置项 `defaults.tmux.socket`
 6. `busy` 状态新增 TTL 自动退化，默认 `30s`，避免发送 prompt 后因缺少后续观测而永久停留在 `busy`
@@ -31,6 +31,13 @@ Windows 不是首要目标。
 8. `capture`/`wait` 内部减少了一次重复的注册表事务，避免不必要的注册表读改写
 9. 新增 `harness_type` 驱动的状态检测，`claude-code` 可用 `pane_title` 精确判断 idle，`wait`/`capture --stable` 可提前返回
 10. `inspect`、`list`、`capture`、`wait` 的 JSON 输出现在包含 `harness_type` 或 `pane_title` 等状态观测字段
+
+命令职责上建议这样理解：
+
+1. `list` 用于批量查看实例及其当前状态
+2. `inspect` 用于查看单个实例当前状态和元数据
+3. `wait` 用于阻塞到 agent 看起来完成当前工作
+4. `capture` 用于读取终端输出文本
 
 ## 依赖
 
@@ -240,7 +247,7 @@ agentmux inspect 编码助手-A --json
 agentmux capture 编码助手-A --history 120 --stable 1500 --timeout 30s --json
 ```
 
-只等待屏幕稳定，不返回内容：
+等待 agent 完成当前工作，不返回内容：
 
 ```bash
 agentmux wait 编码助手-A --stable 1500 --timeout 30s --json
@@ -296,15 +303,18 @@ agentmux version --json
 
 1. 始终通过 `tmux capture-pane` 抓纯文本
 2. `--history` 控制向上抓取的历史行数
-3. `--stable` 表示等待屏幕稳定后再返回
+3. `--stable` 表示在通用 harness 上用屏幕静止作为“工作完成”的判定手段
 4. 若实例的 `harness_type=claude-code`，当 `pane_title` 进入 idle 标记时可提前返回
+5. `capture` 的主要职责是读输出，不是做状态查询
 
 ### `wait`
 
-1. 只等待屏幕稳定，不返回屏幕内容
+1. 语义上表示“等待 agent 完成当前工作”，不返回屏幕内容
 2. 适合上层 Agent 只想阻塞等待、避免传回大段文本时使用
-3. 若实例的 `harness_type=claude-code`，当 `pane_title` 进入 idle 标记时可提前返回
-4. `claude-code` 的 `wait` 走轻量 pane 元信息轮询，不再抓取屏幕文本
+3. 若实例的 `harness_type=claude-code`，优先通过 `pane_title` 判定是否完成
+4. 其他 harness 则回退到“屏幕静止”这类通用启发式
+5. `claude-code` 的 `wait` 走轻量 pane 元信息轮询，不再抓取屏幕文本
+6. 若只是想知道当前是 `idle` 还是 `busy`，应使用 `inspect` 或 `list`
 
 ### `prompt`
 

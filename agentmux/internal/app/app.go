@@ -575,12 +575,12 @@ Usage:
 
 Core commands:
   template list   List configured role templates
-  list            List known instances
+  list            List known instances and their current statuses
   summon          Create or reuse an instance
-  inspect         Show detailed instance metadata
+  inspect         Query one instance's current status and metadata
   prompt          Send text or a special key to an instance
   capture         Capture current screen text from an instance
-  wait            Wait until the screen is stable without returning content
+  wait            Wait until an agent appears done with/without a timeout
   attach          Attach a human terminal to an instance
   halt            Stop an instance
   version         Print the CLI version
@@ -652,6 +652,9 @@ Output:
   Text mode prints a table with name, template, status, model, cwd, and update time.
   JSON mode returns {"ok", "command", "data.instances"}.
 
+Notes:
+  Use list for multi-instance status overview.
+
 Examples:
   agentmux list
   agentmux list --json
@@ -705,6 +708,7 @@ Output:
   JSON mode returns {"ok", "command", "instance", "status", "data"}.
 
 Notes:
+  inspect is the primary command for querying one instance's current status.
   JSON inspect includes persisted fields such as harness_type and the latest observed pane_title.
 
 Examples:
@@ -769,6 +773,7 @@ Output:
   JSON mode returns cursor position, screen size, stability, pane title, and content.
 
 Notes:
+  capture is for reading terminal output, not for querying status by itself.
   For claude-code harnesses, --stable can return early when pane_title indicates idle.
 
 Examples:
@@ -780,7 +785,7 @@ Examples:
 
 func waitHelp() string {
 	return strings.TrimSpace(`
-wait blocks until the instance screen is stable without returning captured content.
+wait blocks until the agent appears to have finished its current work without returning captured content.
 
 Usage:
   agentmux wait <instance-name> [flags]
@@ -789,7 +794,7 @@ Arguments:
   <instance-name>           Target instance name
 
 Flags:
-  --stable <duration-or-ms> Required stable interval, default 1500
+  --stable <duration-or-ms> Stability window for generic harness detection, default 1500
   --timeout <duration-or-ms> Maximum wait time, default 30s
   --json                    Return JSON output
   -h, --help                Show this help
@@ -799,8 +804,11 @@ Output:
   JSON mode returns cursor position, screen size, history lines, stability, and pane title.
 
 Notes:
-  For claude-code harnesses, wait can return early when pane_title indicates idle.
-  That path polls pane metadata only and does not capture screen content.
+  wait means "wait until the agent seems done", not "wait until the terminal is visually static".
+  Use inspect or list when you want to query status without blocking.
+  For claude-code harnesses, completion is inferred from pane_title idle markers.
+  For generic harnesses, completion falls back to screen stability heuristics.
+  The claude-code path polls pane metadata only and does not capture screen content.
 
 Examples:
   agentmux wait 编码助手-A --stable 1500 --timeout 30s --json

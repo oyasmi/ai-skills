@@ -31,6 +31,8 @@ type Snapshot struct {
 
 type TitleIdleFunc func(paneTitle string) bool
 
+// WaitUntilTitleIdle is the lightweight wait path used when a harness exposes
+// a reliable title-level completion signal and screen capture is unnecessary.
 func WaitUntilTitleIdle(ctx context.Context, tmux tmuxClient, target string, timeoutMS, pollMS int, titleIdle TitleIdleFunc) (Snapshot, error) {
 	if titleIdle == nil {
 		return Snapshot{}, apperr.New("internal_error", "title idle detector is required")
