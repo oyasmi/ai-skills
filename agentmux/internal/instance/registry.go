@@ -26,12 +26,14 @@ type Instance struct {
 	Template        string            `json:"template"`
 	SessionID       string            `json:"session_id"`
 	Model           string            `json:"model"`
+	HarnessType     string            `json:"harness_type,omitempty"`
 	SystemPrompt    string            `json:"system_prompt"`
 	CWD             string            `json:"cwd"`
 	Command         string            `json:"command"`
 	Shell           string            `json:"shell"`
 	Env             map[string]string `json:"env"`
 	Status          Status            `json:"status"`
+	PaneTitle       string            `json:"pane_title,omitempty"`
 	CreatedAt       time.Time         `json:"created_at"`
 	UpdatedAt       time.Time         `json:"updated_at"`
 	LastActivityAt  time.Time         `json:"last_activity_at"`

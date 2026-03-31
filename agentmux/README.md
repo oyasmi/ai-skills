@@ -26,10 +26,11 @@ Windows 不是首要目标。
 3. 新增 `wait` 命令，只等待屏幕稳定，不返回内容，适合节省 token
 4. `capture --stable` 与 `wait --stable` 支持整数毫秒和 Go duration 两种格式，例如 `1500`、`1500ms`、`1.5s`
 5. `tmux` socket 路径从硬编码改为配置项 `defaults.tmux.socket`
-6. `busy` 状态新增 TTL 自动退化，默认 `10s`，避免发送 prompt 后因缺少后续观测而永久停留在 `busy`
+6. `busy` 状态新增 TTL 自动退化，默认 `30s`，避免发送 prompt 后因缺少后续观测而永久停留在 `busy`
 7. `instances.json` 现在使用文件锁和原子替换写入，降低多进程并发编排时的数据丢失和文件损坏风险
 8. `capture`/`wait` 内部减少了一次重复的注册表事务，避免不必要的注册表读改写
-9. 核心路径测试已补齐到 `capture`、`prompt`、`summon reuse`、`halt` 和 `naming`
+9. 新增 `harness_type` 驱动的状态检测，`claude-code` 可用 `pane_title` 精确判断 idle，`wait`/`capture --stable` 可提前返回
+10. `inspect`、`list`、`capture`、`wait` 的 JSON 输出现在包含 `harness_type` 或 `pane_title` 等状态观测字段
 
 ## 依赖
 
@@ -176,7 +177,7 @@ defaults:
     socket: /tmp/agentmux.sock
     load_user_config: false
   status:
-    busy_ttl_ms: 10000
+    busy_ttl_ms: 30000
   shell: /bin/bash -lc
   cwd: .
   env:
@@ -194,6 +195,16 @@ templates:
     system_prompt: 你是深度编码专家，优先阅读上下文、定位根因、直接给出可执行修改。
     prompt: ""
     cwd: .
+```
+
+Claude Code 模板建议显式声明 `harness_type`，这样 `busy -> idle` 检测会更精确：
+
+```yaml
+templates:
+  工作项管理助手:
+    command: claude --dangerously-skip-permissions --model $MODEL
+    model: anthropic/claude-sonnet-4.5
+    harness_type: claude-code
 ```
 
 ## 常用命令
@@ -286,11 +297,14 @@ agentmux version --json
 1. 始终通过 `tmux capture-pane` 抓纯文本
 2. `--history` 控制向上抓取的历史行数
 3. `--stable` 表示等待屏幕稳定后再返回
+4. 若实例的 `harness_type=claude-code`，当 `pane_title` 进入 idle 标记时可提前返回
 
 ### `wait`
 
 1. 只等待屏幕稳定，不返回屏幕内容
 2. 适合上层 Agent 只想阻塞等待、避免传回大段文本时使用
+3. 若实例的 `harness_type=claude-code`，当 `pane_title` 进入 idle 标记时可提前返回
+4. `claude-code` 的 `wait` 走轻量 pane 元信息轮询，不再抓取屏幕文本
 
 ### `prompt`
 
@@ -303,8 +317,9 @@ agentmux version --json
 
 1. `prompt` 后实例会进入 `busy`
 2. 若后续执行 `capture --stable` 或 `wait`，状态会正常收敛回 `idle`
-3. 若调用方没有继续观测，`busy` 会在 `defaults.status.busy_ttl_ms` 到期后自动退化为 `idle`
-4. 若 `busy_ttl_ms: 0`，表示禁用自动退化，实例不会仅因 TTL 到期而自动回到 `idle`
+3. 若实例的 `harness_type=claude-code`，还可以通过 `pane_title` 精确收敛到 `idle`
+4. 若调用方没有继续观测，`busy` 会在 `defaults.status.busy_ttl_ms` 到期后自动退化为 `idle`
+5. 若 `busy_ttl_ms: 0`，表示禁用自动退化，实例不会仅因 TTL 到期而自动回到 `idle`
 
 ## 并发安全
 
@@ -324,7 +339,10 @@ agentmux version --json
   "command": "inspect",
   "instance": "编码助手-A",
   "status": "idle",
-  "data": {}
+  "data": {
+    "harness_type": "claude-code",
+    "pane_title": "✳ Task complete"
+  }
 }
 ```
 

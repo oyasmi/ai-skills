@@ -75,9 +75,9 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 			return 0
 		}
 		w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "NAME\tMODEL\tCWD\tDESCRIPTION")
+		fmt.Fprintln(w, "NAME\tMODEL\tHARNESS\tCWD\tDESCRIPTION")
 		for _, item := range items {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", item["name"], item["model"], item["cwd"], item["description"])
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", item["name"], item["model"], item["harness_type"], item["cwd"], item["description"])
 		}
 		_ = w.Flush()
 		return 0
@@ -117,9 +117,10 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 				Reused:   boolPtr(res.Reused),
 				Status:   string(res.Instance.Status),
 				Data: map[string]any{
-					"template": res.Instance.Template,
-					"model":    res.Instance.Model,
-					"cwd":      res.Instance.CWD,
+					"template":     res.Instance.Template,
+					"model":        res.Instance.Model,
+					"cwd":          res.Instance.CWD,
+					"harness_type": res.Instance.HarnessType,
 				},
 			})
 			return 0
@@ -192,6 +193,7 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 				"height":        snap.Height,
 				"history_lines": snap.History,
 				"stable_for_ms": snap.StableForMS,
+				"pane_title":    snap.PaneTitle,
 				"content":       snap.Content,
 			}})
 			return 0
@@ -215,6 +217,7 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 				"height":        snap.Height,
 				"history_lines": snap.History,
 				"stable_for_ms": snap.StableForMS,
+				"pane_title":    snap.PaneTitle,
 			}})
 			return 0
 		}
@@ -629,7 +632,7 @@ Usage:
   agentmux template list [--json]
 
 Output:
-  Text mode prints a table with template name, model, cwd, and description.
+  Text mode prints a table with template name, model, harness type, cwd, and description.
   JSON mode returns {"ok", "command", "data.templates"}.
 
 Examples:
@@ -701,6 +704,9 @@ Output:
   Text mode prints key-value fields.
   JSON mode returns {"ok", "command", "instance", "status", "data"}.
 
+Notes:
+  JSON inspect includes persisted fields such as harness_type and the latest observed pane_title.
+
 Examples:
   agentmux inspect 编码助手-A
   agentmux inspect 编码助手-A --json
@@ -760,7 +766,10 @@ Flags:
 
 Output:
   Text mode prints captured screen text only.
-  JSON mode returns cursor position, screen size, stability, and content.
+  JSON mode returns cursor position, screen size, stability, pane title, and content.
+
+Notes:
+  For claude-code harnesses, --stable can return early when pane_title indicates idle.
 
 Examples:
   agentmux capture 编码助手-A
@@ -787,7 +796,11 @@ Flags:
 
 Output:
   Text mode prints instance name, status, and stable duration only.
-  JSON mode returns cursor position, screen size, history lines, and stability.
+  JSON mode returns cursor position, screen size, history lines, stability, and pane title.
+
+Notes:
+  For claude-code harnesses, wait can return early when pane_title indicates idle.
+  That path polls pane metadata only and does not capture screen content.
 
 Examples:
   agentmux wait 编码助手-A --stable 1500 --timeout 30s --json

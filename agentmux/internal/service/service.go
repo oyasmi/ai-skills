@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/oyasmi/agentmux/internal/apperr"
 	"github.com/oyasmi/agentmux/internal/capture"
@@ -19,6 +20,7 @@ import (
 const (
 	haltSecondInterruptDelay = 500 * time.Millisecond
 	haltPollInterval         = 100 * time.Millisecond
+	claudeCodeHarnessType    = "claude-code"
 )
 
 type tmuxClient interface {
@@ -69,10 +71,11 @@ func (s Service) TemplateList() []map[string]string {
 	out := make([]map[string]string, 0, len(s.Config.Templates))
 	for name, tpl := range s.Config.Templates {
 		out = append(out, map[string]string{
-			"name":        name,
-			"model":       tpl.Model,
-			"cwd":         tpl.CWD,
-			"description": tpl.Description,
+			"name":         name,
+			"model":        tpl.Model,
+			"cwd":          tpl.CWD,
+			"description":  tpl.Description,
+			"harness_type": firstNonEmpty(tpl.HarnessType, s.Config.Defaults.HarnessType),
 		})
 	}
 	return out
@@ -153,6 +156,7 @@ func (s Service) Summon(ctx context.Context, in SummonInput) (SummonResult, erro
 			Template:        resolved.Name,
 			SessionID:       sessionID,
 			Model:           resolved.Model,
+			HarnessType:     resolved.HarnessType,
 			SystemPrompt:    resolved.SystemPrompt,
 			CWD:             cwd,
 			Command:         command,
@@ -235,6 +239,13 @@ func (s Service) Capture(ctx context.Context, name string, history, stableMS, ti
 }
 
 func (s Service) Wait(ctx context.Context, name string, stableMS, timeoutMS int) (instance.Instance, capture.Snapshot, error) {
+	inst, err := s.getInstanceForCapture(ctx, name)
+	if err != nil {
+		return instance.Instance{}, capture.Snapshot{}, err
+	}
+	if inst.HarnessType == claudeCodeHarnessType {
+		return s.waitByPaneTitle(ctx, inst, timeoutMS)
+	}
 	return s.captureLike(ctx, name, -1, stableMS, timeoutMS, false)
 }
 
@@ -250,7 +261,11 @@ func (s Service) captureLike(ctx context.Context, name string, history, stableMS
 	if h < 0 {
 		h = s.Config.Defaults.Capture.History
 	}
-	snap, err := capture.WaitStable(ctx, s.Tmux, target(inst.SessionID), h, stableMS, timeoutMS, s.Config.Defaults.Capture.PollMS)
+	var titleIdle capture.TitleIdleFunc
+	if inst.HarnessType == claudeCodeHarnessType {
+		titleIdle = claudeCodeTitleIsIdle
+	}
+	snap, err := capture.WaitStable(ctx, s.Tmux, target(inst.SessionID), h, stableMS, timeoutMS, s.Config.Defaults.Capture.PollMS, titleIdle)
 	if err != nil {
 		return instance.Instance{}, capture.Snapshot{}, err
 	}
@@ -263,12 +278,14 @@ func (s Service) captureLike(ctx context.Context, name string, history, stableMS
 		if snap.Dead {
 			reg.Delete(name)
 			inst.Status = instance.StatusExited
+			inst.PaneTitle = snap.PaneTitle
 			inst.UpdatedAt = time.Now()
 			return nil
 		}
 		if stableMS > 0 {
 			inst.Status = instance.StatusIdle
 		}
+		inst.PaneTitle = snap.PaneTitle
 		inst.UpdatedAt = time.Now()
 		reg.Put(inst)
 		return nil
@@ -279,6 +296,39 @@ func (s Service) captureLike(ctx context.Context, name string, history, stableMS
 	if !includeContent {
 		snap.Content = ""
 		snap.Digest = ""
+	}
+	return inst, snap, nil
+}
+
+func (s Service) waitByPaneTitle(ctx context.Context, inst instance.Instance, timeoutMS int) (instance.Instance, capture.Snapshot, error) {
+	if inst.Status == instance.StatusLost {
+		return instance.Instance{}, capture.Snapshot{}, apperr.New("session_not_found", fmt.Sprintf("session for %q not found", inst.Name))
+	}
+	snap, err := capture.WaitUntilTitleIdle(ctx, s.Tmux, target(inst.SessionID), timeoutMS, s.Config.Defaults.Capture.PollMS, claudeCodeTitleIsIdle)
+	if err != nil {
+		return instance.Instance{}, capture.Snapshot{}, err
+	}
+	err = s.withRegistry(ctx, func(reg *instance.Registry) error {
+		current, ok := reg.Get(inst.Name)
+		if !ok {
+			return apperr.New("instance_not_found", fmt.Sprintf("instance %q not found", inst.Name))
+		}
+		inst = current
+		if snap.Dead {
+			reg.Delete(inst.Name)
+			inst.Status = instance.StatusExited
+			inst.PaneTitle = snap.PaneTitle
+			inst.UpdatedAt = time.Now()
+			return nil
+		}
+		inst.Status = instance.StatusIdle
+		inst.PaneTitle = snap.PaneTitle
+		inst.UpdatedAt = time.Now()
+		reg.Put(inst)
+		return nil
+	})
+	if err != nil {
+		return instance.Instance{}, capture.Snapshot{}, err
 	}
 	return inst, snap, nil
 }
@@ -457,15 +507,81 @@ func (s Service) reconcile(ctx context.Context, inst instance.Instance) instance
 	if err != nil {
 		return inst
 	}
+	inst.PaneTitle = info.PaneTitle
 	if info.Dead {
 		inst.Status = instance.StatusExited
-	} else if s.busyExpired(inst) {
-		inst.Status = instance.StatusIdle
+	} else if inst.Status == instance.StatusBusy {
+		if inst.HarnessType == claudeCodeHarnessType && claudeCodeTitleIsIdle(info.PaneTitle) {
+			inst.Status = instance.StatusIdle
+		} else if s.busyExpired(inst) {
+			inst.Status = instance.StatusIdle
+		}
 	} else if inst.Status != instance.StatusBusy {
 		inst.Status = instance.StatusIdle
 	}
 	inst.UpdatedAt = time.Now()
 	return inst
+}
+
+func claudeCodeTitleIsIdle(paneTitle string) bool {
+	switch claudeCodeTitleState(paneTitle) {
+	case "idle":
+		return true
+	default:
+		return false
+	}
+}
+
+func claudeCodeTitleState(paneTitle string) string {
+	trimmed := strings.TrimSpace(paneTitle)
+	if trimmed == "" {
+		return "unknown"
+	}
+	significant := firstClaudeCodeMarkerRunes(trimmed, 4)
+	if len(significant) == 0 {
+		return "unknown"
+	}
+	for _, r := range significant {
+		switch {
+		case r == '\u2733':
+			return "idle"
+		case r >= '\u2800' && r <= '\u28ff':
+			return "busy"
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			return "unknown"
+		}
+	}
+	return "unknown"
+}
+
+func firstClaudeCodeMarkerRunes(s string, limit int) []rune {
+	if limit <= 0 {
+		return nil
+	}
+	var out []rune
+	for _, r := range []rune(s) {
+		if unicode.IsSpace(r) {
+			continue
+		}
+		switch r {
+		case '[', ']', '(', ')', '{', '}', '<', '>', ':', '-', '|':
+			continue
+		}
+		out = append(out, r)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+func firstNonEmpty(vs ...string) string {
+	for _, v := range vs {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func (s Service) busyExpired(inst instance.Instance) bool {

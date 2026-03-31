@@ -34,7 +34,7 @@ func TestRunTemplateListStillWorks(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected zero exit code, stderr=%q", stderr.String())
 	}
-	if got := stdout.String(); !strings.Contains(got, "NAME") || !strings.Contains(got, "MODEL") || !strings.Contains(got, "深度编码专家") {
+	if got := stdout.String(); !strings.Contains(got, "NAME") || !strings.Contains(got, "MODEL") || !strings.Contains(got, "HARNESS") || !strings.Contains(got, "深度编码专家") {
 		t.Fatalf("unexpected stdout: %q", got)
 	}
 }

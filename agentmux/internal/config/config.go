@@ -22,7 +22,7 @@ defaults:
     socket: /tmp/agentmux.sock
     load_user_config: false
   status:
-    busy_ttl_ms: 10000
+    busy_ttl_ms: 30000
   shell: /bin/bash -lc
   cwd: .
   env:
@@ -54,6 +54,7 @@ templates:
     description: 面向任务拆分、优先级整理、进度跟踪和状态汇总的助手
     command: claude --dangerously-skip-permissions --model $MODEL
     model: anthropic/claude-sonnet-4.5
+    harness_type: claude-code
     system_prompt: 你负责管理工作项，输出要短、准、可执行。
     prompt: ""
     cwd: .
@@ -77,6 +78,7 @@ type Config struct {
 type Defaults struct {
 	Shell        string            `yaml:"shell"`
 	CWD          string            `yaml:"cwd"`
+	HarnessType  string            `yaml:"harness_type"`
 	Env          map[string]string `yaml:"env"`
 	Tmux         TmuxDefaults      `yaml:"tmux"`
 	Status       StatusDefaults    `yaml:"status"`
@@ -107,6 +109,7 @@ type Template struct {
 	Prompt       string            `yaml:"prompt"`
 	CWD          string            `yaml:"cwd"`
 	Shell        string            `yaml:"shell"`
+	HarnessType  string            `yaml:"harness_type"`
 	Env          map[string]string `yaml:"env"`
 }
 
@@ -174,7 +177,7 @@ func (c *Config) ApplyDefaults() {
 		c.Defaults.Shell = "/bin/bash -lc"
 	}
 	if c.Defaults.Status.BusyTTLMS == nil {
-		c.Defaults.Status.BusyTTLMS = intPtr(10000)
+		c.Defaults.Status.BusyTTLMS = intPtr(30000)
 	}
 	if c.Defaults.CWD == "" {
 		c.Defaults.CWD = "."
@@ -257,6 +260,7 @@ type ResolvedTemplate struct {
 	Prompt       string
 	CWD          string
 	Shell        string
+	HarnessType  string
 	Env          map[string]string
 }
 
@@ -282,6 +286,7 @@ func Resolve(cfg Config, templateName string, override Override) (ResolvedTempla
 		Prompt:       tpl.Prompt,
 		CWD:          firstNonEmpty(tpl.CWD, cfg.Defaults.CWD),
 		Shell:        firstNonEmpty(tpl.Shell, cfg.Defaults.Shell),
+		HarnessType:  firstNonEmpty(tpl.HarnessType, cfg.Defaults.HarnessType),
 		Env:          map[string]string{},
 	}
 	for k, v := range cfg.Defaults.Env {

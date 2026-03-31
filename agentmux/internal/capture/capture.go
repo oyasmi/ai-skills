@@ -23,12 +23,54 @@ type Snapshot struct {
 	History     int
 	Content     string
 	Digest      string
+	PaneTitle   string
 	CapturedAt  time.Time
 	StableForMS int
 	Dead        bool
 }
 
-func WaitStable(ctx context.Context, tmux tmuxClient, target string, history, stableMS, timeoutMS, pollMS int) (Snapshot, error) {
+type TitleIdleFunc func(paneTitle string) bool
+
+func WaitUntilTitleIdle(ctx context.Context, tmux tmuxClient, target string, timeoutMS, pollMS int, titleIdle TitleIdleFunc) (Snapshot, error) {
+	if titleIdle == nil {
+		return Snapshot{}, apperr.New("internal_error", "title idle detector is required")
+	}
+	if pollMS <= 0 {
+		pollMS = 250
+	}
+	if timeoutMS <= 0 {
+		timeoutMS = 30000
+	}
+	deadline := time.Now().Add(time.Duration(timeoutMS) * time.Millisecond)
+	for {
+		if time.Now().After(deadline) {
+			return Snapshot{}, apperr.New("capture_timeout", "capture timed out before pane title became idle")
+		}
+		info, err := tmux.PaneInfo(ctx, target)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		snap := Snapshot{
+			CursorX:    info.CursorX,
+			CursorY:    info.CursorY,
+			Width:      info.Width,
+			Height:     info.Height,
+			PaneTitle:  info.PaneTitle,
+			CapturedAt: time.Now(),
+			Dead:       info.Dead,
+		}
+		if snap.Dead || titleIdle(snap.PaneTitle) {
+			return snap, nil
+		}
+		select {
+		case <-ctx.Done():
+			return Snapshot{}, ctx.Err()
+		case <-time.After(time.Duration(pollMS) * time.Millisecond):
+		}
+	}
+}
+
+func WaitStable(ctx context.Context, tmux tmuxClient, target string, history, stableMS, timeoutMS, pollMS int, titleIdle TitleIdleFunc) (Snapshot, error) {
 	if pollMS <= 0 {
 		pollMS = 250
 	}
@@ -48,6 +90,9 @@ func WaitStable(ctx context.Context, tmux tmuxClient, target string, history, st
 		snap, err := Once(ctx, tmux, target, history)
 		if err != nil {
 			return Snapshot{}, err
+		}
+		if titleIdle != nil && titleIdle(snap.PaneTitle) {
+			return snap, nil
 		}
 		if snap.Digest == last.Digest && snap.Digest != "" {
 			if stableStart.IsZero() {
@@ -87,6 +132,7 @@ func Once(ctx context.Context, tmux tmuxClient, target string, history int) (Sna
 		History:    history,
 		Content:    content,
 		Digest:     hex.EncodeToString(sum[:]),
+		PaneTitle:  info.PaneTitle,
 		CapturedAt: time.Now(),
 		Dead:       info.Dead,
 	}, nil

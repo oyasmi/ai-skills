@@ -73,7 +73,7 @@ func TestRunE2ELifecycleJSON(t *testing.T) {
 	tmux := &e2eFakeTmux{
 		sessions:       map[string]bool{},
 		captureContent: "ready\n> ",
-		paneInfo:       tmuxctl.PaneInfo{Width: 80, Height: 24},
+		paneInfo:       tmuxctl.PaneInfo{Width: 80, Height: 24, PaneTitle: "✳ Ready"},
 	}
 	prevFactory := newService
 	newService = func(paths config.Paths, cfg config.Config) service.Service {
@@ -115,13 +115,24 @@ func TestRunE2ELifecycleJSON(t *testing.T) {
 	if inst.Status != instance.StatusBusy || !inst.FirstPromptSent {
 		t.Fatalf("unexpected registry instance after summon: %+v", inst)
 	}
+	if inst.HarnessType != "" {
+		t.Fatalf("unexpected default harness type for codex template: %q", inst.HarnessType)
+	}
 
 	stdout, stderr, code = runJSON("capture", "e2e-agent", "--stable", "1", "--timeout", "1s", "--json")
 	if code != 0 {
 		t.Fatalf("capture failed: code=%d stderr=%q", code, stderr)
 	}
-	if !strings.Contains(stdout, `"command": "capture"`) || !strings.Contains(stdout, `"status": "idle"`) || !strings.Contains(stdout, `"content": "ready\n\u003e "`) {
+	if !strings.Contains(stdout, `"command": "capture"`) || !strings.Contains(stdout, `"status": "idle"`) || !strings.Contains(stdout, `"content": "ready\n\u003e "`) || !strings.Contains(stdout, `"pane_title": "✳ Ready"`) {
 		t.Fatalf("unexpected capture stdout: %q", stdout)
+	}
+
+	stdout, stderr, code = runJSON("inspect", "e2e-agent", "--json")
+	if code != 0 {
+		t.Fatalf("inspect failed: code=%d stderr=%q", code, stderr)
+	}
+	if !strings.Contains(stdout, `"pane_title": "✳ Ready"`) {
+		t.Fatalf("unexpected inspect stdout: %q", stdout)
 	}
 
 	stdout, stderr, code = runJSON("halt", "e2e-agent", "--immediately", "--json")

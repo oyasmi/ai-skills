@@ -38,6 +38,7 @@ defaults:
     load_user_config: false
   shell: /bin/bash -lc
   cwd: .
+  harness_type: ""
   env:
     TERM: xterm-256color
   capture:
@@ -93,6 +94,7 @@ version: 1
 4. `tmux`
 5. `capture`
 6. `max_instances`
+7. `harness_type`
 
 ### 4.1 `defaults.tmux`
 
@@ -156,7 +158,23 @@ env:
 1. 键值均为字符串
 2. 第一版建议至少显式设置 `TERM=xterm-256color`
 
-### 4.5 `defaults.capture`
+### 4.5 `defaults.harness_type`
+
+类型：
+
+```yaml
+harness_type: claude-code
+```
+
+规则：
+
+1. 可选，默认空字符串
+2. 用于声明模板对应的 agent harness 类型
+3. 当前内建识别 `claude-code`
+4. `claude-code` 会启用基于 tmux `pane_title` 的精确 idle 检测
+5. 其他值或空值不会报错，而是回退到通用的内容稳定性与 TTL 路径
+
+### 4.6 `defaults.capture`
 
 类型：
 
@@ -179,7 +197,7 @@ capture:
 2. `stable_ms` 是默认稳定判定窗口
 3. `poll_ms` 是轮询间隔
 
-### 4.6 `defaults.max_instances`
+### 4.7 `defaults.max_instances`
 
 类型：
 
@@ -227,6 +245,7 @@ templates:
 6. `cwd`
 7. `shell`
 8. `env`
+9. `harness_type`
 
 ### 6.1 `description`
 
@@ -353,6 +372,23 @@ env:
 1. 可选
 2. 与 `defaults.env` 做浅合并
 
+### 6.9 `harness_type`
+
+类型：
+
+```yaml
+harness_type: claude-code
+```
+
+规则：
+
+1. 可选
+2. 若模板未设置，则继承 `defaults.harness_type`
+3. 当前内建识别 `claude-code`
+4. `claude-code` 启用基于 tmux `pane_title` 的精确 idle 检测
+5. 对 `wait` 命令，`claude-code` 可走轻量 pane 元信息轮询，不必反复 `capture-pane`
+6. 未知值保留在实例元数据中，但行为回退到通用模式
+
 ---
 
 ## 7. 合并规则
@@ -372,7 +408,8 @@ env:
 4. `prompt` 直接覆盖
 5. `cwd` 直接覆盖
 6. `shell` 直接覆盖
-7. `env` 浅合并
+7. `harness_type` 直接覆盖
+8. `env` 浅合并
 
 空字符串规则：
 
@@ -448,16 +485,18 @@ i_<random-or-hash>
 2. `template`
 3. `session_id`
 4. `model`
-5. `system_prompt`
-6. `cwd`
-7. `command`
-8. `shell`
-9. `env`
-10. `status`
-11. `first_prompt_sent`
-12. `created_at`
-13. `updated_at`
-14. `last_activity_at`
+5. `harness_type`
+6. `system_prompt`
+7. `cwd`
+8. `command`
+9. `shell`
+10. `env`
+11. `status`
+12. `pane_title`
+13. `first_prompt_sent`
+14. `created_at`
+15. `updated_at`
+16. `last_activity_at`
 
 ---
 
@@ -496,7 +535,7 @@ i_<random-or-hash>
 1. harness 只是实现手段
 2. 模板应该表达业务角色与默认行为
 
-### 12.2 推荐把 harness 差异体现在 `command/model`
+### 12.2 推荐把 harness 差异体现在 `command/model/harness_type`
 
 例如：
 
@@ -509,6 +548,7 @@ templates:
   深度编码专家-Claude:
     command: claude --dangerously-skip-permissions --model $MODEL
     model: anthropic/claude-sonnet-4.5
+    harness_type: claude-code
 ```
 
 如果确实需要区分不同 harness，可以在角色名后追加标识，而不是直接退化成 harness 名称。

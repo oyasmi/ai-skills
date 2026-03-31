@@ -5,7 +5,7 @@ defaults:
     socket: /tmp/agentmux.sock
     load_user_config: false
   status:
-    busy_ttl_ms: 10000
+    busy_ttl_ms: 30000
   shell: /bin/bash -lc
   cwd: .
   env:
@@ -37,6 +37,7 @@ templates:
     description: 面向任务拆分、优先级整理、进度跟踪和状态汇总的助手
     command: claude --dangerously-skip-permissions --model $MODEL
     model: anthropic/claude-sonnet-4.5
+    harness_type: claude-code
     system_prompt: 你负责管理工作项，输出要短、准、可执行。
     prompt: ""
     cwd: .

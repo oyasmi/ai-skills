@@ -18,8 +18,8 @@ func TestApplyDefaultsSetsTmuxSocket(t *testing.T) {
 	if cfg.Defaults.Tmux.LoadUserConfig {
 		t.Fatalf("expected default load_user_config false")
 	}
-	if cfg.Defaults.Status.BusyTTLMS == nil || *cfg.Defaults.Status.BusyTTLMS != 10000 {
-		t.Fatalf("expected default busy ttl 10000, got %v", cfg.Defaults.Status.BusyTTLMS)
+	if cfg.Defaults.Status.BusyTTLMS == nil || *cfg.Defaults.Status.BusyTTLMS != 30000 {
+		t.Fatalf("expected default busy ttl 30000, got %v", cfg.Defaults.Status.BusyTTLMS)
 	}
 }
 
@@ -73,5 +73,50 @@ func TestApplyDefaultsPreservesExplicitZeroBusyTTL(t *testing.T) {
 
 	if cfg.Defaults.Status.BusyTTLMS == nil || *cfg.Defaults.Status.BusyTTLMS != 0 {
 		t.Fatalf("expected explicit zero busy ttl to be preserved, got %v", cfg.Defaults.Status.BusyTTLMS)
+	}
+}
+
+func TestResolveUsesTemplateHarnessTypeBeforeDefaults(t *testing.T) {
+	cfg := Config{
+		Version: 1,
+		Defaults: Defaults{
+			Tmux:        TmuxDefaults{Socket: DefaultSocketPath},
+			HarnessType: "codex-cli",
+		},
+		Templates: map[string]Template{
+			"worker": {
+				Command:     "echo test",
+				HarnessType: "claude-code",
+			},
+		},
+	}
+
+	rt, err := Resolve(cfg, "worker", Override{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if rt.HarnessType != "claude-code" {
+		t.Fatalf("expected template harness_type, got %q", rt.HarnessType)
+	}
+}
+
+func TestResolveFallsBackToDefaultHarnessType(t *testing.T) {
+	cfg := Config{
+		Version: 1,
+		Defaults: Defaults{
+			Tmux:        TmuxDefaults{Socket: DefaultSocketPath},
+			HarnessType: "codex-cli",
+		},
+		Templates: map[string]Template{
+			"worker": {Command: "echo test"},
+		},
+	}
+
+	rt, err := Resolve(cfg, "worker", Override{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if rt.HarnessType != "codex-cli" {
+		t.Fatalf("expected default harness_type, got %q", rt.HarnessType)
 	}
 }

@@ -102,21 +102,26 @@ func (c Client) Attach(sessionID string) *exec.Cmd {
 }
 
 type PaneInfo struct {
-	CursorX int
-	CursorY int
-	Width   int
-	Height  int
-	Dead    bool
-	Command string
+	CursorX   int
+	CursorY   int
+	Width     int
+	Height    int
+	Dead      bool
+	Command   string
+	PaneTitle string
+}
+
+func (c Client) PaneTitle(ctx context.Context, target string) (string, error) {
+	return c.Display(ctx, target, "#{pane_title}")
 }
 
 func (c Client) PaneInfo(ctx context.Context, target string) (PaneInfo, error) {
-	out, err := c.Display(ctx, target, "#{cursor_x}|#{cursor_y}|#{pane_width}|#{pane_height}|#{pane_dead}|#{pane_current_command}")
+	out, err := c.Display(ctx, target, "#{cursor_x}|#{cursor_y}|#{pane_width}|#{pane_height}|#{pane_dead}|#{pane_current_command}|#{pane_title}")
 	if err != nil {
 		return PaneInfo{}, err
 	}
-	parts := strings.Split(out, "|")
-	if len(parts) != 6 {
+	parts := strings.SplitN(out, "|", 7)
+	if len(parts) != 7 {
 		return PaneInfo{}, apperr.New("tmux_unavailable", "unexpected pane info format")
 	}
 	x, _ := strconv.Atoi(parts[0])
@@ -124,11 +129,12 @@ func (c Client) PaneInfo(ctx context.Context, target string) (PaneInfo, error) {
 	w, _ := strconv.Atoi(parts[2])
 	h, _ := strconv.Atoi(parts[3])
 	return PaneInfo{
-		CursorX: x,
-		CursorY: y,
-		Width:   w,
-		Height:  h,
-		Dead:    parts[4] == "1",
-		Command: parts[5],
+		CursorX:   x,
+		CursorY:   y,
+		Width:     w,
+		Height:    h,
+		Dead:      parts[4] == "1",
+		Command:   parts[5],
+		PaneTitle: parts[6],
 	}, nil
 }

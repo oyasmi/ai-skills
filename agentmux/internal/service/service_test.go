@@ -16,6 +16,7 @@ import (
 type fakeTmux struct {
 	sessions       map[string]bool
 	captureContent string
+	captureCalls   int
 	paneInfo       tmuxctl.PaneInfo
 	loads          []string
 	sendKeys       []string
@@ -39,6 +40,7 @@ func (f *fakeTmux) KillSession(_ context.Context, sessionID string) error {
 }
 
 func (f *fakeTmux) CapturePane(context.Context, string, int) (string, error) {
+	f.captureCalls++
 	return f.captureContent, nil
 }
 
@@ -253,6 +255,130 @@ func TestInspectKeepsBusyWhenBusyTTLIsZero(t *testing.T) {
 	}
 }
 
+func TestInspectClaudeCodeBusyTurnsIdleWhenPaneTitleShowsIdle(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	svc, registryPath := newTestService(t, &fakeTmux{
+		sessions: map[string]bool{"live-session": true},
+		paneInfo: tmuxctl.PaneInfo{PaneTitle: "✳ Ready"},
+	})
+	now := time.Now().UTC()
+	reg := instance.Registry{
+		Instances: map[string]instance.Instance{
+			"worker": {
+				Name:           "worker",
+				SessionID:      "live-session",
+				Status:         instance.StatusBusy,
+				HarnessType:    "claude-code",
+				LastActivityAt: now.Add(-2 * time.Second),
+				UpdatedAt:      now,
+			},
+		},
+	}
+	if err := instance.Save(registryPath, reg); err != nil {
+		t.Fatalf("save registry: %v", err)
+	}
+
+	inst, err := svc.Inspect(ctx, "worker")
+	if err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
+	if inst.Status != instance.StatusIdle {
+		t.Fatalf("expected idle from pane title, got %s", inst.Status)
+	}
+	if inst.PaneTitle != "✳ Ready" {
+		t.Fatalf("expected pane title to persist, got %q", inst.PaneTitle)
+	}
+}
+
+func TestInspectClaudeCodeBusyStaysBusyWhenPaneTitleShowsSpinner(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	svc, registryPath := newTestService(t, &fakeTmux{
+		sessions: map[string]bool{"live-session": true},
+		paneInfo: tmuxctl.PaneInfo{PaneTitle: "⠋ Thinking"},
+	})
+	now := time.Now().UTC()
+	reg := instance.Registry{
+		Instances: map[string]instance.Instance{
+			"worker": {
+				Name:           "worker",
+				SessionID:      "live-session",
+				Status:         instance.StatusBusy,
+				HarnessType:    "claude-code",
+				LastActivityAt: now.Add(-2 * time.Second),
+				UpdatedAt:      now,
+			},
+		},
+	}
+	if err := instance.Save(registryPath, reg); err != nil {
+		t.Fatalf("save registry: %v", err)
+	}
+
+	inst, err := svc.Inspect(ctx, "worker")
+	if err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
+	if inst.Status != instance.StatusBusy {
+		t.Fatalf("expected busy before ttl expiry, got %s", inst.Status)
+	}
+	if inst.PaneTitle != "⠋ Thinking" {
+		t.Fatalf("expected pane title to persist, got %q", inst.PaneTitle)
+	}
+}
+
+func TestInspectUnknownHarnessStillUsesTTLInsteadOfPaneTitle(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	svc, registryPath := newTestService(t, &fakeTmux{
+		sessions: map[string]bool{"live-session": true},
+		paneInfo: tmuxctl.PaneInfo{PaneTitle: "✳ Ready"},
+	})
+	now := time.Now().UTC()
+	reg := instance.Registry{
+		Instances: map[string]instance.Instance{
+			"worker": {
+				Name:           "worker",
+				SessionID:      "live-session",
+				Status:         instance.StatusBusy,
+				HarnessType:    "unknown",
+				LastActivityAt: now.Add(-2 * time.Second),
+				UpdatedAt:      now,
+			},
+		},
+	}
+	if err := instance.Save(registryPath, reg); err != nil {
+		t.Fatalf("save registry: %v", err)
+	}
+
+	inst, err := svc.Inspect(ctx, "worker")
+	if err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
+	if inst.Status != instance.StatusBusy {
+		t.Fatalf("expected busy when harness is unknown, got %s", inst.Status)
+	}
+}
+
+func TestClaudeCodeTitleIsIdleSupportsWrappedMarker(t *testing.T) {
+	t.Parallel()
+
+	if !claudeCodeTitleIsIdle(" [ ✳ ] Ready") {
+		t.Fatalf("expected wrapped idle marker to be accepted")
+	}
+}
+
+func TestClaudeCodeTitleIsIdleRejectsSpinnerMarker(t *testing.T) {
+	t.Parallel()
+
+	if claudeCodeTitleIsIdle(" (⠋) Thinking") {
+		t.Fatalf("expected spinner marker to stay non-idle")
+	}
+}
+
 func TestSummonReuseReturnsReusedAndSendsPrompt(t *testing.T) {
 	t.Parallel()
 
@@ -368,6 +494,47 @@ func TestWaitOmitsContent(t *testing.T) {
 	}
 	if snap.Content != "" {
 		t.Fatalf("expected empty content for wait, got %q", snap.Content)
+	}
+}
+
+func TestWaitClaudeCodeReturnsEarlyFromPaneTitle(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	tmux := &fakeTmux{
+		sessions:       map[string]bool{"live-session": true},
+		captureContent: "screen output",
+		paneInfo:       tmuxctl.PaneInfo{Width: 80, Height: 24, PaneTitle: "✳ Ready"},
+	}
+	svc, registryPath := newTestService(t, tmux)
+	saveRunningInstance(t, registryPath, "worker", "live-session", instance.StatusBusy, true, time.Now().UTC())
+
+	reg, err := instance.Load(registryPath)
+	if err != nil {
+		t.Fatalf("load registry: %v", err)
+	}
+	inst := reg.Instances["worker"]
+	inst.HarnessType = "claude-code"
+	reg.Put(inst)
+	if err := instance.Save(registryPath, reg); err != nil {
+		t.Fatalf("save registry: %v", err)
+	}
+
+	inst, snap, err := svc.Wait(ctx, "worker", 1500, 1000)
+	if err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if inst.Status != instance.StatusIdle {
+		t.Fatalf("expected idle, got %s", inst.Status)
+	}
+	if snap.PaneTitle != "✳ Ready" {
+		t.Fatalf("expected pane title in snapshot, got %q", snap.PaneTitle)
+	}
+	if snap.StableForMS != 0 {
+		t.Fatalf("expected early return before stability accounting, got %d", snap.StableForMS)
+	}
+	if tmux.captureCalls != 0 {
+		t.Fatalf("expected claude-code wait to avoid capture-pane, got %d calls", tmux.captureCalls)
 	}
 }
 
