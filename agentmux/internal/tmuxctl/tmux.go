@@ -111,6 +111,11 @@ type PaneInfo struct {
 	PaneTitle string
 }
 
+type CaptureSnapshot struct {
+	Content string
+	Info    PaneInfo
+}
+
 const paneInfoSep = "\x1f"
 
 func (c Client) PaneTitle(ctx context.Context, target string) (string, error) {
@@ -123,6 +128,23 @@ func (c Client) PaneInfo(ctx context.Context, target string) (PaneInfo, error) {
 		return PaneInfo{}, err
 	}
 	return parsePaneInfo(out)
+}
+
+func (c Client) CaptureSnapshot(ctx context.Context, target string, history int) (CaptureSnapshot, error) {
+	args := []string{
+		"display-message", "-p", "-t", target,
+		"#{cursor_x}" + paneInfoSep + "#{cursor_y}" + paneInfoSep + "#{pane_width}" + paneInfoSep + "#{pane_height}" + paneInfoSep + "#{pane_dead}" + paneInfoSep + "#{pane_current_command}" + paneInfoSep + "#{pane_title}",
+		";",
+		"capture-pane", "-p", "-J", "-t", target,
+	}
+	if history > 0 {
+		args = append(args, "-S", "-"+strconv.Itoa(history))
+	}
+	out, err := c.run(ctx, args...)
+	if err != nil {
+		return CaptureSnapshot{}, err
+	}
+	return parseCaptureSnapshot(out)
 }
 
 func parsePaneInfo(out string) (PaneInfo, error) {
@@ -142,5 +164,21 @@ func parsePaneInfo(out string) (PaneInfo, error) {
 		Dead:      parts[4] == "1",
 		Command:   parts[5],
 		PaneTitle: parts[6],
+	}, nil
+}
+
+func parseCaptureSnapshot(out string) (CaptureSnapshot, error) {
+	infoLine, content, found := strings.Cut(out, "\n")
+	if !found {
+		infoLine = out
+		content = ""
+	}
+	info, err := parsePaneInfo(infoLine)
+	if err != nil {
+		return CaptureSnapshot{}, err
+	}
+	return CaptureSnapshot{
+		Content: content,
+		Info:    info,
 	}, nil
 }

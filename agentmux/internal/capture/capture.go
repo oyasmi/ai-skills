@@ -11,7 +11,7 @@ import (
 )
 
 type tmuxClient interface {
-	CapturePane(ctx context.Context, target string, history int) (string, error)
+	CaptureSnapshot(ctx context.Context, target string, history int) (tmuxctl.CaptureSnapshot, error)
 	PaneInfo(ctx context.Context, target string) (tmuxctl.PaneInfo, error)
 }
 
@@ -124,25 +124,21 @@ func waitPollInterval(ctx context.Context, pollMS int) error {
 }
 
 func Once(ctx context.Context, tmux tmuxClient, target string, history int) (Snapshot, error) {
-	content, err := tmux.CapturePane(ctx, target, history)
+	sampled, err := tmux.CaptureSnapshot(ctx, target, history)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	info, err := tmux.PaneInfo(ctx, target)
-	if err != nil {
-		return Snapshot{}, err
-	}
-	sum := sha256.Sum256([]byte(content))
+	sum := sha256.Sum256([]byte(sampled.Content))
 	return Snapshot{
-		CursorX:    info.CursorX,
-		CursorY:    info.CursorY,
-		Width:      info.Width,
-		Height:     info.Height,
+		CursorX:    sampled.Info.CursorX,
+		CursorY:    sampled.Info.CursorY,
+		Width:      sampled.Info.Width,
+		Height:     sampled.Info.Height,
 		History:    history,
-		Content:    content,
+		Content:    sampled.Content,
 		Digest:     hex.EncodeToString(sum[:]),
-		PaneTitle:  info.PaneTitle,
+		PaneTitle:  sampled.Info.PaneTitle,
 		CapturedAt: time.Now(),
-		Dead:       info.Dead,
+		Dead:       sampled.Info.Dead,
 	}, nil
 }

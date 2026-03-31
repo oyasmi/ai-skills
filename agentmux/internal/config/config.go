@@ -245,7 +245,7 @@ func EnsureDefaultConfig(path string) error {
 	} else if !os.IsNotExist(err) {
 		return apperr.Wrap("config_io_error", err, "stat config file %s", path)
 	}
-	if err := os.WriteFile(path, []byte(DefaultConfigYAML), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(DefaultConfigYAML), 0o600); err != nil {
 		return apperr.Wrap("config_io_error", err, "write default config file %s", path)
 	}
 	return nil

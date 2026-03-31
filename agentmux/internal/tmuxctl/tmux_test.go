@@ -24,3 +24,21 @@ func TestParsePaneInfoRejectsMalformedOutput(t *testing.T) {
 		t.Fatalf("expected malformed pane info to fail")
 	}
 }
+
+func TestParseCaptureSnapshotSeparatesMetadataAndContent(t *testing.T) {
+	out := "1" + paneInfoSep + "2" + paneInfoSep + "80" + paneInfoSep + "24" + paneInfoSep + "0" + paneInfoSep + "codex|agent" + paneInfoSep + "Ready | waiting" + "\n" + "line1\nline2"
+
+	snap, err := parseCaptureSnapshot(out)
+	if err != nil {
+		t.Fatalf("parseCaptureSnapshot: %v", err)
+	}
+	if snap.Info.Command != "codex|agent" {
+		t.Fatalf("unexpected command: %q", snap.Info.Command)
+	}
+	if snap.Info.PaneTitle != "Ready | waiting" {
+		t.Fatalf("unexpected title: %q", snap.Info.PaneTitle)
+	}
+	if snap.Content != "line1\nline2" {
+		t.Fatalf("unexpected content: %q", snap.Content)
+	}
+}

@@ -43,6 +43,13 @@ func (f *e2eFakeTmux) CapturePane(context.Context, string, int) (string, error) 
 	return f.captureContent, nil
 }
 
+func (f *e2eFakeTmux) CaptureSnapshot(context.Context, string, int) (tmuxctl.CaptureSnapshot, error) {
+	return tmuxctl.CaptureSnapshot{
+		Content: f.captureContent,
+		Info:    f.paneInfo,
+	}, nil
+}
+
 func (f *e2eFakeTmux) LoadBuffer(_ context.Context, data string) error {
 	f.loads = append(f.loads, data)
 	return nil

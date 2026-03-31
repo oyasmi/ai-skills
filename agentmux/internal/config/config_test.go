@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestApplyDefaultsSetsTmuxSocket(t *testing.T) {
 	cfg := Config{
@@ -118,5 +122,24 @@ func TestResolveFallsBackToDefaultHarnessType(t *testing.T) {
 	}
 	if rt.HarnessType != "codex-cli" {
 		t.Fatalf("expected default harness_type, got %q", rt.HarnessType)
+	}
+}
+
+func TestEnsureDefaultConfigWritesPrivateFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	if err := EnsureDefaultConfig(path); err != nil {
+		t.Fatalf("EnsureDefaultConfig: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat config: %v", err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Fatalf("expected config mode 0600, got %#o", mode)
 	}
 }

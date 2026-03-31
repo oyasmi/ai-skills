@@ -15,16 +15,17 @@ import (
 )
 
 type fakeTmux struct {
-	sessions        map[string]bool
-	captureContent  string
-	captureCalls    int
-	hasSessionCalls []string
-	paneInfoCalls   []string
-	paneInfo        tmuxctl.PaneInfo
-	loads           []string
-	sendKeys        []string
-	killed          []string
-	sendKeysHook    func(*fakeTmux, string, []string)
+	sessions             map[string]bool
+	captureContent       string
+	captureCalls         int
+	captureSnapshotCalls int
+	hasSessionCalls      []string
+	paneInfoCalls        []string
+	paneInfo             tmuxctl.PaneInfo
+	loads                []string
+	sendKeys             []string
+	killed               []string
+	sendKeysHook         func(*fakeTmux, string, []string)
 }
 
 func (f *fakeTmux) HasSession(_ context.Context, sessionID string) bool {
@@ -46,6 +47,14 @@ func (f *fakeTmux) KillSession(_ context.Context, sessionID string) error {
 func (f *fakeTmux) CapturePane(context.Context, string, int) (string, error) {
 	f.captureCalls++
 	return f.captureContent, nil
+}
+
+func (f *fakeTmux) CaptureSnapshot(context.Context, string, int) (tmuxctl.CaptureSnapshot, error) {
+	f.captureSnapshotCalls++
+	return tmuxctl.CaptureSnapshot{
+		Content: f.captureContent,
+		Info:    f.paneInfo,
+	}, nil
 }
 
 func (f *fakeTmux) LoadBuffer(_ context.Context, data string) error {
@@ -622,6 +631,12 @@ func TestCaptureStableMarksIdleAndReturnsContent(t *testing.T) {
 	if snap.Content != "screen output" {
 		t.Fatalf("unexpected content: %q", snap.Content)
 	}
+	if tmux.captureSnapshotCalls == 0 {
+		t.Fatalf("expected capture to use combined snapshot sampling")
+	}
+	if tmux.captureCalls != 0 {
+		t.Fatalf("expected capture to avoid standalone capture-pane calls, got %d", tmux.captureCalls)
+	}
 }
 
 func TestWaitOmitsContent(t *testing.T) {
@@ -643,6 +658,12 @@ func TestWaitOmitsContent(t *testing.T) {
 	}
 	if snap.Content != "" {
 		t.Fatalf("expected empty content for wait, got %q", snap.Content)
+	}
+	if tmux.captureSnapshotCalls == 0 {
+		t.Fatalf("expected wait to use combined snapshot sampling")
+	}
+	if tmux.captureCalls != 0 {
+		t.Fatalf("expected wait to avoid standalone capture-pane calls, got %d", tmux.captureCalls)
 	}
 }
 

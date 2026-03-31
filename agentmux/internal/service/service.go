@@ -29,6 +29,7 @@ type tmuxClient interface {
 	NewSession(ctx context.Context, sessionID, cwd, command string, env map[string]string) error
 	KillSession(ctx context.Context, sessionID string) error
 	CapturePane(ctx context.Context, target string, history int) (string, error)
+	CaptureSnapshot(ctx context.Context, target string, history int) (tmuxctl.CaptureSnapshot, error)
 	LoadBuffer(ctx context.Context, data string) error
 	PasteBuffer(ctx context.Context, target string) error
 	SendKeys(ctx context.Context, target string, keys ...string) error
@@ -168,13 +169,6 @@ func (s Service) Summon(ctx context.Context, in SummonInput) (SummonResult, erro
 		}
 		if s.Config.Defaults.MaxInstances > 0 {
 			s.reconcileRegistry(ctx, reg)
-		}
-		if inst, ok := reg.Get(name); ok {
-			if inst.Status == instance.StatusLost {
-				reg.Delete(name)
-			} else {
-				return apperr.New("instance_exists", fmt.Sprintf("instance %q already exists", name))
-			}
 		}
 		if s.Config.Defaults.MaxInstances > 0 && len(reg.Instances) >= s.Config.Defaults.MaxInstances {
 			return apperr.New("config_invalid", "max_instances exceeded")
