@@ -32,7 +32,7 @@
    - 配置加载
    - 模板合并
    - 实例复用与生命周期控制
-   - prompt 注入、抓屏、等待稳定
+   - prompt 注入、抓屏、等待完成
 3. `Runtime 层`
    - `tmux` 调用封装
    - 本地 registry 持久化
@@ -267,7 +267,7 @@ agentmux/
 1. 去掉 `show`，统一用 `inspect`
 2. 去掉 `watch`、`doctor`、`remove`、`rename`、`bootstrap`、`paste`、`logs`
 3. 去掉独立 `keys` 子命令，特殊键能力并入 `prompt`
-4. 第一版不做 `wait` 子命令，等待稳定作为 `capture` 的可选参数
+4. `capture` 与 `wait` 职责分离，抓屏与等待分别建模
 
 这样命令面更小，更符合“先把核心做好”。
 
@@ -367,15 +367,14 @@ agentmux prompt 编码助手-A --text "继续修复测试" --enter
 
 1. 默认只返回纯文本
 2. 支持向上带历史
-3. 支持等待稳定后再返回
+3. 立即返回当前内容，不承担等待职责
 
 示例：
 
 ```bash
 agentmux capture 编码助手-A
 agentmux capture 编码助手-A --history 120
-agentmux capture 编码助手-A --stable 1500 --timeout 30s
-agentmux capture 编码助手-A --history 160 --stable 1500 --json
+agentmux capture 编码助手-A --history 160 --json
 ```
 
 ### 9.7 `attach`
@@ -500,7 +499,7 @@ tmux -S /tmp/agentmux.sock capture-pane -p -J -S -<N> -t <session_id>:0.0
 
 ### 12.3 稳定性检测
 
-不单独提供 `wait` 子命令，而把等待稳定并入 `capture`。
+单独提供 `wait` 子命令，等待职责不并入 `capture`。
 
 定义屏幕稳定：
 
@@ -690,7 +689,7 @@ skill 的重点：
 
 1. `agentmux list --json`
 2. `agentmux summon --template ... --json`
-3. `agentmux capture <instance> --stable 1500 --json`
+3. `agentmux capture <instance> --json`
 4. `agentmux prompt <instance> --text ... --json`
 5. 重复 `capture -> 判断 -> prompt`
 

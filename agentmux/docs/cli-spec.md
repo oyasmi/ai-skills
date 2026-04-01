@@ -395,28 +395,23 @@ agentmux capture <instance-name> [flags]
 参数：
 
 1. `--history <lines>`
-2. `--stable <ms>`
-3. `--timeout <duration>`
-4. `--json`
+2. `--json`
 
 行为：
 
 1. 默认抓当前屏幕可见文本
 2. `--history` 允许向上抓取更多历史行
-3. `--stable` 表示等待“看起来工作完成”后再抓取
-4. 对支持的 harness，可以用更直接的状态信号代替屏幕静止
-5. `--timeout` 控制最大等待时长
+3. 调用后立即返回当前屏幕内容，不承担等待职责
 
 说明：
 
 1. `capture` 的职责是读取终端输出文本
-2. 它不是专门的状态查询接口
+2. 它不是等待接口，也不是专门的状态查询接口
+3. 若需要等待 agent 完成工作，应使用 `wait`
 
 默认值建议：
 
 1. `history=0`
-2. `stable=0`
-3. `timeout=30s`
 
 JSON 示例：
 
@@ -425,7 +420,7 @@ JSON 示例：
   "ok": true,
   "command": "capture",
   "instance": "编码助手-A",
-  "status": "idle",
+  "status": "busy",
   "data": {
     "cursor_x": 0,
     "cursor_y": 23,
@@ -584,14 +579,14 @@ JSON 示例：
 
 ```bash
 agentmux summon --template 深度编码专家 --name 编码助手-A --cwd ~/work/project --prompt "先阅读项目并总结结构" --json
-agentmux capture 编码助手-A --stable 1500 --json
+agentmux capture 编码助手-A --json
 ```
 
 ### 6.2 复用实例继续工作
 
 ```bash
 agentmux summon --template 深度编码专家 --name 编码助手-A --json
-agentmux capture 编码助手-A --history 120 --stable 1500 --json
+agentmux capture 编码助手-A --history 120 --json
 agentmux prompt 编码助手-A --text "继续修复剩余测试" --enter --json
 ```
 

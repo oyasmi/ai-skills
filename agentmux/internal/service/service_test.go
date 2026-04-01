@@ -621,12 +621,12 @@ func TestCaptureStableMarksIdleAndReturnsContent(t *testing.T) {
 	svc.Config.Defaults.Capture.PollMS = 1
 	saveRunningInstance(t, registryPath, "worker", "live-session", instance.StatusBusy, true, time.Now().UTC().Add(-2*time.Second))
 
-	inst, snap, err := svc.Capture(ctx, "worker", 10, 1, 1000)
+	inst, snap, err := svc.Capture(ctx, "worker", 10)
 	if err != nil {
 		t.Fatalf("capture: %v", err)
 	}
-	if inst.Status != instance.StatusIdle {
-		t.Fatalf("expected idle, got %s", inst.Status)
+	if inst.Status != instance.StatusBusy {
+		t.Fatalf("expected busy, got %s", inst.Status)
 	}
 	if snap.Content != "screen output" {
 		t.Fatalf("unexpected content: %q", snap.Content)
@@ -636,6 +636,17 @@ func TestCaptureStableMarksIdleAndReturnsContent(t *testing.T) {
 	}
 	if tmux.captureCalls != 0 {
 		t.Fatalf("expected capture to avoid standalone capture-pane calls, got %d", tmux.captureCalls)
+	}
+	saved, err := instance.Load(registryPath)
+	if err != nil {
+		t.Fatalf("reload registry: %v", err)
+	}
+	current, ok := saved.Get("worker")
+	if !ok {
+		t.Fatalf("expected worker to remain in registry")
+	}
+	if current.Status != instance.StatusBusy {
+		t.Fatalf("expected capture to preserve busy status, got %s", current.Status)
 	}
 }
 

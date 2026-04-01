@@ -126,11 +126,11 @@ func TestRunE2ELifecycleJSON(t *testing.T) {
 		t.Fatalf("unexpected default harness type for codex template: %q", inst.HarnessType)
 	}
 
-	stdout, stderr, code = runJSON("capture", "e2e-agent", "--stable", "1", "--timeout", "1s", "--json")
+	stdout, stderr, code = runJSON("capture", "e2e-agent", "--json")
 	if code != 0 {
 		t.Fatalf("capture failed: code=%d stderr=%q", code, stderr)
 	}
-	if !strings.Contains(stdout, `"command": "capture"`) || !strings.Contains(stdout, `"status": "idle"`) || !strings.Contains(stdout, `"content": "ready\n\u003e "`) || !strings.Contains(stdout, `"pane_title": "✳ Ready"`) {
+	if !strings.Contains(stdout, `"command": "capture"`) || !strings.Contains(stdout, `"status": "busy"`) || !strings.Contains(stdout, `"content": "ready\n\u003e "`) || !strings.Contains(stdout, `"pane_title": "✳ Ready"`) {
 		t.Fatalf("unexpected capture stdout: %q", stdout)
 	}
 

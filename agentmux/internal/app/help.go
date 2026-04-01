@@ -10,7 +10,7 @@ usage:
   agentmux summon --template <template-name> [--name <instance-name>] [--cwd <path>] [--model <model>] [--command <shell-command>] [--system-prompt <text>] [--prompt <text>] [--json]
   agentmux inspect <instance-name> [--json]
   agentmux prompt <instance-name> [--text <text> | --stdin] [--key <key>] [--enter] [--json]
-  agentmux capture <instance-name> [--history <lines>] [--stable <duration-or-ms>] [--timeout <duration-or-ms>] [--json]
+  agentmux capture <instance-name> [--history <lines>] [--json]
   agentmux wait <instance-name> [--stable <duration-or-ms>] [--timeout <duration-or-ms>] [--json]
   agentmux attach [<instance-name>]
   agentmux halt <instance-name> [--json]
@@ -100,7 +100,7 @@ Examples:
   agentmux template list --json
   agentmux summon --template 深度编码专家 --name 编码助手-A --cwd ~/work/project
   agentmux summon --template 深度编码专家 --name 编码助手-A --prompt "先阅读项目并总结结构" --json
-  agentmux capture 编码助手-A --history 120 --stable 1500 --json
+  agentmux capture 编码助手-A --history 120 --json
   echo "继续修复剩余失败测试" | agentmux prompt 编码助手-A --stdin --enter --json
   agentmux prompt 编码助手-A --text "继续" --enter --json
 
@@ -271,23 +271,21 @@ Arguments:
 
 Flags:
   --history <lines>         Include N history lines above the visible screen
-  --stable <duration-or-ms> Wait until screen content is stable, for example 1500, 1500ms, or 1.5s
-  --timeout <duration-or-ms> Maximum wait time for stability, for example 30s or 500ms
   --json                    Return JSON output
   -h, --help                Show this help
 
 Output:
   Text mode prints captured screen text only.
-  JSON mode returns cursor position, screen size, stability, pane title, and content.
+  JSON mode returns cursor position, screen size, pane title, and content.
 
 Notes:
-  capture is for reading terminal output, not for querying status by itself.
-  For claude-code harnesses, --stable can return early when pane_title indicates idle.
+  capture always returns the current screen immediately.
+  capture is for reading terminal output, not for waiting or querying status by itself.
+  Use wait if you need to block until the agent appears done.
 
 Examples:
   agentmux capture 编码助手-A
   agentmux capture 编码助手-A --history 120 --json
-  agentmux capture 编码助手-A --history 120 --stable 1500 --timeout 30s --json
 `)
 }
 

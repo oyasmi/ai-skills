@@ -1,6 +1,6 @@
 ---
 name: agentmux
-description: Control, reuse, and inspect external terminal AI agent instances through the `agentmux` CLI. Use when you need to start or continue work inside an isolated tmux-backed instance, manage multiple coding agents or TUI agents, capture stable screen text, send the next prompt or key, or attach for human debugging. Trigger this skill when the user explicitly mentions `agentmux`, asks to orchestrate another terminal agent, or needs a reusable external coding/documentation/workflow assistant running in its own terminal session.
+description: Control, reuse, and inspect external terminal AI agent instances through the `agentmux` CLI. Use when you need to start or continue work inside an isolated tmux-backed instance, manage multiple coding agents or TUI agents, capture current screen text, send the next prompt or key, wait for work completion, or attach for human debugging. Trigger this skill when the user explicitly mentions `agentmux`, asks to orchestrate another terminal agent, or needs a reusable external coding/documentation/workflow assistant running in its own terminal session.
 ---
 
 # Agentmux
@@ -33,7 +33,7 @@ Typical loop:
 ```bash
 agentmux list --json
 agentmux summon --template 深度编码专家 --name 编码助手-A --json
-agentmux capture 编码助手-A --history 120 --stable 1500 --json
+agentmux capture 编码助手-A --history 120 --json
 agentmux prompt 编码助手-A --text "继续修复剩余失败测试" --enter --json
 ```
 
@@ -62,7 +62,7 @@ Use `list` for a multi-instance status overview, and `inspect` for one instance'
 Use `capture` when you need the visible screen text and recent history.
 
 ```bash
-agentmux capture 编码助手-A --history 120 --stable 1500 --timeout 30s --json
+agentmux capture 编码助手-A --history 120 --json
 ```
 
 Use `wait` when you only need the agent to appear done and want to avoid returning large text.
@@ -159,7 +159,7 @@ agentmux list --json
 
 Then decide whether to `summon` a new instance.
 
-When `capture_timeout` appears, reduce the wait or capture immediately without `--stable`.
+Use `wait` when you need blocking completion detection; use `capture` when you need the current screen immediately.
 
 When `process_not_running` or `status: exited` appears, decide whether the user wants a fresh instance or whether work should stop.
 

@@ -176,11 +176,11 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 		fmt.Fprintf(stdout, "%s\t%s\n", inst.Name, inst.Status)
 		return 0
 	case "capture":
-		name, history, stableMS, timeoutMS, err := parseCaptureArgs(args[1:])
+		name, history, err := parseCaptureArgs(args[1:])
 		if err != nil {
 			return writeErr(stdout, stderr, jsonMode, "capture", "", err)
 		}
-		inst, snap, err := svc.Capture(ctx, name, history, stableMS, timeoutMS)
+		inst, snap, err := svc.Capture(ctx, name, history)
 		if err != nil {
 			return writeErr(stdout, stderr, jsonMode, "capture", name, err)
 		}
@@ -191,7 +191,6 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 				"width":         snap.Width,
 				"height":        snap.Height,
 				"history_lines": snap.History,
-				"stable_for_ms": snap.StableForMS,
 				"pane_title":    snap.PaneTitle,
 				"content":       snap.Content,
 			}})

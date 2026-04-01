@@ -56,18 +56,18 @@ func TestParsePromptArgsRejectsTextWithStdin(t *testing.T) {
 	}
 }
 
-func TestParseCaptureArgsSupportsDurationAndRejectsNegative(t *testing.T) {
-	name, history, stableMS, timeoutMS, err := parseCaptureArgs([]string{"demo", "--history", "120", "--stable", "1.5s", "--timeout", "500ms"})
+func TestParseCaptureArgsRejectsLegacyWaitFlags(t *testing.T) {
+	name, history, err := parseCaptureArgs([]string{"demo", "--history", "120"})
 	if err != nil {
 		t.Fatalf("parseCaptureArgs: %v", err)
 	}
-	if name != "demo" || history != 120 || stableMS != 1500 || timeoutMS != 500 {
-		t.Fatalf("unexpected parsed values: %q %d %d %d", name, history, stableMS, timeoutMS)
+	if name != "demo" || history != 120 {
+		t.Fatalf("unexpected parsed values: %q %d", name, history)
 	}
 
-	_, _, _, _, err = parseCaptureArgs([]string{"demo", "--stable", "-1"})
-	if err == nil || !strings.Contains(err.Error(), "must be non-negative") {
-		t.Fatalf("expected negative stable to fail, got %v", err)
+	_, _, err = parseCaptureArgs([]string{"demo", "--stable", "1500"})
+	if err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {
+		t.Fatalf("expected legacy stable flag to fail, got %v", err)
 	}
 }
 

@@ -262,8 +262,44 @@ func (s Service) Prompt(ctx context.Context, name string, text string, key strin
 	return out, nil
 }
 
-func (s Service) Capture(ctx context.Context, name string, history, stableMS, timeoutMS int) (instance.Instance, capture.Snapshot, error) {
-	return s.captureLike(ctx, name, history, stableMS, timeoutMS, true)
+func (s Service) Capture(ctx context.Context, name string, history int) (instance.Instance, capture.Snapshot, error) {
+	inst, err := s.getInstanceForCapture(ctx, name)
+	if err != nil {
+		return instance.Instance{}, capture.Snapshot{}, err
+	}
+	if inst.Status == instance.StatusLost {
+		return instance.Instance{}, capture.Snapshot{}, apperr.New("session_not_found", fmt.Sprintf("session for %q not found", name))
+	}
+	h := history
+	if h < 0 {
+		h = s.Config.Defaults.Capture.History
+	}
+	snap, err := capture.Once(ctx, s.Tmux, target(inst.SessionID), h)
+	if err != nil {
+		return instance.Instance{}, capture.Snapshot{}, err
+	}
+	err = s.withRegistryReconcileOne(ctx, name, func(reg *instance.Registry) error {
+		current, ok := reg.Get(name)
+		if !ok {
+			return apperr.New("instance_not_found", fmt.Sprintf("instance %q not found", name))
+		}
+		inst = current
+		if snap.Dead {
+			reg.Delete(name)
+			inst.Status = instance.StatusExited
+			inst.PaneTitle = snap.PaneTitle
+			inst.UpdatedAt = time.Now()
+			return nil
+		}
+		inst.PaneTitle = snap.PaneTitle
+		inst.UpdatedAt = time.Now()
+		reg.Put(inst)
+		return nil
+	})
+	if err != nil {
+		return instance.Instance{}, capture.Snapshot{}, err
+	}
+	return inst, snap, nil
 }
 
 func (s Service) Wait(ctx context.Context, name string, stableMS, timeoutMS int) (instance.Instance, capture.Snapshot, error) {
@@ -276,10 +312,10 @@ func (s Service) Wait(ctx context.Context, name string, stableMS, timeoutMS int)
 	if inst.HarnessType == claudeCodeHarnessType {
 		return s.waitByPaneTitle(ctx, inst, timeoutMS)
 	}
-	return s.captureLike(ctx, name, -1, stableMS, timeoutMS, false)
+	return s.waitLike(ctx, name, -1, stableMS, timeoutMS, false)
 }
 
-func (s Service) captureLike(ctx context.Context, name string, history, stableMS, timeoutMS int, includeContent bool) (instance.Instance, capture.Snapshot, error) {
+func (s Service) waitLike(ctx context.Context, name string, history, stableMS, timeoutMS int, includeContent bool) (instance.Instance, capture.Snapshot, error) {
 	inst, err := s.getInstanceForCapture(ctx, name)
 	if err != nil {
 		return instance.Instance{}, capture.Snapshot{}, err

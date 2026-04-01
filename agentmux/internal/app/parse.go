@@ -92,38 +92,24 @@ func parsePromptArgs(args []string) (name, text, key string, enter, useStdin boo
 	return name, text, key, enter, useStdin, nil
 }
 
-func parseCaptureArgs(args []string) (name string, history, stableMS, timeoutMS int, err error) {
+func parseCaptureArgs(args []string) (name string, history int, err error) {
 	if len(args) == 0 {
-		return "", 0, 0, 0, apperr.New("invalid_arguments", "missing instance name\n\n"+captureHelp())
+		return "", 0, apperr.New("invalid_arguments", "missing instance name\n\n"+captureHelp())
 	}
 	name = args[0]
 	history = -1
 	fs := newFlagSet("capture")
-	var stableRaw string
-	var timeoutRaw string
 	fs.IntVar(&history, "history", -1, "")
-	fs.StringVar(&stableRaw, "stable", "", "")
-	fs.StringVar(&timeoutRaw, "timeout", "30s", "")
 	if err := fs.Parse(args[1:]); err != nil {
-		return "", 0, 0, 0, err
+		return "", 0, err
 	}
 	if fs.NArg() > 0 {
-		return "", 0, 0, 0, apperr.New("invalid_arguments", "capture does not accept positional arguments after instance name")
+		return "", 0, apperr.New("invalid_arguments", "capture does not accept positional arguments after instance name")
 	}
 	if history < -1 {
-		return "", 0, 0, 0, apperr.New("invalid_arguments", "invalid value for --history: must be -1 or a non-negative integer")
+		return "", 0, apperr.New("invalid_arguments", "invalid value for --history: must be -1 or a non-negative integer")
 	}
-	if stableRaw != "" {
-		stableMS, err = parseMillisOrDuration(stableRaw, "--stable")
-		if err != nil {
-			return "", 0, 0, 0, err
-		}
-	}
-	timeoutMS, err = parseMillisOrDuration(timeoutRaw, "--timeout")
-	if err != nil {
-		return "", 0, 0, 0, err
-	}
-	return name, history, stableMS, timeoutMS, nil
+	return name, history, nil
 }
 
 func parseWaitArgs(args []string) (name string, stableMS, timeoutMS int, err error) {
