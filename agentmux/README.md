@@ -21,7 +21,7 @@ Windows 不是首要目标。
 
 ## 近期优化
 
-1. `prompt` 新增 `--stdin`，适合长文本与多行文本输入，避免 shell 参数长度限制
+1. `prompt` 新增 `--stdin`，可从标准输入读取完整文本；对部分 TUI harness，超长输入仍更适合走文件引用模式
 2. 新增 `version` 命令，支持纯文本和 `--json` 输出，便于 Agent 判断功能版本
 3. 新增 `wait` 命令，用于等待 agent 完成当前工作，不返回内容，适合节省 token
 4. `wait --stable` 支持整数毫秒和 Go duration 两种格式，例如 `1500`、`1500ms`、`1.5s`
@@ -35,7 +35,7 @@ Windows 不是首要目标。
 命令职责上建议这样理解：
 
 1. `list` 用于批量查看实例及其当前状态
-2. `inspect` 用于查看单个实例当前状态和元数据
+2. `inspect --json` 用于查看单个实例当前状态、`pane_title` 和元数据
 3. `wait` 用于阻塞到 agent 看起来完成当前工作
 4. `capture` 用于读取终端输出文本
 
@@ -270,7 +270,7 @@ agentmux wait 编码助手-A --stable 1500 --timeout 30s --json
 
 ```bash
 agentmux prompt 编码助手-A --text "继续修复剩余失败测试" --enter --json
-printf '%s\n' "很长的多行文本" "第二行" | agentmux prompt 编码助手-A --stdin --enter --json
+printf '%s\n' "补充说明第一行" "补充说明第二行" | agentmux prompt 编码助手-A --stdin --enter --json
 ```
 
 发送特殊键：
@@ -318,7 +318,8 @@ agentmux version --json
 2. `--history` 控制向上抓取的历史行数
 3. 总是立即返回当前屏幕内容，不等待“工作完成”
 4. `capture` 的主要职责是读输出，不是做状态查询，也不是等待接口
-5. 若需要等待 agent 完成工作，应先执行 `wait`
+5. 若只想获知某个实例当前状态，应使用 `inspect --json`
+6. 若需要等待 agent 完成工作，应先执行 `wait`
 
 ### `wait`
 
@@ -327,7 +328,7 @@ agentmux version --json
 3. 若实例的 `harness_type` 支持 `pane_title` 信号（如 `claude-code`、`gemini-cli`），优先通过 `pane_title` 判定是否完成
 4. 其他 harness 则回退到“屏幕静止”这类通用启发式
 5. 支持 `pane_title` 信号的 harness 会走轻量 pane 元信息轮询，不再抓取屏幕文本
-6. 若只是想知道当前是 `idle` 还是 `busy`，应使用 `inspect` 或 `list`
+6. 若只是想知道当前是 `idle` 还是 `busy`，单实例使用 `inspect --json`，多实例使用 `list --json`
 
 ### `prompt`
 

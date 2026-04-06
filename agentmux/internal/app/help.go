@@ -101,7 +101,7 @@ Examples:
   agentmux summon --template 深度编码专家 --name 编码助手-A --cwd ~/work/project
   agentmux summon --template 深度编码专家 --name 编码助手-A --prompt "先阅读项目并总结结构" --json
   agentmux capture 编码助手-A --history 120 --json
-  echo "继续修复剩余失败测试" | agentmux prompt 编码助手-A --stdin --enter --json
+  echo "补充两行说明" | agentmux prompt 编码助手-A --stdin --enter --json
   agentmux prompt 编码助手-A --text "继续" --enter --json
 
 Learn more:
@@ -217,6 +217,7 @@ Output:
 
 Notes:
   inspect is the primary command for querying one instance's current status.
+  Use inspect --json for lightweight status checks.
   JSON inspect includes persisted fields such as harness_type and the latest observed pane_title.
 
 Examples:
@@ -251,10 +252,11 @@ Notes:
   --stdin reads all of stdin as one text payload.
   --stdin cannot be combined with --text.
   --enter affects text input from --text or --stdin.
+  For some TUI harnesses, especially Claude Code, very long stdin payloads may be less reliable than writing instructions to a file and sending a short follow-up prompt.
 
 Examples:
   agentmux prompt 编码助手-A --text "继续" --enter --json
-  echo "长文本" | agentmux prompt 编码助手-A --stdin --enter --json
+  echo "补充两行说明" | agentmux prompt 编码助手-A --stdin --enter --json
   agentmux prompt 编码助手-A --key C-c --json
 `)
 }
@@ -281,6 +283,7 @@ Output:
 Notes:
   capture always returns the current screen immediately.
   capture is for reading terminal output, not for waiting or querying status by itself.
+  Use inspect --json when you only need current status or pane title.
   Use wait if you need to block until the agent appears done.
 
 Examples:
