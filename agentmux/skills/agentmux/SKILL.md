@@ -13,7 +13,7 @@ Use `agentmux` instead of calling `tmux` directly. Treat `agentmux` as the only 
 2. Run `agentmux list --json` before assuming an instance does or does not exist.
 3. Run `agentmux template list --json` before choosing a template if the available templates are not already known.
 4. Use `summon` to create or reuse an instance. Do not call `tmux new-session` yourself.
-5. Use `inspect --json` when you need the current status or pane title for one instance.
+5. Use `inspect --json` when you need the current status for one instance.
 6. Use `capture` when you need current screen text. Do not read raw tmux output or terminal stdout directly.
 7. Use `wait` when you only need to block until the agent appears done and do not need returned content.
 8. Use `prompt` to send the next text or special key after you inspect current state.
@@ -96,7 +96,7 @@ Use `inspect` when you need metadata such as template, cwd, model, status, or se
 agentmux inspect 编码助手-A --json
 ```
 
-Use `list` for a multi-instance status overview, and use `inspect --json` for one instance's current status and pane title.
+Use `list` for a multi-instance status overview, and use `inspect --json` for one instance's current status.
 
 Use `capture` when you need the visible screen text and recent history.
 
@@ -178,7 +178,7 @@ Read these top-level JSON fields first:
 
 Read `data.content` as the primary screen text for `capture`.
 
-For `wait`, read `data.stable_for_ms` and `data.pane_title`; no content is returned.
+For `wait`, read `status` first. `data.stable_for_ms` is auxiliary wait metadata; no content is returned.
 
 Treat `reused: true` as confirmation that `summon` attached to an existing instance instead of creating a new one.
 
@@ -188,19 +188,13 @@ Treat `status: lost` as a broken or missing runtime that may require a fresh `su
 
 Treat `status: busy` as a recent-activity hint, not a permanent lock. It may automatically degrade back to `idle` if the configured busy TTL expires.
 
-Treat `data.pane_title` as a lightweight progress signal. For title-signaling harnesses, it is often the fastest way to distinguish idle from active work without reading the whole screen.
+Treat `status` from `inspect --json`, `list --json`, or `wait` as the authoritative state signal.
 
-For lightweight single-instance status checks, prefer reading `status` and `data.pane_title` from `inspect --json` instead of using `capture`.
+Do not depend on `pane_title` to determine state. It is optional observational metadata and may be useful for debugging, but state decisions should be based on `status`.
 
-For Claude Code, pane title markers are especially useful:
+For lightweight single-instance status checks, prefer reading `status` from `inspect --json` instead of using `capture`.
 
-1. `✳ ...` usually indicates idle.
-2. A leading braille spinner character usually indicates busy.
-3. The rest of the title often gives lightweight activity context.
-
-For Gemini CLI, `◇ ...` indicates idle and `✦ ...` indicates busy.
-
-Use `capture` when you need both the current screen text and the latest pane title in one response.
+Use `capture` when you need current screen text.
 
 ## Recovery
 
