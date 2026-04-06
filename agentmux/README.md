@@ -324,9 +324,9 @@ agentmux version --json
 
 1. 语义上表示“等待 agent 完成当前工作”，不返回屏幕内容
 2. 适合上层 Agent 只想阻塞等待、避免传回大段文本时使用
-3. 若实例的 `harness_type=claude-code`，优先通过 `pane_title` 判定是否完成
+3. 若实例的 `harness_type` 支持 `pane_title` 信号（如 `claude-code`、`gemini-cli`），优先通过 `pane_title` 判定是否完成
 4. 其他 harness 则回退到“屏幕静止”这类通用启发式
-5. `claude-code` 的 `wait` 走轻量 pane 元信息轮询，不再抓取屏幕文本
+5. 支持 `pane_title` 信号的 harness 会走轻量 pane 元信息轮询，不再抓取屏幕文本
 6. 若只是想知道当前是 `idle` 还是 `busy`，应使用 `inspect` 或 `list`
 
 ### `prompt`
@@ -340,7 +340,7 @@ agentmux version --json
 
 1. `prompt` 后实例会进入 `busy`
 2. 若后续执行 `wait`，状态会正常收敛回 `idle`
-3. 若实例的 `harness_type=claude-code`，还可以通过 `pane_title` 精确收敛到 `idle`
+3. 若实例的 `harness_type` 支持 `pane_title` 信号（如 `claude-code`、`gemini-cli`），还可以通过 `pane_title` 精确收敛到 `idle`
 4. 若调用方没有继续观测，`busy` 会在 `defaults.status.busy_ttl_ms` 到期后自动退化为 `idle`
 5. 若 `busy_ttl_ms: 0`，表示禁用自动退化，实例不会仅因 TTL 到期而自动回到 `idle`
 

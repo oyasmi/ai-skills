@@ -312,9 +312,9 @@ Output:
 Notes:
   wait means "wait until the agent seems done", not "wait until the terminal is visually static".
   Use inspect or list when you want to query status without blocking.
-  For claude-code harnesses, completion is inferred from pane_title idle markers.
+  For title-signaling harnesses such as claude-code and gemini-cli, completion is inferred from pane_title idle markers.
   For generic harnesses, completion falls back to screen stability heuristics.
-  The claude-code path polls pane metadata only and does not capture screen content.
+  The title-signaling path polls pane metadata only and does not capture screen content.
 
 Examples:
   agentmux wait 编码助手-A --stable 1500 --timeout 30s --json

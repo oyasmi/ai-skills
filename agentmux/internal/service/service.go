@@ -22,6 +22,7 @@ const (
 	haltSecondInterruptDelay = 500 * time.Millisecond
 	haltPollInterval         = 100 * time.Millisecond
 	claudeCodeHarnessType    = "claude-code"
+	geminiCLIHarnessType     = "gemini-cli"
 )
 
 type tmuxClient interface {
@@ -309,8 +310,8 @@ func (s Service) Wait(ctx context.Context, name string, stableMS, timeoutMS int)
 	}
 	// wait is semantically "wait until the agent appears done"; the detection
 	// strategy depends on what the configured harness can signal reliably.
-	if inst.HarnessType == claudeCodeHarnessType {
-		return s.waitByPaneTitle(ctx, inst, timeoutMS)
+	if titleState := titleStateFunc(inst.HarnessType); titleState != nil {
+		return s.waitByPaneTitle(ctx, inst, timeoutMS, titleStateIsIdle(titleState))
 	}
 	return s.waitLike(ctx, name, -1, stableMS, timeoutMS, false)
 }
@@ -328,8 +329,8 @@ func (s Service) waitLike(ctx context.Context, name string, history, stableMS, t
 		h = s.Config.Defaults.Capture.History
 	}
 	var titleIdle capture.TitleIdleFunc
-	if inst.HarnessType == claudeCodeHarnessType {
-		titleIdle = claudeCodeTitleIsIdle
+	if titleState := titleStateFunc(inst.HarnessType); titleState != nil {
+		titleIdle = titleStateIsIdle(titleState)
 	}
 	snap, err := capture.WaitStable(ctx, s.Tmux, target(inst.SessionID), h, stableMS, timeoutMS, s.Config.Defaults.Capture.PollMS, titleIdle)
 	if err != nil {
@@ -366,11 +367,11 @@ func (s Service) waitLike(ctx context.Context, name string, history, stableMS, t
 	return inst, snap, nil
 }
 
-func (s Service) waitByPaneTitle(ctx context.Context, inst instance.Instance, timeoutMS int) (instance.Instance, capture.Snapshot, error) {
+func (s Service) waitByPaneTitle(ctx context.Context, inst instance.Instance, timeoutMS int, titleIdle capture.TitleIdleFunc) (instance.Instance, capture.Snapshot, error) {
 	if inst.Status == instance.StatusLost {
 		return instance.Instance{}, capture.Snapshot{}, apperr.New("session_not_found", fmt.Sprintf("session for %q not found", inst.Name))
 	}
-	snap, err := capture.WaitUntilTitleIdle(ctx, s.Tmux, target(inst.SessionID), timeoutMS, s.Config.Defaults.Capture.PollMS, claudeCodeTitleIsIdle)
+	snap, err := capture.WaitUntilTitleIdle(ctx, s.Tmux, target(inst.SessionID), timeoutMS, s.Config.Defaults.Capture.PollMS, titleIdle)
 	if err != nil {
 		return instance.Instance{}, capture.Snapshot{}, err
 	}
@@ -595,13 +596,13 @@ func (s Service) reconcile(ctx context.Context, inst instance.Instance) instance
 	if info.Dead {
 		inst.Status = instance.StatusExited
 	} else if inst.Status == instance.StatusBusy {
-		if inst.HarnessType == claudeCodeHarnessType {
-			switch claudeCodeTitleState(info.PaneTitle) {
+		if titleState := titleStateFunc(inst.HarnessType); titleState != nil {
+			switch titleState(info.PaneTitle) {
 			case "idle":
 				inst.Status = instance.StatusIdle
 			case "busy", "unknown":
-				// claude-code should be governed by its title signal rather than
-				// time-based busy TTL degradation.
+				// Harnesses with title signals should be governed by pane title
+				// rather than time-based busy TTL degradation.
 			}
 		} else if s.busyExpired(inst) {
 			inst.Status = instance.StatusIdle
@@ -613,13 +614,30 @@ func (s Service) reconcile(ctx context.Context, inst instance.Instance) instance
 	return inst
 }
 
-func claudeCodeTitleIsIdle(paneTitle string) bool {
-	switch claudeCodeTitleState(paneTitle) {
-	case "idle":
-		return true
+type titleStateFn func(string) string
+
+func titleStateFunc(harnessType string) titleStateFn {
+	switch harnessType {
+	case claudeCodeHarnessType:
+		return claudeCodeTitleState
+	case geminiCLIHarnessType:
+		return geminiCLITitleState
 	default:
-		return false
+		return nil
 	}
+}
+
+func titleStateIsIdle(titleState titleStateFn) capture.TitleIdleFunc {
+	if titleState == nil {
+		return nil
+	}
+	return func(paneTitle string) bool {
+		return titleState(paneTitle) == "idle"
+	}
+}
+
+func claudeCodeTitleIsIdle(paneTitle string) bool {
+	return titleStateIsIdle(claudeCodeTitleState)(paneTitle)
 }
 
 func claudeCodeTitleState(paneTitle string) string {
@@ -627,7 +645,7 @@ func claudeCodeTitleState(paneTitle string) string {
 	if trimmed == "" {
 		return "unknown"
 	}
-	significant := firstClaudeCodeMarkerRunes(trimmed, 4)
+	significant := firstTitleMarkerRunes(trimmed, 4)
 	if len(significant) == 0 {
 		return "unknown"
 	}
@@ -644,7 +662,33 @@ func claudeCodeTitleState(paneTitle string) string {
 	return "unknown"
 }
 
-func firstClaudeCodeMarkerRunes(s string, limit int) []rune {
+func geminiCLITitleIsIdle(paneTitle string) bool {
+	return titleStateIsIdle(geminiCLITitleState)(paneTitle)
+}
+
+func geminiCLITitleState(paneTitle string) string {
+	trimmed := strings.TrimSpace(paneTitle)
+	if trimmed == "" {
+		return "unknown"
+	}
+	significant := firstTitleMarkerRunes(trimmed, 4)
+	if len(significant) == 0 {
+		return "unknown"
+	}
+	for _, r := range significant {
+		switch {
+		case r == '\u25c7':
+			return "idle"
+		case r == '\u2726':
+			return "busy"
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			return "unknown"
+		}
+	}
+	return "unknown"
+}
+
+func firstTitleMarkerRunes(s string, limit int) []rune {
 	if limit <= 0 {
 		return nil
 	}

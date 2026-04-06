@@ -170,8 +170,8 @@ harness_type: claude-code
 
 1. 可选，默认空字符串
 2. 用于声明模板对应的 agent harness 类型
-3. 当前内建识别 `claude-code`
-4. `claude-code` 会启用基于 tmux `pane_title` 的精确 idle 检测
+3. 当前内建识别 `claude-code`、`gemini-cli`
+4. 这两类 harness 会启用基于 tmux `pane_title` 的精确 idle 检测
 5. 其他值或空值不会报错，而是回退到通用的内容稳定性与 TTL 路径
 
 ### 4.6 `defaults.capture`
@@ -384,9 +384,9 @@ harness_type: claude-code
 
 1. 可选
 2. 若模板未设置，则继承 `defaults.harness_type`
-3. 当前内建识别 `claude-code`
-4. `claude-code` 启用基于 tmux `pane_title` 的精确 idle 检测
-5. 对 `wait` 命令，`claude-code` 可走轻量 pane 元信息轮询，不必反复 `capture-pane`
+3. 当前内建识别 `claude-code`、`gemini-cli`
+4. 这两类 harness 启用基于 tmux `pane_title` 的精确 idle 检测
+5. 对 `wait` 命令，这两类 harness 可走轻量 pane 元信息轮询，不必反复 `capture-pane`
 6. 未知值保留在实例元数据中，但行为回退到通用模式
 
 ---
