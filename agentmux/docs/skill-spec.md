@@ -116,7 +116,7 @@ agentmux capture 编码助手-A --history 120 --json
 ### 5.6 继续发送指令
 
 ```bash
-agentmux prompt 编码助手-A --text "继续修复剩余失败测试" --enter --json
+agentmux prompt 编码助手-A --text "继续修复剩余失败测试" --json
 ```
 
 ### 5.7 中断
@@ -170,7 +170,7 @@ SKILL.md 应给出一个明确、可复用的循环：
 2. 若实例不存在，则 `agentmux summon ... --json`
 3. `agentmux capture <instance> --json`
 4. 分析 `content`
-5. 若需要推进，则 `agentmux prompt <instance> --text ... --enter --json`
+5. 若需要推进，则 `agentmux prompt <instance> --text ... --json`
 6. 回到 `capture`
 
 这就是第一版 `agentmux` 的标准 orchestrator loop。

@@ -9,7 +9,7 @@ usage:
   agentmux list [--json]
   agentmux summon --template <template-name> [--name <instance-name>] [--cwd <path>] [--model <model>] [--command <shell-command>] [--system-prompt <text>] [--prompt <text>] [--json]
   agentmux inspect <instance-name> [--json]
-  agentmux prompt <instance-name> [--text <text> | --stdin] [--key <key>] [--enter] [--json]
+  agentmux prompt <instance-name> [--text <text> | --stdin] [--key <key>] [--json]
   agentmux capture <instance-name> [--history <lines>] [--json]
   agentmux wait <instance-name> [--stable <duration-or-ms>] [--timeout <duration-or-ms>] [--json]
   agentmux attach [<instance-name>]
@@ -101,8 +101,8 @@ Examples:
   agentmux summon --template 深度编码专家 --name 编码助手-A --cwd ~/work/project
   agentmux summon --template 深度编码专家 --name 编码助手-A --prompt "先阅读项目并总结结构" --json
   agentmux capture 编码助手-A --history 120 --json
-  echo "补充两行说明" | agentmux prompt 编码助手-A --stdin --enter --json
-  agentmux prompt 编码助手-A --text "继续" --enter --json
+  echo "补充两行说明" | agentmux prompt 编码助手-A --stdin --json
+  agentmux prompt 编码助手-A --text "继续" --json
 
 Learn more:
   agentmux help summon
@@ -240,7 +240,6 @@ Flags:
   --text <text>             Send text to the instance
   --stdin                   Read text from stdin
   --key <key>               Send one special key
-  --enter                   Send Enter after --text
   --json                    Return JSON output
   -h, --help                Show this help
 
@@ -251,12 +250,13 @@ Notes:
   Provide at least one of --text, --stdin, or --key.
   --stdin reads all of stdin as one text payload.
   --stdin cannot be combined with --text.
-  --enter affects text input from --text or --stdin.
+  --text and --stdin submit automatically after the text is pasted.
+  If text appears in the input box but execution does not start, follow up with --key Enter.
   For some TUI harnesses, especially Claude Code, very long stdin payloads may be less reliable than writing instructions to a file and sending a short follow-up prompt.
 
 Examples:
-  agentmux prompt 编码助手-A --text "继续" --enter --json
-  echo "补充两行说明" | agentmux prompt 编码助手-A --stdin --enter --json
+  agentmux prompt 编码助手-A --text "继续" --json
+  echo "补充两行说明" | agentmux prompt 编码助手-A --stdin --json
   agentmux prompt 编码助手-A --key C-c --json
 `)
 }

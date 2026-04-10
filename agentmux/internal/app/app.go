@@ -151,7 +151,7 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 		fmt.Fprintf(stdout, "last_activity_at: %s\n", inst.LastActivityAt.Format(time.RFC3339))
 		return 0
 	case "prompt":
-		name, text, key, enter, useStdin, err := parsePromptArgs(args[1:])
+		name, text, key, useStdin, err := parsePromptArgs(args[1:])
 		if err != nil {
 			return writeErr(stdout, stderr, jsonMode, "prompt", "", err)
 		}
@@ -161,7 +161,7 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 				return writeErr(stdout, stderr, jsonMode, "prompt", name, err)
 			}
 		}
-		inst, err := svc.Prompt(ctx, name, text, key, enter)
+		inst, err := svc.Prompt(ctx, name, text, key)
 		if err != nil {
 			return writeErr(stdout, stderr, jsonMode, "prompt", name, err)
 		}
@@ -169,7 +169,6 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 			_ = output.WriteJSON(stdout, output.Success{OK: true, Command: "prompt", Instance: inst.Name, Status: string(inst.Status), Data: map[string]any{
 				"sent_text": text != "",
 				"sent_key":  key,
-				"enter":     enter,
 			}})
 			return 0
 		}

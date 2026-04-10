@@ -354,7 +354,7 @@ agentmux inspect 编码助手-A --json
 agentmux prompt 编码助手-A --text "继续"
 agentmux prompt 编码助手-A --key Enter
 agentmux prompt 编码助手-A --key C-c
-agentmux prompt 编码助手-A --text "继续修复测试" --enter
+agentmux prompt 编码助手-A --text "继续修复测试"
 ```
 
 ### 9.6 `capture`

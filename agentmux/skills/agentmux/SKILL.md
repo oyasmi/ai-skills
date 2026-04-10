@@ -40,7 +40,7 @@ Typical loop:
 agentmux list --json
 agentmux summon --template 深度编码专家 --name 编码助手-A --json
 agentmux capture 编码助手-A --history 120 --json
-agentmux prompt 编码助手-A --text "继续修复剩余失败测试" --enter --json
+agentmux prompt 编码助手-A --text "继续修复剩余失败测试" --json
 ```
 
 First-prompt decision:
@@ -58,7 +58,7 @@ agentmux capture wiki审核-A --history 10 --json
 If capture shows an upgrade prompt such as `A new version is available ... [Y/n]`, dismiss it first:
 
 ```bash
-agentmux prompt wiki审核-A --text "n" --enter --json
+agentmux prompt wiki审核-A --text "n" --json
 ```
 
 If Claude Code is not yet ready to execute a long first task, prefer a follow-up prompt after readiness is visible in the captured content.
@@ -66,7 +66,7 @@ If Claude Code is not yet ready to execute a long first task, prefer a follow-up
 For long instructions to Claude Code, prefer a file-based handoff:
 
 ```bash
-agentmux prompt wiki审核-A --text "请阅读 /path/to/task.md 并按要求执行" --enter --json
+agentmux prompt wiki审核-A --text "请阅读 /path/to/task.md 并按要求执行" --json
 ```
 
 Avoid treating long `--stdin` payloads as reliable for Claude Code. They may appear in the input buffer without actually starting execution.
@@ -114,13 +114,13 @@ agentmux wait 编码助手-A --stable 1500 --timeout 30s --json
 Use `prompt` when the instance already exists and you want to separate control from creation.
 
 ```bash
-agentmux prompt 编码助手-A --text "继续" --enter --json
-echo "短的多行补充说明" | agentmux prompt 编码助手-A --stdin --enter --json
+agentmux prompt 编码助手-A --text "继续" --json
+echo "短的多行补充说明" | agentmux prompt 编码助手-A --stdin --json
 agentmux prompt 编码助手-A --key Enter --json
 agentmux prompt 编码助手-A --key C-c --json
 ```
 
-If pasted text is visible in the harness input area but execution does not begin, send one explicit `Enter`. Prefer `--enter` on the original text send when you already suspect this may be needed; otherwise follow up with `agentmux prompt <name> --key Enter --json`.
+If pasted text is visible in the harness input area but execution does not begin, send one explicit `Enter` with `agentmux prompt <name> --key Enter --json`.
 
 Use `halt` when the instance should stop. By default it attempts graceful interruption first.
 

@@ -21,6 +21,7 @@ import (
 const (
 	haltSecondInterruptDelay = 500 * time.Millisecond
 	haltPollInterval         = 100 * time.Millisecond
+	promptSubmitDelay        = 150 * time.Millisecond
 	claudeCodeHarnessType    = "claude-code"
 	codexCLIHarnessType      = "codex-cli"
 	geminiCLIHarnessType     = "gemini-cli"
@@ -218,7 +219,7 @@ func (s Service) Summon(ctx context.Context, in SummonInput) (SummonResult, erro
 	return res, nil
 }
 
-func (s Service) Prompt(ctx context.Context, name string, text string, key string, enter bool) (instance.Instance, error) {
+func (s Service) Prompt(ctx context.Context, name string, text string, key string) (instance.Instance, error) {
 	if strings.TrimSpace(text) == "" && strings.TrimSpace(key) == "" {
 		return instance.Instance{}, apperr.New("invalid_arguments", "prompt requires --text or --key")
 	}
@@ -235,11 +236,6 @@ func (s Service) Prompt(ctx context.Context, name string, text string, key strin
 		if strings.TrimSpace(text) != "" {
 			if err := s.sendPrompt(ctx, &inst, text, !inst.FirstPromptSent); err != nil {
 				return err
-			}
-			if enter {
-				if err := s.Tmux.SendKeys(ctx, target(inst.SessionID), "Enter"); err != nil {
-					return err
-				}
 			}
 		}
 		if key != "" {
@@ -566,6 +562,9 @@ func (s Service) sendPrompt(ctx context.Context, inst *instance.Instance, text s
 	if err := s.Tmux.PasteBuffer(ctx, target(inst.SessionID)); err != nil {
 		return err
 	}
+	if err := waitForPromptSubmit(ctx); err != nil {
+		return err
+	}
 	if err := s.Tmux.SendKeys(ctx, target(inst.SessionID), "Enter"); err != nil {
 		return err
 	}
@@ -574,6 +573,17 @@ func (s Service) sendPrompt(ctx context.Context, inst *instance.Instance, text s
 	inst.UpdatedAt = time.Now()
 	inst.LastActivityAt = inst.UpdatedAt
 	return nil
+}
+
+func waitForPromptSubmit(ctx context.Context) error {
+	timer := time.NewTimer(promptSubmitDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (s Service) reconcile(ctx context.Context, inst instance.Instance) instance.Instance {

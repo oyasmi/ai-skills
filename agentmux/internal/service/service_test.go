@@ -820,7 +820,7 @@ func TestInspectReconcilesOnlyTargetInstance(t *testing.T) {
 	}
 }
 
-func TestPromptSendsTextAndEnter(t *testing.T) {
+func TestPromptSendsTextAndSubmit(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -828,7 +828,7 @@ func TestPromptSendsTextAndEnter(t *testing.T) {
 	svc, registryPath := newTestService(t, tmux)
 	saveRunningInstance(t, registryPath, "worker", "live-session", instance.StatusIdle, true, time.Now().UTC())
 
-	inst, err := svc.Prompt(ctx, "worker", "fix it", "", true)
+	inst, err := svc.Prompt(ctx, "worker", "fix it", "")
 	if err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
@@ -838,7 +838,7 @@ func TestPromptSendsTextAndEnter(t *testing.T) {
 	if len(tmux.loads) != 1 || tmux.loads[0] != "fix it" {
 		t.Fatalf("unexpected load buffer calls: %v", tmux.loads)
 	}
-	if got := strings.Join(tmux.sendKeys, ","); got != "Enter,Enter" {
+	if got := strings.Join(tmux.sendKeys, ","); got != "Enter" {
 		t.Fatalf("unexpected send keys: %s", got)
 	}
 }
@@ -850,7 +850,7 @@ func TestPromptRejectsInvalidKey(t *testing.T) {
 	svc, registryPath := newTestService(t, &fakeTmux{sessions: map[string]bool{"live-session": true}})
 	saveRunningInstance(t, registryPath, "worker", "live-session", instance.StatusIdle, true, time.Now().UTC())
 
-	_, err := svc.Prompt(ctx, "worker", "", "BadKey", false)
+	_, err := svc.Prompt(ctx, "worker", "", "BadKey")
 	if err == nil || !strings.Contains(err.Error(), "unsupported key") {
 		t.Fatalf("unexpected error: %v", err)
 	}

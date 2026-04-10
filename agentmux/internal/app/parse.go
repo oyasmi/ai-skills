@@ -70,26 +70,25 @@ func parseSummonArgs(args []string) (service.SummonInput, error) {
 	return in, nil
 }
 
-func parsePromptArgs(args []string) (name, text, key string, enter, useStdin bool, err error) {
+func parsePromptArgs(args []string) (name, text, key string, useStdin bool, err error) {
 	if len(args) == 0 {
-		return "", "", "", false, false, apperr.New("invalid_arguments", "missing instance name\n\n"+promptHelp())
+		return "", "", "", false, apperr.New("invalid_arguments", "missing instance name\n\n"+promptHelp())
 	}
 	name = args[0]
 	fs := newFlagSet("prompt")
 	fs.StringVar(&text, "text", "", "")
 	fs.StringVar(&key, "key", "", "")
-	fs.BoolVar(&enter, "enter", false, "")
 	fs.BoolVar(&useStdin, "stdin", false, "")
 	if err := fs.Parse(args[1:]); err != nil {
-		return "", "", "", false, false, err
+		return "", "", "", false, err
 	}
 	if fs.NArg() > 0 {
-		return "", "", "", false, false, apperr.New("invalid_arguments", "prompt does not accept positional arguments after instance name")
+		return "", "", "", false, apperr.New("invalid_arguments", "prompt does not accept positional arguments after instance name")
 	}
 	if useStdin && text != "" {
-		return "", "", "", false, false, apperr.New("invalid_arguments", "--stdin cannot be used with --text")
+		return "", "", "", false, apperr.New("invalid_arguments", "--stdin cannot be used with --text")
 	}
-	return name, text, key, enter, useStdin, nil
+	return name, text, key, useStdin, nil
 }
 
 func parseCaptureArgs(args []string) (name string, history int, err error) {

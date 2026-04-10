@@ -270,8 +270,8 @@ agentmux wait 编码助手-A --stable 1500 --timeout 30s --json
 继续发送消息：
 
 ```bash
-agentmux prompt 编码助手-A --text "继续修复剩余失败测试" --enter --json
-printf '%s\n' "补充说明第一行" "补充说明第二行" | agentmux prompt 编码助手-A --stdin --enter --json
+agentmux prompt 编码助手-A --text "继续修复剩余失败测试" --json
+printf '%s\n' "补充说明第一行" "补充说明第二行" | agentmux prompt 编码助手-A --stdin --json
 ```
 
 发送特殊键：
@@ -336,7 +336,8 @@ agentmux version --json
 1. `--text` 发送文本
 2. `--stdin` 从标准输入读取完整文本
 3. `--key` 发送白名单特殊键
-4. `--enter` 为 `--text` 或 `--stdin` 发送后额外补一个 `Enter`
+4. `--text` 与 `--stdin` 会在粘贴文本后自动提交
+5. 若文本已进入输入框但未开始执行，可补发 `--key Enter`
 
 ### `busy` 状态
 

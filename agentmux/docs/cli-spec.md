@@ -335,14 +335,13 @@ agentmux prompt <instance-name> [flags]
 
 1. `--text <text>`
 2. `--key <key-name>`
-3. `--enter`
-4. `--json`
+3. `--json`
 
 约束：
 
 1. `--text` 与 `--key` 至少提供一个
 2. 第一版 `--key` 一次只接受一个键
-3. `--enter` 只对 `--text` 生效
+3. `--text` 发送后自动提交
 
 支持的键名：
 
@@ -357,7 +356,7 @@ agentmux prompt <instance-name> [flags]
 
 ```bash
 agentmux prompt 编码助手-A --text "继续"
-agentmux prompt 编码助手-A --text "继续修复测试" --enter
+agentmux prompt 编码助手-A --text "继续修复测试"
 agentmux prompt 编码助手-A --key Enter
 agentmux prompt 编码助手-A --key C-c
 ```
@@ -372,8 +371,7 @@ JSON 示例：
   "status": "busy",
   "data": {
     "sent_text": true,
-    "sent_key": "",
-    "enter": true
+    "sent_key": ""
   }
 }
 ```
@@ -587,7 +585,7 @@ agentmux capture 编码助手-A --json
 ```bash
 agentmux summon --template 深度编码专家 --name 编码助手-A --json
 agentmux capture 编码助手-A --history 120 --json
-agentmux prompt 编码助手-A --text "继续修复剩余测试" --enter --json
+agentmux prompt 编码助手-A --text "继续修复剩余测试" --json
 ```
 
 ### 6.3 中断当前任务

@@ -40,18 +40,25 @@ func TestRunTemplateListStillWorks(t *testing.T) {
 }
 
 func TestParsePromptArgsSupportsStdin(t *testing.T) {
-	name, text, key, enter, useStdin, err := parsePromptArgs([]string{"demo", "--stdin", "--enter"})
+	name, text, key, useStdin, err := parsePromptArgs([]string{"demo", "--stdin"})
 	if err != nil {
 		t.Fatalf("parsePromptArgs: %v", err)
 	}
-	if name != "demo" || text != "" || key != "" || !enter || !useStdin {
-		t.Fatalf("unexpected parsed values: %q %q %q %v %v", name, text, key, enter, useStdin)
+	if name != "demo" || text != "" || key != "" || !useStdin {
+		t.Fatalf("unexpected parsed values: %q %q %q %v", name, text, key, useStdin)
 	}
 }
 
 func TestParsePromptArgsRejectsTextWithStdin(t *testing.T) {
-	_, _, _, _, _, err := parsePromptArgs([]string{"demo", "--stdin", "--text", "hello"})
+	_, _, _, _, err := parsePromptArgs([]string{"demo", "--stdin", "--text", "hello"})
 	if err == nil || !strings.Contains(err.Error(), "--stdin cannot be used with --text") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParsePromptArgsRejectsRemovedEnterFlag(t *testing.T) {
+	_, _, _, _, err := parsePromptArgs([]string{"demo", "--enter"})
+	if err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -enter") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
