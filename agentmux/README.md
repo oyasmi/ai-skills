@@ -29,7 +29,7 @@ Windows 不是首要目标。
 6. `busy` 状态新增 TTL 自动退化，默认 `30s`，避免发送 prompt 后因缺少后续观测而永久停留在 `busy`
 7. `instances.json` 现在使用文件锁和原子替换写入，降低多进程并发编排时的数据丢失和文件损坏风险
 8. `capture`/`wait` 内部减少了一次重复的注册表事务，避免不必要的注册表读改写
-9. 新增 `harness_type` 驱动的状态检测，`claude-code` 可用 `pane_title` 精确判断 idle，`wait` 可提前返回
+9. 新增 `harness_type` 驱动的状态检测，`claude-code`、`codex-cli`、`gemini-cli` 可用 `pane_title` 精确判断 idle，`wait` 可提前返回
 10. `inspect`、`list`、`capture`、`wait` 的 JSON 输出现在包含 `harness_type` 或 `pane_title` 等状态观测字段
 
 命令职责上建议这样理解：
@@ -212,6 +212,7 @@ templates:
     description: 面向复杂编码与调试任务的通用专家
     command: codex --model $MODEL
     model: openai/gpt-5.4
+    harness_type: codex-cli
     system_prompt: 你是深度编码专家，优先阅读上下文、定位根因、直接给出可执行修改。
     prompt: ""
     cwd: .
@@ -325,7 +326,7 @@ agentmux version --json
 
 1. 语义上表示“等待 agent 完成当前工作”，不返回屏幕内容
 2. 适合上层 Agent 只想阻塞等待、避免传回大段文本时使用
-3. 若实例的 `harness_type` 支持 `pane_title` 信号（如 `claude-code`、`gemini-cli`），优先通过 `pane_title` 判定是否完成
+3. 若实例的 `harness_type` 支持 `pane_title` 信号（如 `claude-code`、`codex-cli`、`gemini-cli`），优先通过 `pane_title` 判定是否完成
 4. 其他 harness 则回退到“屏幕静止”这类通用启发式
 5. 支持 `pane_title` 信号的 harness 会走轻量 pane 元信息轮询，不再抓取屏幕文本
 6. 若只是想知道当前是 `idle` 还是 `busy`，单实例使用 `inspect --json`，多实例使用 `list --json`
@@ -341,7 +342,7 @@ agentmux version --json
 
 1. `prompt` 后实例会进入 `busy`
 2. 若后续执行 `wait`，状态会正常收敛回 `idle`
-3. 若实例的 `harness_type` 支持 `pane_title` 信号（如 `claude-code`、`gemini-cli`），还可以通过 `pane_title` 精确收敛到 `idle`
+3. 若实例的 `harness_type` 支持 `pane_title` 信号（如 `claude-code`、`codex-cli`、`gemini-cli`），还可以通过 `pane_title` 精确收敛到 `idle`
 4. 若调用方没有继续观测，`busy` 会在 `defaults.status.busy_ttl_ms` 到期后自动退化为 `idle`
 5. 若 `busy_ttl_ms: 0`，表示禁用自动退化，实例不会仅因 TTL 到期而自动回到 `idle`
 

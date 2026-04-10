@@ -22,6 +22,7 @@ const (
 	haltSecondInterruptDelay = 500 * time.Millisecond
 	haltPollInterval         = 100 * time.Millisecond
 	claudeCodeHarnessType    = "claude-code"
+	codexCLIHarnessType      = "codex-cli"
 	geminiCLIHarnessType     = "gemini-cli"
 )
 
@@ -620,6 +621,8 @@ func titleStateFunc(harnessType string) titleStateFn {
 	switch harnessType {
 	case claudeCodeHarnessType:
 		return claudeCodeTitleState
+	case codexCLIHarnessType:
+		return codexCLITitleState
 	case geminiCLIHarnessType:
 		return geminiCLITitleState
 	default:
@@ -664,6 +667,25 @@ func claudeCodeTitleState(paneTitle string) string {
 
 func geminiCLITitleIsIdle(paneTitle string) bool {
 	return titleStateIsIdle(geminiCLITitleState)(paneTitle)
+}
+
+func codexCLITitleIsIdle(paneTitle string) bool {
+	return titleStateIsIdle(codexCLITitleState)(paneTitle)
+}
+
+func codexCLITitleState(paneTitle string) string {
+	trimmed := strings.TrimSpace(paneTitle)
+	if trimmed == "" {
+		return "unknown"
+	}
+	significant := firstTitleMarkerRunes(trimmed, 1)
+	if len(significant) == 0 {
+		return "unknown"
+	}
+	if r := significant[0]; r >= '\u2800' && r <= '\u28ff' {
+		return "busy"
+	}
+	return "idle"
 }
 
 func geminiCLITitleState(paneTitle string) string {

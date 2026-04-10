@@ -411,6 +411,80 @@ func TestInspectClaudeCodeIgnoresExpiredTTLWhenPaneTitleIsUnknown(t *testing.T) 
 	}
 }
 
+func TestInspectCodexCLIBusyTurnsIdleWhenPaneTitleShowsText(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	svc, registryPath := newTestService(t, &fakeTmux{
+		sessions: map[string]bool{"live-session": true},
+		paneInfo: tmuxctl.PaneInfo{PaneTitle: "Ready 123"},
+	})
+	now := time.Now().UTC()
+	reg := instance.Registry{
+		Instances: map[string]instance.Instance{
+			"worker": {
+				Name:           "worker",
+				SessionID:      "live-session",
+				Status:         instance.StatusBusy,
+				HarnessType:    "codex-cli",
+				LastActivityAt: now.Add(-2 * time.Second),
+				UpdatedAt:      now,
+			},
+		},
+	}
+	if err := instance.Save(registryPath, reg); err != nil {
+		t.Fatalf("save registry: %v", err)
+	}
+
+	inst, err := svc.Inspect(ctx, "worker")
+	if err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
+	if inst.Status != instance.StatusIdle {
+		t.Fatalf("expected idle from pane title, got %s", inst.Status)
+	}
+	if inst.PaneTitle != "Ready 123" {
+		t.Fatalf("expected pane title to persist, got %q", inst.PaneTitle)
+	}
+}
+
+func TestInspectCodexCLIBusyStaysBusyWhenPaneTitleShowsSpinner(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	svc, registryPath := newTestService(t, &fakeTmux{
+		sessions: map[string]bool{"live-session": true},
+		paneInfo: tmuxctl.PaneInfo{PaneTitle: "⠋ Thinking"},
+	})
+	now := time.Now().UTC()
+	reg := instance.Registry{
+		Instances: map[string]instance.Instance{
+			"worker": {
+				Name:           "worker",
+				SessionID:      "live-session",
+				Status:         instance.StatusBusy,
+				HarnessType:    "codex-cli",
+				LastActivityAt: now.Add(-2 * time.Minute),
+				UpdatedAt:      now,
+			},
+		},
+	}
+	if err := instance.Save(registryPath, reg); err != nil {
+		t.Fatalf("save registry: %v", err)
+	}
+
+	inst, err := svc.Inspect(ctx, "worker")
+	if err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
+	if inst.Status != instance.StatusBusy {
+		t.Fatalf("expected busy despite expired ttl, got %s", inst.Status)
+	}
+	if inst.PaneTitle != "⠋ Thinking" {
+		t.Fatalf("expected pane title to persist, got %q", inst.PaneTitle)
+	}
+}
+
 func TestInspectGeminiCLIBusyTurnsIdleWhenPaneTitleShowsIdle(t *testing.T) {
 	t.Parallel()
 
@@ -608,6 +682,22 @@ func TestGeminiCLITitleIsIdleSupportsWrappedMarker(t *testing.T) {
 
 	if !geminiCLITitleIsIdle(" [ ◇ ] Ready") {
 		t.Fatalf("expected wrapped idle marker to be accepted")
+	}
+}
+
+func TestCodexCLITitleIsIdleSupportsWrappedText(t *testing.T) {
+	t.Parallel()
+
+	if !codexCLITitleIsIdle(" [ Ready42 ]") {
+		t.Fatalf("expected wrapped text to be treated as idle")
+	}
+}
+
+func TestCodexCLITitleIsIdleRejectsSpinnerMarker(t *testing.T) {
+	t.Parallel()
+
+	if codexCLITitleIsIdle(" (⠋) Thinking") {
+		t.Fatalf("expected spinner marker to stay non-idle")
 	}
 }
 
@@ -915,6 +1005,47 @@ func TestWaitGeminiCLIReturnsEarlyFromPaneTitle(t *testing.T) {
 	}
 	if tmux.captureCalls != 0 {
 		t.Fatalf("expected gemini-cli wait to avoid capture-pane, got %d calls", tmux.captureCalls)
+	}
+}
+
+func TestWaitCodexCLIReturnsEarlyFromPaneTitle(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	tmux := &fakeTmux{
+		sessions:       map[string]bool{"live-session": true},
+		captureContent: "screen output",
+		paneInfo:       tmuxctl.PaneInfo{Width: 80, Height: 24, PaneTitle: "Ready"},
+	}
+	svc, registryPath := newTestService(t, tmux)
+	saveRunningInstance(t, registryPath, "worker", "live-session", instance.StatusBusy, true, time.Now().UTC())
+
+	reg, err := instance.Load(registryPath)
+	if err != nil {
+		t.Fatalf("load registry: %v", err)
+	}
+	inst := reg.Instances["worker"]
+	inst.HarnessType = "codex-cli"
+	reg.Put(inst)
+	if err := instance.Save(registryPath, reg); err != nil {
+		t.Fatalf("save registry: %v", err)
+	}
+
+	inst, snap, err := svc.Wait(ctx, "worker", 1500, 1000)
+	if err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if inst.Status != instance.StatusIdle {
+		t.Fatalf("expected idle, got %s", inst.Status)
+	}
+	if snap.PaneTitle != "Ready" {
+		t.Fatalf("expected pane title in snapshot, got %q", snap.PaneTitle)
+	}
+	if snap.StableForMS != 0 {
+		t.Fatalf("expected early return before stability accounting, got %d", snap.StableForMS)
+	}
+	if tmux.captureCalls != 0 {
+		t.Fatalf("expected codex-cli wait to avoid capture-pane, got %d calls", tmux.captureCalls)
 	}
 }
 

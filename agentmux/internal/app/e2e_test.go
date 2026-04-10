@@ -122,7 +122,7 @@ func TestRunE2ELifecycleJSON(t *testing.T) {
 	if inst.Status != instance.StatusBusy || !inst.FirstPromptSent {
 		t.Fatalf("unexpected registry instance after summon: %+v", inst)
 	}
-	if inst.HarnessType != "" {
+	if inst.HarnessType != "codex-cli" {
 		t.Fatalf("unexpected default harness type for codex template: %q", inst.HarnessType)
 	}
 
@@ -130,7 +130,7 @@ func TestRunE2ELifecycleJSON(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("capture failed: code=%d stderr=%q", code, stderr)
 	}
-	if !strings.Contains(stdout, `"command": "capture"`) || !strings.Contains(stdout, `"status": "busy"`) || !strings.Contains(stdout, `"content": "ready\n\u003e "`) || !strings.Contains(stdout, `"pane_title": "✳ Ready"`) {
+	if !strings.Contains(stdout, `"command": "capture"`) || !strings.Contains(stdout, `"status": "idle"`) || !strings.Contains(stdout, `"content": "ready\n\u003e "`) || !strings.Contains(stdout, `"pane_title": "✳ Ready"`) {
 		t.Fatalf("unexpected capture stdout: %q", stdout)
 	}
 

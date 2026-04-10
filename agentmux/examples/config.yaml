@@ -21,6 +21,7 @@ templates:
     description: 面向复杂编码、调试、重构和测试修复任务的通用专家
     command: codex --model $MODEL
     model: openai/gpt-5.4
+    harness_type: codex-cli
     system_prompt: 你是深度编码专家，先建立代码上下文，再直接推进修改、验证和收尾。
     prompt: ""
     cwd: .
@@ -29,6 +30,7 @@ templates:
     description: 面向需求梳理、设计说明、使用文档和交付说明的专家
     command: codex --model $MODEL
     model: openai/gpt-5.4
+    harness_type: codex-cli
     system_prompt: 你负责生成结构稳定、边界清楚、可执行的技术文档。
     prompt: ""
     cwd: .
@@ -46,6 +48,7 @@ templates:
     description: 面向轻量命令执行和终端观察的通用模板
     command: codex --model $MODEL
     model: openai/gpt-5.4
+    harness_type: codex-cli
     system_prompt: ""
     prompt: ""
     cwd: .
