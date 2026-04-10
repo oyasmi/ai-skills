@@ -30,8 +30,9 @@ Use `agentmux` instead of calling `tmux` directly. Treat `agentmux` as the only 
 3. Summon the target instance by template and optional name.
 4. If this is a fresh TUI-style harness launch, confirm it is ready before sending an important first prompt.
 5. Send the next instruction or key.
-6. Repeat `capture|wait -> decide -> prompt` until the task reaches a stopping point.
-7. After the agent reports completion, read the expected output files and verify the deliverable.
+6. If the prompt text appears to be buffered on screen but the agent does not start working, send one explicit `Enter` before assuming it is stuck.
+7. Repeat `capture|wait -> decide -> prompt` until the task reaches a stopping point.
+8. After the agent reports completion, read the expected output files and verify the deliverable.
 
 Typical loop:
 
@@ -115,8 +116,11 @@ Use `prompt` when the instance already exists and you want to separate control f
 ```bash
 agentmux prompt 编码助手-A --text "继续" --enter --json
 echo "短的多行补充说明" | agentmux prompt 编码助手-A --stdin --enter --json
+agentmux prompt 编码助手-A --key Enter --json
 agentmux prompt 编码助手-A --key C-c --json
 ```
+
+If pasted text is visible in the harness input area but execution does not begin, send one explicit `Enter`. Prefer `--enter` on the original text send when you already suspect this may be needed; otherwise follow up with `agentmux prompt <name> --key Enter --json`.
 
 Use `halt` when the instance should stop. By default it attempts graceful interruption first.
 
@@ -149,6 +153,8 @@ Prefer `summon --prompt` only when the harness is already known-ready or the fir
 Prefer separate `summon -> capture -> prompt` for fresh Claude Code sessions and other TUI harnesses that may need startup time or may ask an initial question before accepting the real task.
 
 Prefer `prompt --stdin` for short to medium multi-line text only. For long task descriptions, especially with Claude Code, prefer the file-based pattern instead of pushing the whole payload through stdin.
+
+If the text prompt seems to have landed in the input box but no work starts, prefer sending a single `Enter` before retrying or interrupting the instance.
 
 Prefer `wait` over `capture` when the only goal is to block until the instance appears done.
 
