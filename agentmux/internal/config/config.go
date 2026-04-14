@@ -238,9 +238,7 @@ func (c Config) Validate() error {
 		if strings.TrimSpace(tpl.Command) == "" {
 			return apperr.New("config_invalid", fmt.Sprintf("template %q command must not be empty", name))
 		}
-		if m := strings.TrimSpace(tpl.Model); m != "" && !strings.Contains(m, "/") {
-			return apperr.New("config_invalid", fmt.Sprintf("template %q model should be in provider/name format", name))
-		}
+
 	}
 	return nil
 }
