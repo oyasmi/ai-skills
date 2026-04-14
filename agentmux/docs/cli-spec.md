@@ -54,8 +54,8 @@ agentmux <subcommand> [flags]
 
 例如：
 
-1. `深度编码专家`
-2. `工作项管理助手`
+1. `claude-code`
+2. `codex-cli`
 3. `编码助手-A`
 
 ---
@@ -130,7 +130,7 @@ JSON 示例：
   "data": {
     "templates": [
       {
-        "name": "深度编码专家",
+        "name": "claude-code",
         "model": "openai/gpt-5.4",
         "cwd": ".",
         "description": "面向复杂编码与调试任务的通用专家"
@@ -178,7 +178,7 @@ JSON 示例：
     "instances": [
       {
         "name": "编码助手-A",
-        "template": "深度编码专家",
+        "template": "claude-code",
         "status": "idle",
         "model": "openai/gpt-5.4",
         "cwd": "/Users/me/work/project",
@@ -254,7 +254,7 @@ JSON 示例：
   "reused": false,
   "status": "idle",
   "data": {
-    "template": "深度编码专家",
+    "template": "claude-code",
     "model": "openai/gpt-5.4",
     "cwd": "/Users/me/work/project"
   }
@@ -304,7 +304,7 @@ JSON 示例：
   "status": "idle",
   "data": {
     "name": "编码助手-A",
-    "template": "深度编码专家",
+    "template": "claude-code",
     "model": "openai/gpt-5.4",
     "cwd": "/Users/me/work/project",
     "command": "codex --model openai/gpt-5.4",
@@ -576,14 +576,14 @@ JSON 示例：
 ### 6.1 创建新实例并启动首次任务
 
 ```bash
-agentmux summon --template 深度编码专家 --name 编码助手-A --cwd ~/work/project --prompt "先阅读项目并总结结构" --json
+agentmux summon --template claude-code --name 编码助手-A --cwd ~/work/project --prompt "先阅读项目并总结结构" --json
 agentmux capture 编码助手-A --json
 ```
 
 ### 6.2 复用实例继续工作
 
 ```bash
-agentmux summon --template 深度编码专家 --name 编码助手-A --json
+agentmux summon --template claude-code --name 编码助手-A --json
 agentmux capture 编码助手-A --history 120 --json
 agentmux prompt 编码助手-A --text "继续修复剩余测试" --json
 ```

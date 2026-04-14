@@ -38,7 +38,7 @@ Typical loop:
 
 ```bash
 agentmux list --json
-agentmux summon --template 深度编码专家 --name 编码助手-A --json
+agentmux summon --template claude-code --name 编码助手-A --json
 agentmux capture 编码助手-A --history 120 --json
 agentmux prompt 编码助手-A --text "继续修复剩余失败测试" --json
 ```
@@ -51,7 +51,7 @@ First-prompt decision:
 For Claude Code cold starts, check whether the input prompt is actually ready before sending the first important task:
 
 ```bash
-agentmux summon --template 工作项管理助手 --name wiki审核-A --json
+agentmux summon --template claude-code --name wiki审核-A --json
 agentmux capture wiki审核-A --history 10 --json
 ```
 
@@ -76,19 +76,19 @@ Avoid treating long `--stdin` payloads as reliable for Claude Code. They may app
 Use `summon` when you need to create or reuse an instance.
 
 ```bash
-agentmux summon --template 深度编码专家 --name 编码助手-A --cwd /path --json
+agentmux summon --template claude-code --name 编码助手-A --cwd /path --json
 ```
 
 Use `summon --prompt` when the same call should also send a message.
 
 ```bash
-agentmux summon --template 深度编码专家 --name 编码助手-A --prompt "先阅读项目并总结结构" --json
+agentmux summon --template claude-code --name 编码助手-A --prompt "先阅读项目并总结结构" --json
 ```
 
 Use summon overrides when the existing template is close but not exact.
 
 ```bash
-agentmux summon --template 深度编码专家 --name 编码助手-A --model openai/gpt-5.4 --command 'codex --model $MODEL' --system-prompt "先建上下文，再直接修改" --json
+agentmux summon --template claude-code --name 编码助手-A --model openai/gpt-5.4 --command 'codex --model $MODEL' --system-prompt "先建上下文，再直接修改" --json
 ```
 
 Use `inspect` when you need metadata such as template, cwd, model, status, or session identity.
@@ -250,8 +250,8 @@ Naming convention:
 Parallel independent work:
 
 ```bash
-agentmux summon --template 深度编码专家 --name task-A --json
-agentmux summon --template 深度编码专家 --name task-B --json
+agentmux summon --template claude-code --name task-A --json
+agentmux summon --template claude-code --name task-B --json
 agentmux list --json
 ```
 

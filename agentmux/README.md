@@ -208,24 +208,24 @@ defaults:
     poll_ms: 250
 
 templates:
-  深度编码专家:
-    description: 面向复杂编码与调试任务的通用专家
-    command: codex --model $MODEL
-    model: openai/gpt-5.4
-    harness_type: codex-cli
-    system_prompt: 你是深度编码专家，优先阅读上下文、定位根因、直接给出可执行修改。
+  claude-code:
+    description: Claude Code 通用编程智能体
+    command: claude --dangerously-skip-permissions --model $MODEL
+    model: anthropic/claude-sonnet-4.5
+    harness_type: claude-code
+    system_prompt: ""
     prompt: ""
     cwd: .
 ```
 
-Claude Code 模板建议显式声明 `harness_type`，这样 `busy -> idle` 检测会更精确：
+Codex CLI 模板建议显式声明 `harness_type`，这样 `busy -> idle` 检测会更精确：
 
 ```yaml
 templates:
-  工作项管理助手:
-    command: claude --dangerously-skip-permissions --model $MODEL
-    model: anthropic/claude-sonnet-4.5
-    harness_type: claude-code
+  codex-cli:
+    command: codex --model $MODEL
+    model: openai/gpt-5.4
+    harness_type: codex-cli
 ```
 
 ## 常用命令
@@ -240,13 +240,13 @@ agentmux template list --json
 创建或复用实例：
 
 ```bash
-agentmux summon --template 深度编码专家 --name 编码助手-A --cwd ~/work/project
+agentmux summon --template claude-code --name 编码助手-A --cwd ~/work/project
 ```
 
 创建并发送首条消息：
 
 ```bash
-agentmux summon --template 深度编码专家 --name 编码助手-A --prompt "先阅读项目并总结结构" --json
+agentmux summon --template claude-code --name 编码助手-A --prompt "先阅读项目并总结结构" --json
 ```
 
 查看实例详情：

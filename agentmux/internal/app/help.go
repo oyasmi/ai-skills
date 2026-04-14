@@ -98,8 +98,8 @@ Global flags:
 
 Examples:
   agentmux template list --json
-  agentmux summon --template 深度编码专家 --name 编码助手-A --cwd ~/work/project
-  agentmux summon --template 深度编码专家 --name 编码助手-A --prompt "先阅读项目并总结结构" --json
+  agentmux summon --template claude-code --name 编码助手-A --cwd ~/work/project
+  agentmux summon --template claude-code --name 编码助手-A --prompt "先阅读项目并总结结构" --json
   agentmux capture 编码助手-A --history 120 --json
   echo "补充两行说明" | agentmux prompt 编码助手-A --stdin --json
   agentmux prompt 编码助手-A --text "继续" --json
@@ -195,9 +195,9 @@ Behavior:
   Reusing an instance does not mutate its stored config.
 
 Examples:
-  agentmux summon --template 深度编码专家
-  agentmux summon --template 深度编码专家 --name 编码助手-A --cwd ~/work/project
-  agentmux summon --template 深度编码专家 --name 编码助手-A --prompt "继续修复测试" --json
+  agentmux summon --template claude-code
+  agentmux summon --template claude-code --name 编码助手-A --cwd ~/work/project
+  agentmux summon --template claude-code --name 编码助手-A --prompt "继续修复测试" --json
 `)
 }
 

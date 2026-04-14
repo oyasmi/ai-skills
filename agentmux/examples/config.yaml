@@ -17,12 +17,30 @@ defaults:
   max_instances: 8
 
 templates:
-  深度编码专家:
-    description: 面向复杂编码、调试、重构和测试修复任务的通用专家
+  claude-code:
+    description: Claude Code 通用编程智能体
+    command: claude --dangerously-skip-permissions --model $MODEL
+    model: anthropic/claude-sonnet-4.5
+    harness_type: claude-code
+    system_prompt: ""
+    prompt: ""
+    cwd: .
+
+  codex-cli:
+    description: Codex CLI 通用编程智能体
     command: codex --model $MODEL
     model: openai/gpt-5.4
     harness_type: codex-cli
-    system_prompt: 你是深度编码专家，先建立代码上下文，再直接推进修改、验证和收尾。
+    system_prompt: ""
+    prompt: ""
+    cwd: .
+
+  gemini-cli:
+    description: Gemini CLI 通用编程智能体
+    command: gemini
+    model: ""
+    harness_type: gemini-cli
+    system_prompt: ""
     prompt: ""
     cwd: .
 
@@ -32,23 +50,5 @@ templates:
     model: openai/gpt-5.4
     harness_type: codex-cli
     system_prompt: 你负责生成结构稳定、边界清楚、可执行的技术文档。
-    prompt: ""
-    cwd: .
-
-  工作项管理助手:
-    description: 面向任务拆分、优先级整理、进度跟踪和状态汇总的助手
-    command: claude --dangerously-skip-permissions --model $MODEL
-    model: anthropic/claude-sonnet-4.5
-    harness_type: claude-code
-    system_prompt: 你负责管理工作项，输出要短、准、可执行。
-    prompt: ""
-    cwd: .
-
-  通用终端助手:
-    description: 面向轻量命令执行和终端观察的通用模板
-    command: codex --model $MODEL
-    model: openai/gpt-5.4
-    harness_type: codex-cli
-    system_prompt: ""
     prompt: ""
     cwd: .

@@ -86,19 +86,19 @@ agentmux list --json
 ### 5.3 创建或复用实例
 
 ```bash
-agentmux summon --template 深度编码专家 --name 编码助手-A --cwd /path --json
+agentmux summon --template claude-code --name 编码助手-A --cwd /path --json
 ```
 
 首次任务：
 
 ```bash
-agentmux summon --template 深度编码专家 --name 编码助手-A --cwd /path --prompt "先阅读项目并总结结构" --json
+agentmux summon --template claude-code --name 编码助手-A --cwd /path --prompt "先阅读项目并总结结构" --json
 ```
 
 复用并顺手发送一条消息：
 
 ```bash
-agentmux summon --template 深度编码专家 --name 编码助手-A --prompt "继续修复剩余失败测试" --json
+agentmux summon --template claude-code --name 编码助手-A --prompt "继续修复剩余失败测试" --json
 ```
 
 ### 5.4 获取实例详情

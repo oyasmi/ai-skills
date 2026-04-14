@@ -99,7 +99,7 @@ func TestRunE2ELifecycleJSON(t *testing.T) {
 		return stdout.String(), stderr.String(), code
 	}
 
-	stdout, stderr, code := runJSON("summon", "--template", "深度编码专家", "--name", "e2e-agent", "--prompt", "hello", "--json")
+	stdout, stderr, code := runJSON("summon", "--template", "claude-code", "--name", "e2e-agent", "--prompt", "hello", "--json")
 	if code != 0 {
 		t.Fatalf("summon failed: code=%d stderr=%q", code, stderr)
 	}
@@ -122,8 +122,8 @@ func TestRunE2ELifecycleJSON(t *testing.T) {
 	if inst.Status != instance.StatusBusy || !inst.FirstPromptSent {
 		t.Fatalf("unexpected registry instance after summon: %+v", inst)
 	}
-	if inst.HarnessType != "codex-cli" {
-		t.Fatalf("unexpected default harness type for codex template: %q", inst.HarnessType)
+	if inst.HarnessType != "claude-code" {
+		t.Fatalf("unexpected default harness type for claude-code template: %q", inst.HarnessType)
 	}
 
 	stdout, stderr, code = runJSON("capture", "e2e-agent", "--json")

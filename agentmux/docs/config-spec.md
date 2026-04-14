@@ -48,11 +48,11 @@ defaults:
   max_instances: 8
 
 templates:
-  深度编码专家:
-    description: 面向复杂编码与调试任务的通用专家
-    command: codex --model $MODEL
-    model: openai/gpt-5.4
-    system_prompt: 你是深度编码专家，优先阅读上下文、定位根因、直接给出可执行修改。
+  claude-code:
+    description: Claude Code 通用编程智能体
+    command: claude --dangerously-skip-permissions --model $MODEL
+    model: anthropic/claude-sonnet-4.5
+    system_prompt: ""
     prompt: ""
     cwd: .
 
@@ -225,11 +225,11 @@ templates:
     ...
 ```
 
-其中 `<template-name>` 支持 UTF-8，例如：
+其中 `<template-name>` 支持 UTF-8 和 kebab-case，例如：
 
-1. `深度编码专家`
-2. `文档专家`
-3. `工作项管理助手`
+1. `claude-code`
+2. `codex-cli`
+3. `文档专家`
 
 ---
 
@@ -307,7 +307,7 @@ model: openai/gpt-5.4
 类型：
 
 ```yaml
-system_prompt: 你是深度编码专家，优先阅读上下文、定位根因、直接给出可执行修改。
+system_prompt: 你是编程专家，优先阅读上下文、定位根因、直接给出可执行修改。
 ```
 
 规则：
@@ -428,7 +428,7 @@ harness_type: claude-code
 
 ```yaml
 templates:
-  深度编码专家:
+  claude-code:
     ...
 ```
 
@@ -520,8 +520,8 @@ i_<random-or-hash>
 
 推荐：
 
-1. `深度编码专家`
-2. `工作项管理助手`
+1. `claude-code`
+2. `codex-cli`
 3. `文档专家`
 
 不推荐：
@@ -541,11 +541,11 @@ i_<random-or-hash>
 
 ```yaml
 templates:
-  深度编码专家:
+  codex-cli:
     command: codex --model $MODEL
     model: openai/gpt-5.4
 
-  深度编码专家-Claude:
+  claude-code:
     command: claude --dangerously-skip-permissions --model $MODEL
     model: anthropic/claude-sonnet-4.5
     harness_type: claude-code

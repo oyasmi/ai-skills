@@ -107,8 +107,8 @@ agentmux/
 
 例如：
 
-1. `工作项管理助手`
-2. `深度编码专家`
+1. `claude-code`
+2. `codex-cli`
 3. `文档专家`
 4. `代码审查助手`
 
@@ -318,9 +318,9 @@ agentmux list --json
 示例：
 
 ```bash
-agentmux summon --template 深度编码专家
-agentmux summon --template 深度编码专家 --cwd ~/work/agentmux
-agentmux summon --template 深度编码专家 --name 编码助手-A --prompt "先阅读项目并总结结构"
+agentmux summon --template claude-code
+agentmux summon --template claude-code --cwd ~/work/agentmux
+agentmux summon --template claude-code --name 编码助手-A --prompt "先阅读项目并总结结构"
 ```
 
 ### 9.4 `inspect`
@@ -609,11 +609,19 @@ defaults:
     poll_ms: 250
 
 templates:
-  深度编码专家:
-    description: 面向复杂编码与调试任务的通用专家
+  claude-code:
+    description: Claude Code 通用编程智能体
+    command: claude --dangerously-skip-permissions --model $MODEL
+    model: anthropic/claude-sonnet-4.5
+    system_prompt: ""
+    prompt: ""
+    cwd: .
+
+  codex-cli:
+    description: Codex CLI 通用编程智能体
     command: codex --model $MODEL
     model: openai/gpt-5.4
-    system_prompt: 你是深度编码专家，优先阅读上下文、定位根因、直接给出可执行修改。
+    system_prompt: ""
     prompt: ""
     cwd: .
 
@@ -622,14 +630,6 @@ templates:
     command: codex --model $MODEL
     model: openai/gpt-5.4
     system_prompt: 你负责生成清晰、可执行、结构稳定的技术文档。
-    prompt: ""
-    cwd: .
-
-  工作项管理助手:
-    description: 面向任务拆分、状态跟踪与交付节奏管理的助手
-    command: claude --dangerously-skip-permissions --model $MODEL
-    model: anthropic/claude-sonnet-4.5
-    system_prompt: 你负责管理工作项，输出要短、准、可执行。
     prompt: ""
     cwd: .
 ```
