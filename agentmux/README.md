@@ -176,14 +176,14 @@ mkdir -p ~/.config/agentmux
 cp /path/to/agentmux/examples/config.yaml ~/.config/agentmux/config.yaml
 ```
 
-示例配置文件见 [config.yaml](/Users/oyasmi/projects/ai-skills/agentmux/examples/config.yaml)。
+示例配置文件见 [config.yaml](examples/config.yaml)。
 
 ## Skill
 
 配套 skill 目录位于：
 
-1. [SKILL.md](/Users/oyasmi/projects/ai-skills/agentmux/skills/agentmux/SKILL.md)
-2. [openai.yaml](/Users/oyasmi/projects/ai-skills/agentmux/skills/agentmux/agents/openai.yaml)
+1. [SKILL.md](skills/agentmux/SKILL.md)
+2. [openai.yaml](skills/agentmux/agents/openai.yaml)
 
 这个 skill 面向上层编排型 Agent，要求优先通过 `agentmux ... --json` 管理外部终端 Agent 实例，而不是直接调用 `tmux`。
 
@@ -388,7 +388,7 @@ agentmux version --json
 
 设计和规格文档位于：
 
-1. [design.md](/Users/oyasmi/projects/ai-skills/agentmux/docs/design.md)
-2. [cli-spec.md](/Users/oyasmi/projects/ai-skills/agentmux/docs/cli-spec.md)
-3. [config-spec.md](/Users/oyasmi/projects/ai-skills/agentmux/docs/config-spec.md)
-4. [skill-spec.md](/Users/oyasmi/projects/ai-skills/agentmux/docs/skill-spec.md)
+1. [design.md](docs/design.md)
+2. [cli-spec.md](docs/cli-spec.md)
+3. [config-spec.md](docs/config-spec.md)
+4. [skill-spec.md](docs/skill-spec.md)

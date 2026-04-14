@@ -92,9 +92,10 @@ version: 1
 2. `cwd`
 3. `env`
 4. `tmux`
-5. `capture`
-6. `max_instances`
-7. `harness_type`
+5. `status`
+6. `capture`
+7. `max_instances`
+8. `harness_type`
 
 ### 4.1 `defaults.tmux`
 
@@ -118,7 +119,26 @@ tmux:
 3. 当 `load_user_config=false` 时，`agentmux` 会以 `tmux -f /dev/null -S ...` 形式启动和控制 tmux
 4. 当 `load_user_config=true` 时，`agentmux` 会读取用户默认的 tmux 配置文件
 
-### 4.2 `defaults.shell`
+### 4.2 `defaults.status`
+
+类型：
+
+```yaml
+status:
+  busy_ttl_ms: 30000
+```
+
+字段：
+
+1. `busy_ttl_ms`
+
+规则：
+
+1. 可选，默认为 `30000`（30 秒）
+2. 实例在 `busy` 状态超过此时间后自动退化为 `idle`
+3. 设为 `0` 表示禁用自动退化
+
+### 4.3 `defaults.shell`
 
 类型：
 
@@ -131,7 +151,7 @@ shell: /bin/bash -lc
 1. 默认值建议为 `/bin/bash -lc`
 2. 用于启动模板命令
 
-### 4.3 `defaults.cwd`
+### 4.4 `defaults.cwd`
 
 类型：
 
@@ -144,7 +164,7 @@ cwd: .
 1. 可为相对路径或绝对路径
 2. 实际创建实例时应解析为绝对路径
 
-### 4.4 `defaults.env`
+### 4.5 `defaults.env`
 
 类型：
 
@@ -158,7 +178,7 @@ env:
 1. 键值均为字符串
 2. 第一版建议至少显式设置 `TERM=xterm-256color`
 
-### 4.5 `defaults.harness_type`
+### 4.6 `defaults.harness_type`
 
 类型：
 
@@ -174,7 +194,7 @@ harness_type: claude-code
 4. 这三类 harness 会启用基于 tmux `pane_title` 的精确 idle 检测
 5. 其他值或空值不会报错，而是回退到通用的内容稳定性与 TTL 路径
 
-### 4.6 `defaults.capture`
+### 4.7 `defaults.capture`
 
 类型：
 
@@ -197,7 +217,7 @@ capture:
 2. `stable_ms` 是默认稳定判定窗口
 3. `poll_ms` 是轮询间隔
 
-### 4.7 `defaults.max_instances`
+### 4.8 `defaults.max_instances`
 
 类型：
 

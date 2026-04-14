@@ -16,8 +16,8 @@ func TestApplyDefaultsSetsTmuxSocket(t *testing.T) {
 
 	cfg.ApplyDefaults()
 
-	if cfg.Defaults.Tmux.Socket != DefaultSocketPath {
-		t.Fatalf("expected default socket %q, got %q", DefaultSocketPath, cfg.Defaults.Tmux.Socket)
+	if cfg.Defaults.Tmux.Socket != RecommendedSocketPath() {
+		t.Fatalf("expected recommended socket %q, got %q", RecommendedSocketPath(), cfg.Defaults.Tmux.Socket)
 	}
 	if cfg.Defaults.Tmux.LoadUserConfig {
 		t.Fatalf("expected default load_user_config false")

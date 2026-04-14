@@ -2,6 +2,8 @@ version: 1
 
 defaults:
   tmux:
+    # Recommended: use a user-isolated path (e.g. $XDG_RUNTIME_DIR/agentmux.sock).
+    # /tmp/agentmux.sock is the fallback default when no value is set.
     socket: /tmp/agentmux.sock
     load_user_config: false
   status:

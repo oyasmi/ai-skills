@@ -80,7 +80,7 @@ func (s Service) TemplateList() []map[string]string {
 			"model":        tpl.Model,
 			"cwd":          tpl.CWD,
 			"description":  tpl.Description,
-			"harness_type": firstNonEmpty(tpl.HarnessType, s.Config.Defaults.HarnessType),
+			"harness_type": firstNonBlank(tpl.HarnessType, s.Config.Defaults.HarnessType),
 		})
 	}
 	return out
@@ -653,6 +653,11 @@ func claudeCodeTitleIsIdle(paneTitle string) bool {
 	return titleStateIsIdle(claudeCodeTitleState)(paneTitle)
 }
 
+// claudeCodeTitleState detects agent state from Claude Code's pane_title.
+// Known compatible: Claude Code CLI ≥ 1.0 (as of 2026-04).
+//   - idle: first significant rune is ✳ (U+2733)
+//   - busy: first significant rune is a Braille pattern (U+2800–U+28FF)
+//   - unknown: cannot determine (title empty or unrecognized format)
 func claudeCodeTitleState(paneTitle string) string {
 	trimmed := strings.TrimSpace(paneTitle)
 	if trimmed == "" {
@@ -683,6 +688,11 @@ func codexCLITitleIsIdle(paneTitle string) bool {
 	return titleStateIsIdle(codexCLITitleState)(paneTitle)
 }
 
+// codexCLITitleState detects agent state from Codex CLI's pane_title.
+// Known compatible: Codex CLI ≥ 0.1 (as of 2026-04).
+//   - busy: first significant rune is a Braille pattern (U+2800–U+28FF)
+//   - idle: first significant rune is anything else (Codex shows a static prompt)
+//   - unknown: title is empty or has no significant runes
 func codexCLITitleState(paneTitle string) string {
 	trimmed := strings.TrimSpace(paneTitle)
 	if trimmed == "" {
@@ -698,6 +708,11 @@ func codexCLITitleState(paneTitle string) string {
 	return "idle"
 }
 
+// geminiCLITitleState detects agent state from Gemini CLI's pane_title.
+// Known compatible: Gemini CLI ≥ 0.1 (as of 2026-04).
+//   - idle: first significant rune is ◇ (U+25C7)
+//   - busy: first significant rune is ✦ (U+2726)
+//   - unknown: cannot determine (title empty or unrecognized format)
 func geminiCLITitleState(paneTitle string) string {
 	trimmed := strings.TrimSpace(paneTitle)
 	if trimmed == "" {
@@ -720,6 +735,11 @@ func geminiCLITitleState(paneTitle string) string {
 	return "unknown"
 }
 
+// firstTitleMarkerRunes extracts up to limit significant runes from a pane title,
+// skipping structural formatting characters commonly used by harness CLIs:
+// brackets, parentheses, braces, angle brackets, colons, dashes, pipes, and whitespace.
+// These characters wrap status indicators (e.g. "[model] ✳ task") but are not
+// themselves state markers.
 func firstTitleMarkerRunes(s string, limit int) []rune {
 	if limit <= 0 {
 		return nil
@@ -741,7 +761,7 @@ func firstTitleMarkerRunes(s string, limit int) []rune {
 	return out
 }
 
-func firstNonEmpty(vs ...string) string {
+func firstNonBlank(vs ...string) string {
 	for _, v := range vs {
 		if strings.TrimSpace(v) != "" {
 			return v

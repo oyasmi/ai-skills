@@ -2,7 +2,6 @@ package output
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 )
 
@@ -27,9 +26,4 @@ func WriteJSON(w io.Writer, v any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
-}
-
-func WriteText(w io.Writer, s string) error {
-	_, err := fmt.Fprintln(w, s)
-	return err
 }

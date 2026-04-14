@@ -1,6 +1,6 @@
 ---
 name: agentmux
-description: Control, reuse, and inspect external terminal AI agent instances through the `agentmux` CLI. Use when you need to start or continue work inside an isolated tmux-backed instance, manage multiple coding agents or TUI agents, capture current screen text, send the next prompt or key, wait for work completion, or attach for human debugging. Trigger this skill when the user explicitly mentions `agentmux`, asks to orchestrate another terminal agent, or needs a reusable external coding/documentation/workflow assistant running in its own terminal session.
+description: Manage isolated tmux-backed AI agent instances via `agentmux` CLI: summon, capture, prompt, wait, and halt. Trigger when user mentions `agentmux` or needs a reusable terminal agent.
 ---
 
 # Agentmux

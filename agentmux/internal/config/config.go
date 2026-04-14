@@ -72,6 +72,16 @@ templates:
 `
 )
 
+// RecommendedSocketPath returns a user-isolated tmux socket path.
+// It prefers $XDG_RUNTIME_DIR/agentmux.sock and falls back to
+// /tmp/agentmux-$UID.sock when XDG_RUNTIME_DIR is not set.
+func RecommendedSocketPath() string {
+	if rd := os.Getenv("XDG_RUNTIME_DIR"); rd != "" {
+		return filepath.Join(rd, "agentmux.sock")
+	}
+	return fmt.Sprintf("/tmp/agentmux-%d.sock", os.Getuid())
+}
+
 type Config struct {
 	Version   int                 `yaml:"version"`
 	Defaults  Defaults            `yaml:"defaults"`
@@ -173,8 +183,8 @@ func Load(path string) (Config, error) {
 }
 
 func (c *Config) ApplyDefaults() {
-	if c.Defaults.Tmux.Socket == "" {
-		c.Defaults.Tmux.Socket = DefaultSocketPath
+	if c.Defaults.Tmux.Socket == "" || c.Defaults.Tmux.Socket == DefaultSocketPath {
+		c.Defaults.Tmux.Socket = RecommendedSocketPath()
 	}
 	if c.Defaults.Shell == "" {
 		c.Defaults.Shell = "/bin/bash -lc"
@@ -227,6 +237,9 @@ func (c Config) Validate() error {
 		}
 		if strings.TrimSpace(tpl.Command) == "" {
 			return apperr.New("config_invalid", fmt.Sprintf("template %q command must not be empty", name))
+		}
+		if m := strings.TrimSpace(tpl.Model); m != "" && !strings.Contains(m, "/") {
+			return apperr.New("config_invalid", fmt.Sprintf("template %q model should be in provider/name format", name))
 		}
 	}
 	return nil
