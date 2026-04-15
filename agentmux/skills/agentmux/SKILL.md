@@ -22,6 +22,7 @@ Use `agentmux` instead of calling `tmux` directly. Treat `agentmux` as the only 
 11. Prefer short, task-specific prompts. Do not resend large repeated context if the instance already has it.
 12. Do not rely on long `prompt --stdin` payloads for Claude Code. For long instructions, write them to a file first and then send a short `--text` message telling the agent to read that file.
 13. Verify deliverables, not just status. `idle` or `wait` success does not prove the target file or artifact is correct.
+14. For long-running work, follow `Patience & Polling Strategy`.
 
 ## Workflow
 
@@ -31,7 +32,7 @@ Use `agentmux` instead of calling `tmux` directly. Treat `agentmux` as the only 
 4. If this is a fresh TUI-style harness launch, confirm it is ready before sending an important first prompt.
 5. Send the next instruction or key.
 6. If the prompt text appears to be buffered on screen but the agent does not start working, send one explicit `Enter` before assuming it is stuck.
-7. Repeat `capture|wait -> decide -> prompt` until the task reaches a stopping point.
+7. Repeat `capture|wait -> decide -> prompt` until the task reaches a stopping point. For long-running work, follow `Patience & Polling Strategy`.
 8. After the agent reports completion, read the expected output files and verify the deliverable.
 
 Typical loop:
@@ -136,6 +137,43 @@ Use `version` when you need to confirm which CLI surface is available.
 agentmux version --json
 ```
 
+## Patience & Polling Strategy
+
+Treat agentmux instances as colleagues doing deep work: You wouldn't tap someone's shoulder every 20 seconds.
+
+Patience is respect for intelligence. Impatience usually makes the result worse.
+
+Default waiting pattern for long-running work:
+
+1. Wait `1m`.
+2. Wait another `1m`.
+3. Then wait `3m`.
+4. Then wait `5m`.
+5. Repeat the cycle from `1m`.
+
+Pattern: `1m, 1m, 3m, 5m, 1m, 1m, 3m, 5m, 1m, ...`
+
+Single-wait cap:
+
+1. Never make one polling wait longer than `5m`.
+2. After `5m`, restart the cycle at `1m`.
+
+Interruption policy:
+
+1. Do not proactively interrupt within the first `2h`.
+2. Exceptions: the user explicitly asks to stop, `capture` shows a crash, or `capture` shows an obvious infinite loop.
+3. Slowness alone is not a reason to interrupt.
+4. A still-`busy` status is not a reason to interrupt.
+
+If interruption becomes necessary:
+
+1. Send exactly one `C-c`.
+2. Wait `10-15s`.
+3. Verify with `inspect` or `capture`.
+4. Use `halt` only if the instance is truly unresponsive or the graceful interrupt did not work.
+
+If `capture` shows a direct blocker such as `Y/n`, a permissions prompt, or pasted text waiting for submission, answer the blocker directly instead of interrupting the whole run.
+
 ## Decision Rules
 
 Prefer `inspect --json` before sending another message. Use `capture` only when you also need screen text. Avoid blind prompting.
@@ -160,7 +198,7 @@ Prefer `wait` over `capture` when the only goal is to block until the instance a
 
 Treat `capture_timeout` from `wait` as "still active when the timeout expired", not automatically as a failure. Follow with `capture` to inspect actual progress before interrupting work.
 
-Send `C-c` before anything else when the instance is clearly stuck, waiting on the wrong action, or running an unwanted command.
+For long-running work and interruption decisions, follow `Patience & Polling Strategy`.
 
 Prefer plain `halt` when you want the agent to stop cleanly. It now sends `C-c`, waits briefly, and only escalates if needed.
 
@@ -226,6 +264,8 @@ When `wait` returns `error_code: capture_timeout`, assume the work may still be 
 agentmux capture <instance-name> --history 20 --json
 ```
 
+Do not treat `capture_timeout` as a cue to interrupt. In most cases it only means the agent is still working and you should keep waiting patiently.
+
 When `process_not_running` or `status: exited` appears, decide whether the user wants a fresh instance or whether work should stop.
 
 When `invalid_key` appears, retry with a supported key such as `Enter`, `C-c`, `Escape`, `Up`, `Down`, or `Tab`.
@@ -260,6 +300,8 @@ Long-running task monitoring:
 1. Do not rely only on `wait` for long tasks if you also need progress details.
 2. Prefer periodic `capture` with enough history to see the latest reasoning or tool output.
 3. Use `list` or `inspect` for cheap status checks between captures.
+4. Default to a patient wait cycle such as `1m`, `1m`, `3m`, `5m`, then restart at `1m`. Do not make the single wait interval longer than `5m`.
+5. Do not proactively interrupt just because the agent feels slow. Give the run up to `2h` unless the user asks to stop or the screen shows a concrete blocking condition you can resolve.
 
 Example polling loop:
 

@@ -64,6 +64,7 @@ SKILL.md 中应明确写出以下规则：
 5. 人类要求实时查看时才使用 `attach`
 6. `capture` 默认拿纯文本，不要求 ANSI
 7. 使用 `summon` 时，要明确区分“新建”与“复用”
+8. 长任务策略应集中写在单独的 `Patience & Polling Strategy` 章节，不要把同一规则在多个章节重复展开
 
 ---
 
@@ -127,6 +128,21 @@ agentmux prompt 编码助手-A --key C-c --json
 
 ---
 
+## 5.8 Patience & Polling Strategy
+
+SKILL.md 应新增一个明确章节：`Patience & Polling Strategy`
+
+这个章节至少应包含：
+
+1. 等待节奏：`1m, 1m, 3m, 5m, 1m, 1m, 3m, 5m, ...`
+2. 单次等待上限：`5m`
+3. `2h` 内不要主动中断
+4. 例外条件：用户明确要求、`capture` 显示崩溃、明显无限循环
+5. 打断升级路径：先一次 `C-c`，等 `10-15s` 验证，再决定是否 `halt`
+6. 心态校准语句，强调耐心而不是频繁打断
+
+---
+
 ## 6. Agent 决策准则
 
 skill 应要求使用它的 Agent 遵守以下准则：
@@ -152,13 +168,15 @@ skill 应要求使用它的 Agent 遵守以下准则：
 2. 单轮信息适中
 3. 避免长篇重复上下文
 
-### 6.4 遇到异常先中断再观察
+### 6.4 遇到异常先观察，不要急于中断
 
-如果实例明显卡住、跑偏、等待确认或陷入循环：
+长任务等待与中断策略应统一引用 `Patience & Polling Strategy`，不要在决策准则里再写一份细节版。
 
-1. 先 `prompt --key C-c`
-2. 再 `capture`
-3. 再决定下一步
+这里保留高层原则即可：
+
+1. 慢不等于卡住
+2. 先观察，再决定是否介入
+3. 真要中断时，要有明确触发条件和升级路径
 
 ---
 
@@ -168,10 +186,11 @@ SKILL.md 应给出一个明确、可复用的循环：
 
 1. `agentmux list --json`
 2. 若实例不存在，则 `agentmux summon ... --json`
-3. `agentmux capture <instance> --json`
-4. 分析 `content`
-5. 若需要推进，则 `agentmux prompt <instance> --text ... --json`
-6. 回到 `capture`
+3. 对长任务优先 `agentmux wait <instance> --timeout 1m --json`
+4. 再按 `1m`、`3m`、`5m`，然后回到 `1m` 的循环节奏继续等待或穿插 `capture`
+5. 分析 `status` 与 `content`
+6. 若需要推进，则 `agentmux prompt <instance> --text ... --json`
+7. 回到等待或抓屏
 
 这就是第一版 `agentmux` 的标准 orchestrator loop。
 
@@ -210,7 +229,8 @@ skill 应提醒使用它的 Agent：
    - 先 `list --json`
    - 再决定是否 `summon`
 3. `capture_timeout`
-   - 缩短等待或直接抓当前快照
+   - 视为“还在运行”的常见信号，不要急于中断
+   - 继续按等待节奏观察，必要时再抓当前快照
 4. `process_not_running`
    - `inspect`
    - 必要时重新 `summon`
