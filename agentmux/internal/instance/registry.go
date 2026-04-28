@@ -34,6 +34,10 @@ type Instance struct {
 	Env             map[string]string `json:"env"`
 	Status          Status            `json:"status"`
 	PaneTitle       string            `json:"pane_title,omitempty"`
+	ClaudeSessionID string            `json:"claude_session_id,omitempty"`
+	TransportDir    string            `json:"transport_dir,omitempty"`
+	ProcessID       int               `json:"process_id,omitempty"`
+	ProcessGroupID  int               `json:"process_group_id,omitempty"`
 	CreatedAt       time.Time         `json:"created_at"`
 	UpdatedAt       time.Time         `json:"updated_at"`
 	LastActivityAt  time.Time         `json:"last_activity_at"`

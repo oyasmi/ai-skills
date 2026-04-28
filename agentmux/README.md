@@ -1,6 +1,6 @@
 # agentmux
 
-`agentmux` 是一个面向 AI Agent 的命令行控制器。它用隔离的 `tmux` session 运行外部终端 Agent，并提供适合编排器使用的实例管理、抓屏、输入注入和结构化输出。
+`agentmux` 是一个面向 AI Agent 的命令行控制器。它可以用隔离的 `tmux` session 运行外部终端 Agent，也可以通过 Claude Code 的 NDJSON 协议直接管理 Claude 进程，并提供适合编排器使用的实例管理、输出读取、输入注入和结构化输出。
 
 当前目标平台：
 
@@ -13,11 +13,12 @@ Windows 不是首要目标。
 
 1. 默认使用独立 tmux socket `/tmp/agentmux.sock`，且可通过配置修改
 2. 默认不加载用户 `tmux.conf`，可通过配置显式开启
-3. `1 instance = 1 tmux session`
+3. TUI harness 使用 `1 instance = 1 tmux session`
 4. 模板名和实例名支持中文
 5. 关键命令支持 `--json`
 6. `summon` 默认同名复用
 7. `capture` 默认返回纯文本
+8. `claude-code-ndjson` 可绕过 tmux 终端界面，直接使用 Claude Code 的 stream-json 协议
 
 ## 近期优化
 
@@ -31,13 +32,14 @@ Windows 不是首要目标。
 8. `capture`/`wait` 内部减少了一次重复的注册表事务，避免不必要的注册表读改写
 9. 新增 `harness_type` 驱动的状态检测，`claude-code`、`codex-cli`、`gemini-cli` 可用 `pane_title` 精确判断 idle，`wait` 可提前返回
 10. `inspect`、`list`、`capture`、`wait` 的 JSON 输出现在包含 `harness_type` 或 `pane_title` 等状态观测字段
+11. 新增 `claude-code-ndjson` harness type，通过 Claude Code `stream-json` 协议直接读写 NDJSON，`wait` 可等待协议级完成事件，`capture --json` 可返回结构化消息和 usage 信息
 
 命令职责上建议这样理解：
 
 1. `list` 用于批量查看实例及其当前状态
 2. `inspect --json` 用于查看单个实例当前状态、`pane_title` 和元数据
 3. `wait` 用于阻塞到 agent 看起来完成当前工作
-4. `capture` 用于读取终端输出文本
+4. `capture` 用于读取实例输出；TUI harness 返回终端文本，`claude-code-ndjson` 返回协议消息聚合后的文本和结构化数据
 
 补充约束：
 
@@ -48,7 +50,8 @@ Windows 不是首要目标。
 
 运行时依赖：
 
-1. `tmux >= 3.x`
+1. `tmux >= 3.x`，用于 `claude-code`、`codex-cli`、`gemini-cli` 等 TUI harness
+2. `claude`，用于 `claude-code-ndjson` harness
 
 构建依赖：
 
@@ -216,6 +219,15 @@ templates:
     system_prompt: ""
     prompt: ""
     cwd: .
+
+  claude-code-ndjson:
+    description: Claude Code 通用编程智能体（NDJSON 结构化模式）
+    command: claude --dangerously-skip-permissions --model $MODEL
+    model: anthropic/claude-sonnet-4.5
+    harness_type: claude-code-ndjson
+    system_prompt: ""
+    prompt: ""
+    cwd: .
 ```
 
 Codex CLI 模板建议显式声明 `harness_type`，这样 `busy -> idle` 检测会更精确：
@@ -227,6 +239,18 @@ templates:
     model: openai/gpt-5.4
     harness_type: codex-cli
 ```
+
+Claude Code NDJSON 模板适合上层编排器使用。它不启动 TUI，不使用 tmux，而是通过 Claude Code 的 `-p --input-format stream-json --output-format stream-json` 协议直接交互：
+
+```yaml
+templates:
+  claude-code-ndjson:
+    command: claude --dangerously-skip-permissions --model $MODEL
+    model: anthropic/claude-sonnet-4.5
+    harness_type: claude-code-ndjson
+```
+
+`agentmux` 会自动追加 NDJSON 所需的协议参数，例如 `-p`、`--input-format stream-json`、`--output-format stream-json`、`--verbose`、`--include-partial-messages`、`--replay-user-messages` 和会话参数；这些参数不需要写进模板命令。
 
 ## 常用命令
 
@@ -241,12 +265,14 @@ agentmux template list --json
 
 ```bash
 agentmux summon --template claude-code --name 编码助手-A --cwd ~/work/project
+agentmux summon --template claude-code-ndjson --name 编码助手-N --cwd ~/work/project
 ```
 
 创建并发送首条消息：
 
 ```bash
 agentmux summon --template claude-code --name 编码助手-A --prompt "先阅读项目并总结结构" --json
+agentmux summon --template claude-code-ndjson --name 编码助手-N --prompt "先阅读项目并总结结构" --json
 ```
 
 查看实例详情：
@@ -315,21 +341,24 @@ agentmux version --json
 
 ### `capture`
 
-1. 始终通过 `tmux capture-pane` 抓纯文本
-2. `--history` 控制向上抓取的历史行数
-3. 总是立即返回当前屏幕内容，不等待“工作完成”
-4. `capture` 的主要职责是读输出，不是做状态查询，也不是等待接口
-5. 若只想获知某个实例当前状态，应使用 `inspect --json`
-6. 若需要等待 agent 完成工作，应先执行 `wait`
+1. TUI harness 通过 `tmux capture-pane` 抓纯文本
+2. `claude-code-ndjson` 读取 Claude Code 的 `output.jsonl`，文本模式只输出聚合后的 `content`
+3. `capture --json` 对 TUI harness 返回屏幕字段；对 `claude-code-ndjson` 额外返回 `messages`、`usage`、`claude_session_id`、`turns` 等协议数据
+4. TUI harness 下 `--history` 控制向上抓取的历史行数；`claude-code-ndjson` 下表示最近 N 条归一化消息
+5. 总是立即返回当前可见/可解析输出，不等待“工作完成”
+6. `capture` 的主要职责是读输出，不是做状态查询，也不是等待接口
+7. 若只想获知某个实例当前状态，应使用 `inspect --json`
+8. 若需要等待 agent 完成工作，应先执行 `wait`
 
 ### `wait`
 
 1. 语义上表示“等待 agent 完成当前工作”，不返回屏幕内容
 2. 适合上层 Agent 只想阻塞等待、避免传回大段文本时使用
 3. 若实例的 `harness_type` 支持 `pane_title` 信号（如 `claude-code`、`codex-cli`、`gemini-cli`），优先通过 `pane_title` 判定是否完成
-4. 其他 harness 则回退到“屏幕静止”这类通用启发式
-5. 支持 `pane_title` 信号的 harness 会走轻量 pane 元信息轮询，不再抓取屏幕文本
-6. 若只是想知道当前是 `idle` 还是 `busy`，单实例使用 `inspect --json`，多实例使用 `list --json`
+4. `claude-code-ndjson` 通过 user replay、`result` 和 `session_state_changed=idle` 等协议事件判定完成，不依赖屏幕稳定
+5. 其他 harness 则回退到“屏幕静止”这类通用启发式
+6. 支持 `pane_title` 信号的 harness 会走轻量 pane 元信息轮询，不再抓取屏幕文本
+7. 若只是想知道当前是 `idle` 还是 `busy`，单实例使用 `inspect --json`，多实例使用 `list --json`
 
 ### `prompt`
 
@@ -338,14 +367,21 @@ agentmux version --json
 3. `--key` 发送白名单特殊键
 4. `--text` 与 `--stdin` 会在粘贴文本后自动提交
 5. 若文本已进入输入框但未开始执行，可补发 `--key Enter`
+6. `claude-code-ndjson` 下 `--text`/`--stdin` 写入一条 user NDJSON 消息；`--key C-c` 会尝试中断进程，其余 TUI 导航键为 no-op
 
 ### `busy` 状态
 
 1. `prompt` 后实例会进入 `busy`
 2. 若后续执行 `wait`，状态会正常收敛回 `idle`
 3. 若实例的 `harness_type` 支持 `pane_title` 信号（如 `claude-code`、`codex-cli`、`gemini-cli`），还可以通过 `pane_title` 精确收敛到 `idle`
-4. 若调用方没有继续观测，`busy` 会在 `defaults.status.busy_ttl_ms` 到期后自动退化为 `idle`
-5. 若 `busy_ttl_ms: 0`，表示禁用自动退化，实例不会仅因 TTL 到期而自动回到 `idle`
+4. `claude-code-ndjson` 会根据 Claude Code 协议事件收敛到 `idle`
+5. 若调用方没有继续观测，通用 TUI harness 的 `busy` 会在 `defaults.status.busy_ttl_ms` 到期后自动退化为 `idle`
+6. 若 `busy_ttl_ms: 0`，表示禁用自动退化，实例不会仅因 TTL 到期而自动回到 `idle`
+
+### `attach`
+
+1. TUI harness 会进入对应 tmux session
+2. `claude-code-ndjson` 没有交互式 TUI，`attach` 会跟随输出实例的 `output.jsonl`，用于调试协议事件流
 
 ## 并发安全
 
@@ -368,6 +404,30 @@ agentmux version --json
   "data": {
     "harness_type": "claude-code",
     "pane_title": "✳ Task complete"
+  }
+}
+```
+
+`claude-code-ndjson` 的 `capture --json` 会包含额外协议字段，例如：
+
+```json
+{
+  "ok": true,
+  "command": "capture",
+  "instance": "编码助手-N",
+  "status": "idle",
+  "data": {
+    "content": "完成。",
+    "claude_session_id": "1b94e52d-fbe1-496b-859b-e05731e52801",
+    "messages": [],
+    "usage": {
+      "input_tokens": 22104,
+      "output_tokens": 53,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 3584,
+      "total_cost_usd": 0.0681822
+    },
+    "turns": 1
   }
 }
 ```

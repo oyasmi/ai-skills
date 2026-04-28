@@ -27,6 +27,7 @@ type Snapshot struct {
 	CapturedAt  time.Time
 	StableForMS int
 	Dead        bool
+	Extra       map[string]any
 }
 
 type TitleIdleFunc func(paneTitle string) bool

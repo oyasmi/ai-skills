@@ -28,6 +28,15 @@ templates:
     prompt: ""
     cwd: .
 
+  claude-code-ndjson:
+    description: Claude Code 通用编程智能体（NDJSON 结构化模式）
+    command: claude --dangerously-skip-permissions --model $MODEL
+    model: anthropic/claude-sonnet-4.5
+    harness_type: claude-code-ndjson
+    system_prompt: ""
+    prompt: ""
+    cwd: .
+
   codex-cli:
     description: Codex CLI 通用编程智能体
     command: codex --model $MODEL

@@ -17,7 +17,7 @@ func attach(ctx context.Context, svc service.Service, name string, stderr io.Wri
 	if err != nil {
 		return writeErr(io.Discard, stderr, false, "attach", name, err)
 	}
-	cmd := svc.Tmux.Attach(inst.SessionID)
+	cmd := svc.AttachCommand(inst)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

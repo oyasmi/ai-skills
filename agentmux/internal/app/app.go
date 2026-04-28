@@ -184,7 +184,7 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 			return writeErr(stdout, stderr, jsonMode, "capture", name, err)
 		}
 		if jsonMode {
-			_ = output.WriteJSON(stdout, output.Success{OK: true, Command: "capture", Instance: inst.Name, Status: string(inst.Status), Data: map[string]any{
+			data := map[string]any{
 				"cursor_x":      snap.CursorX,
 				"cursor_y":      snap.CursorY,
 				"width":         snap.Width,
@@ -192,7 +192,11 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 				"history_lines": snap.History,
 				"pane_title":    snap.PaneTitle,
 				"content":       snap.Content,
-			}})
+			}
+			for k, v := range snap.Extra {
+				data[k] = v
+			}
+			_ = output.WriteJSON(stdout, output.Success{OK: true, Command: "capture", Instance: inst.Name, Status: string(inst.Status), Data: data})
 			return 0
 		}
 		fmt.Fprint(stdout, snap.Content)

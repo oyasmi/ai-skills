@@ -15,16 +15,18 @@ import (
 	"github.com/oyasmi/agentmux/internal/instance"
 	"github.com/oyasmi/agentmux/internal/logx"
 	"github.com/oyasmi/agentmux/internal/naming"
+	"github.com/oyasmi/agentmux/internal/ndjsonctl"
 	"github.com/oyasmi/agentmux/internal/tmuxctl"
 )
 
 const (
-	haltSecondInterruptDelay = 500 * time.Millisecond
-	haltPollInterval         = 100 * time.Millisecond
-	promptSubmitDelay        = 150 * time.Millisecond
-	claudeCodeHarnessType    = "claude-code"
-	codexCLIHarnessType      = "codex-cli"
-	geminiCLIHarnessType     = "gemini-cli"
+	haltSecondInterruptDelay    = 500 * time.Millisecond
+	haltPollInterval            = 100 * time.Millisecond
+	promptSubmitDelay           = 150 * time.Millisecond
+	claudeCodeHarnessType       = "claude-code"
+	claudeCodeNDJSONHarnessType = ndjsonctl.HarnessType
+	codexCLIHarnessType         = "codex-cli"
+	geminiCLIHarnessType        = "gemini-cli"
 )
 
 type tmuxClient interface {
@@ -44,6 +46,7 @@ type Service struct {
 	Paths  config.Paths
 	Config config.Config
 	Tmux   tmuxClient
+	NDJSON ndjsonctl.Controller
 }
 
 type SummonInput struct {
@@ -68,6 +71,10 @@ func New(paths config.Paths, cfg config.Config) Service {
 		Tmux: tmuxctl.Client{
 			Socket:         cfg.Defaults.Tmux.Socket,
 			LoadUserConfig: cfg.Defaults.Tmux.LoadUserConfig,
+		},
+		NDJSON: ndjsonctl.Controller{
+			StateDir: paths.StateDir,
+			PollMS:   cfg.Defaults.Capture.PollMS,
 		},
 	}
 }
@@ -126,6 +133,41 @@ func (s Service) Inspect(ctx context.Context, name string) (instance.Instance, e
 	return out, err
 }
 
+func (s Service) resumeNDJSON(ctx context.Context, old instance.Instance, resolved config.ResolvedTemplate, cwd, name string) (instance.Instance, error) {
+	sessionID, err := naming.GenerateSessionID()
+	if err != nil {
+		return instance.Instance{}, err
+	}
+	now := time.Now()
+	command := expandCommand(resolved.Command, resolved.Model, cwd, name, resolved.Name)
+	inst := old
+	inst.SessionID = sessionID
+	inst.Model = resolved.Model
+	inst.HarnessType = resolved.HarnessType
+	inst.SystemPrompt = resolved.SystemPrompt
+	inst.CWD = cwd
+	inst.Command = command
+	inst.Shell = resolved.Shell
+	inst.Env = resolved.Env
+	inst.TransportDir = ""
+	inst.ProcessID = 0
+	inst.ProcessGroupID = 0
+	inst.Status = instance.StatusStarting
+	inst.UpdatedAt = now
+	inst.LastActivityAt = now
+	started, err := s.NDJSON.Start(ctx, ndjsonctl.StartInput{
+		Instance:        inst,
+		Command:         command,
+		SystemPrompt:    resolved.SystemPrompt,
+		ClaudeSessionID: old.ClaudeSessionID,
+		Resume:          true,
+	})
+	if err != nil {
+		return instance.Instance{}, err
+	}
+	return started.Instance, nil
+}
+
 func (s Service) Summon(ctx context.Context, in SummonInput) (SummonResult, error) {
 	resolved, err := config.Resolve(s.Config, in.TemplateName, config.Override{
 		CWD:          in.CWD,
@@ -153,6 +195,21 @@ func (s Service) Summon(ctx context.Context, in SummonInput) (SummonResult, erro
 		if inst, ok := reg.Get(name); ok {
 			next := s.reconcile(ctx, inst)
 			if next.Status == instance.StatusLost || next.Status == instance.StatusExited {
+				if s.isNDJSON(next) && next.Template == resolved.Name && next.ClaudeSessionID != "" {
+					resumed, err := s.resumeNDJSON(ctx, next, resolved, cwd, name)
+					if err != nil {
+						return err
+					}
+					reg.Put(resumed)
+					if prompt := strings.TrimSpace(resolved.Prompt); prompt != "" {
+						if err := s.sendPrompt(ctx, &resumed, prompt, true); err != nil {
+							return err
+						}
+						reg.Put(resumed)
+					}
+					res = SummonResult{Instance: resumed, Reused: false}
+					return nil
+				}
 				reg.Delete(name)
 			} else {
 				inst = next
@@ -199,10 +256,23 @@ func (s Service) Summon(ctx context.Context, in SummonInput) (SummonResult, erro
 			LastActivityAt:  now,
 			FirstPromptSent: false,
 		}
-		if err := s.Tmux.NewSession(ctx, sessionID, cwd, shellCommand(inst.Shell, inst.Command), inst.Env); err != nil {
-			return err
+		if s.isNDJSON(inst) {
+			started, err := s.NDJSON.Start(ctx, ndjsonctl.StartInput{
+				Instance:        inst,
+				Command:         command,
+				SystemPrompt:    resolved.SystemPrompt,
+				ClaudeSessionID: "",
+			})
+			if err != nil {
+				return err
+			}
+			inst = started.Instance
+		} else {
+			if err := s.Tmux.NewSession(ctx, sessionID, cwd, shellCommand(inst.Shell, inst.Command), inst.Env); err != nil {
+				return err
+			}
+			inst.Status = instance.StatusIdle
 		}
-		inst.Status = instance.StatusIdle
 		reg.Put(inst)
 		if prompt := strings.TrimSpace(resolved.Prompt); prompt != "" {
 			if err := s.sendPrompt(ctx, &inst, prompt, true); err != nil {
@@ -243,13 +313,25 @@ func (s Service) Prompt(ctx context.Context, name string, text string, key strin
 			if !ok {
 				return apperr.New("invalid_key", fmt.Sprintf("unsupported key %q", key))
 			}
-			if err := s.Tmux.SendKeys(ctx, target(inst.SessionID), mapped); err != nil {
-				return err
+			if s.isNDJSON(inst) {
+				if mapped == "C-c" {
+					next, err := s.NDJSON.Interrupt(ctx, inst)
+					if err != nil {
+						return err
+					}
+					inst = next
+				}
+			} else {
+				if err := s.Tmux.SendKeys(ctx, target(inst.SessionID), mapped); err != nil {
+					return err
+				}
 			}
 		}
-		inst.Status = instance.StatusBusy
-		inst.UpdatedAt = time.Now()
-		inst.LastActivityAt = inst.UpdatedAt
+		if !s.isNDJSON(inst) || strings.TrimSpace(text) != "" {
+			inst.Status = instance.StatusBusy
+			inst.UpdatedAt = time.Now()
+			inst.LastActivityAt = inst.UpdatedAt
+		}
 		reg.Put(inst)
 		out = inst
 		return nil
@@ -271,6 +353,26 @@ func (s Service) Capture(ctx context.Context, name string, history int) (instanc
 	h := history
 	if h < 0 {
 		h = s.Config.Defaults.Capture.History
+	}
+	if s.isNDJSON(inst) {
+		snap, err := s.NDJSON.Capture(ctx, inst, h)
+		if err != nil {
+			return instance.Instance{}, capture.Snapshot{}, err
+		}
+		err = s.withRegistryReconcileOne(ctx, name, func(reg *instance.Registry) error {
+			current, ok := reg.Get(name)
+			if !ok {
+				return apperr.New("instance_not_found", fmt.Sprintf("instance %q not found", name))
+			}
+			inst = current
+			inst.UpdatedAt = time.Now()
+			reg.Put(inst)
+			return nil
+		})
+		if err != nil {
+			return instance.Instance{}, capture.Snapshot{}, err
+		}
+		return inst, snap, nil
 	}
 	snap, err := capture.Once(ctx, s.Tmux, target(inst.SessionID), h)
 	if err != nil {
@@ -304,6 +406,27 @@ func (s Service) Wait(ctx context.Context, name string, stableMS, timeoutMS int)
 	inst, err := s.getInstanceForCapture(ctx, name)
 	if err != nil {
 		return instance.Instance{}, capture.Snapshot{}, err
+	}
+	if s.isNDJSON(inst) {
+		snap, err := s.NDJSON.Wait(ctx, inst, time.Duration(timeoutMS)*time.Millisecond)
+		if err != nil {
+			return instance.Instance{}, capture.Snapshot{}, err
+		}
+		err = s.withRegistry(ctx, func(reg *instance.Registry) error {
+			current, ok := reg.Get(name)
+			if !ok {
+				return apperr.New("instance_not_found", fmt.Sprintf("instance %q not found", name))
+			}
+			inst = current
+			inst.Status = instance.StatusIdle
+			inst.UpdatedAt = time.Now()
+			reg.Put(inst)
+			return nil
+		})
+		if err != nil {
+			return instance.Instance{}, capture.Snapshot{}, err
+		}
+		return inst, snap, nil
 	}
 	// wait is semantically "wait until the agent appears done"; the detection
 	// strategy depends on what the configured harness can signal reliably.
@@ -414,6 +537,13 @@ func (s Service) Halt(ctx context.Context, name string) (instance.Instance, erro
 	return s.HaltWithOptions(ctx, name, false, 5*time.Second)
 }
 
+func (s Service) AttachCommand(inst instance.Instance) *exec.Cmd {
+	if s.isNDJSON(inst) {
+		return s.NDJSON.Attach(inst)
+	}
+	return s.Tmux.Attach(inst.SessionID)
+}
+
 func (s Service) HaltWithOptions(ctx context.Context, name string, immediately bool, timeout time.Duration) (instance.Instance, error) {
 	var out instance.Instance
 	err := s.withRegistryReconcileOne(ctx, name, func(reg *instance.Registry) error {
@@ -421,7 +551,11 @@ func (s Service) HaltWithOptions(ctx context.Context, name string, immediately b
 		if !ok {
 			return apperr.New("instance_not_found", fmt.Sprintf("instance %q not found", name))
 		}
-		if s.Tmux.HasSession(ctx, inst.SessionID) {
+		if s.isNDJSON(inst) {
+			if err := s.NDJSON.Halt(ctx, inst, ndjsonctl.HaltOptions{Immediately: immediately, Timeout: timeout}); err != nil {
+				return err
+			}
+		} else if s.Tmux.HasSession(ctx, inst.SessionID) {
 			if immediately {
 				if err := s.Tmux.KillSession(ctx, inst.SessionID); err != nil {
 					return err
@@ -552,6 +686,14 @@ func (s Service) sendPrompt(ctx context.Context, inst *instance.Instance, text s
 	if payload == "" {
 		return nil
 	}
+	if s.isNDJSON(*inst) {
+		next, err := s.NDJSON.SendPrompt(ctx, *inst, payload)
+		if err != nil {
+			return err
+		}
+		*inst = next
+		return nil
+	}
 	systemPrompt := strings.TrimSpace(inst.SystemPrompt)
 	if allowSystem && !inst.FirstPromptSent && systemPrompt != "" {
 		payload = "[SYSTEM]\n" + systemPrompt + "\n\n[USER]\n" + payload
@@ -587,6 +729,18 @@ func waitForPromptSubmit(ctx context.Context) error {
 }
 
 func (s Service) reconcile(ctx context.Context, inst instance.Instance) instance.Instance {
+	if s.isNDJSON(inst) {
+		next, err := s.NDJSON.Reconcile(ctx, inst)
+		if err != nil {
+			logx.Debug("reconcile_ndjson_failed", map[string]any{
+				"instance":   inst.Name,
+				"session_id": inst.SessionID,
+				"error":      err.Error(),
+			})
+			return inst
+		}
+		return next
+	}
 	if !s.Tmux.HasSession(ctx, inst.SessionID) {
 		if inst.Status != instance.StatusExited {
 			inst.Status = instance.StatusLost
@@ -623,6 +777,10 @@ func (s Service) reconcile(ctx context.Context, inst instance.Instance) instance
 	}
 	inst.UpdatedAt = time.Now()
 	return inst
+}
+
+func (s Service) isNDJSON(inst instance.Instance) bool {
+	return inst.HarnessType == claudeCodeNDJSONHarnessType
 }
 
 type titleStateFn func(string) string

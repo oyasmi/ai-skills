@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/oyasmi/agentmux/internal/apperr"
 	"github.com/oyasmi/agentmux/internal/config"
 	"github.com/oyasmi/agentmux/internal/instance"
+	"github.com/oyasmi/agentmux/internal/ndjsonctl"
 	"github.com/oyasmi/agentmux/internal/tmuxctl"
 )
 
@@ -1140,6 +1142,64 @@ func TestHaltImmediatelyKillsSessionWithoutInterrupts(t *testing.T) {
 	}
 }
 
+func TestNDJSONHarnessDoesNotUseTmuxForPromptWaitCaptureHalt(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns a local fake process")
+	}
+	ctx := context.Background()
+	tmux := &fakeTmux{sessions: map[string]bool{}}
+	svc, registryPath := newTestService(t, tmux)
+	fake := writeServiceFakeClaude(t, svc.Paths.StateDir)
+	svc.Config.Templates["ndjson"] = config.Template{
+		Command:     fake,
+		HarnessType: ndjsonctl.HarnessType,
+		CWD:         svc.Paths.StateDir,
+		Shell:       "/bin/bash -lc",
+		Env:         map[string]string{},
+	}
+
+	res, err := svc.Summon(ctx, SummonInput{TemplateName: "ndjson", Name: "agent"})
+	if err != nil {
+		t.Fatalf("summon ndjson: %v", err)
+	}
+	if res.Instance.HarnessType != ndjsonctl.HarnessType {
+		t.Fatalf("expected ndjson harness, got %q", res.Instance.HarnessType)
+	}
+	if len(tmux.sessions) != 0 {
+		t.Fatalf("expected ndjson summon not to create tmux sessions")
+	}
+	if _, err := svc.Prompt(ctx, "agent", "hello", ""); err != nil {
+		t.Fatalf("prompt ndjson: %v", err)
+	}
+	inst, _, err := svc.Wait(ctx, "agent", 1, 2000)
+	if err != nil {
+		t.Fatalf("wait ndjson: %v", err)
+	}
+	if inst.Status != instance.StatusIdle {
+		t.Fatalf("expected idle after wait, got %s", inst.Status)
+	}
+	_, snap, err := svc.Capture(ctx, "agent", 0)
+	if err != nil {
+		t.Fatalf("capture ndjson: %v", err)
+	}
+	if snap.Content != "service done" {
+		t.Fatalf("expected ndjson content, got %q", snap.Content)
+	}
+	if tmux.captureCalls != 0 || tmux.captureSnapshotCalls != 0 || len(tmux.sendKeys) != 0 {
+		t.Fatalf("expected no tmux interaction, capture=%d snapshot=%d keys=%v", tmux.captureCalls, tmux.captureSnapshotCalls, tmux.sendKeys)
+	}
+	if _, err := svc.HaltWithOptions(ctx, "agent", true, 0); err != nil {
+		t.Fatalf("halt ndjson: %v", err)
+	}
+	saved, err := instance.Load(registryPath)
+	if err != nil {
+		t.Fatalf("load registry: %v", err)
+	}
+	if _, ok := saved.Get("agent"); ok {
+		t.Fatalf("expected ndjson instance to be removed after halt")
+	}
+}
+
 func TestNewUsesConfiguredTmuxSocket(t *testing.T) {
 	cfg := config.Config{
 		Version: 1,
@@ -1193,9 +1253,10 @@ func newTestService(t *testing.T, tmux tmuxClient) (Service, string) {
 	}
 
 	return Service{
-		Paths:  config.Paths{Registry: registryPath},
+		Paths:  config.Paths{Registry: registryPath, StateDir: dir},
 		Config: cfg,
 		Tmux:   tmux,
+		NDJSON: ndjsonctl.Controller{StateDir: dir, PollMS: 10},
 	}, registryPath
 }
 
@@ -1205,6 +1266,25 @@ func intPtr(v int) *int {
 
 func strPtr(v string) *string {
 	return &v
+}
+
+func writeServiceFakeClaude(t *testing.T, dir string) string {
+	t.Helper()
+	path := filepath.Join(dir, "fake-service-claude")
+	script := `#!/bin/sh
+printf '{"type":"system","subtype":"init","session_id":"550e8400-e29b-41d4-a716-446655440000"}\n'
+while IFS= read -r line; do
+  uuid=$(printf '%s' "$line" | sed -n 's/.*"uuid":"\([^"]*\)".*/\1/p')
+  printf '{"type":"user","uuid":"%s","session_id":"550e8400-e29b-41d4-a716-446655440000","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}\n' "$uuid"
+  printf '{"type":"assistant","session_id":"550e8400-e29b-41d4-a716-446655440000","message":{"role":"assistant","content":[{"type":"text","text":"service done"}],"usage":{"input_tokens":1,"output_tokens":1}}}\n'
+  printf '{"type":"result","subtype":"success","is_error":false,"result":"service done","total_cost_usd":0.01,"usage":{"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"session_id":"550e8400-e29b-41d4-a716-446655440000"}\n'
+  printf '{"type":"system","subtype":"session_state_changed","state":"idle","session_id":"550e8400-e29b-41d4-a716-446655440000"}\n'
+done
+`
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatalf("write fake service claude: %v", err)
+	}
+	return path
 }
 
 func saveRunningInstance(t *testing.T, registryPath, name, sessionID string, status instance.Status, firstPromptSent bool, lastActivityAt time.Time) {

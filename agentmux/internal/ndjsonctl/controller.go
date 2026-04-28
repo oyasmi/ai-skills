@@ -1,0 +1,389 @@
+package ndjsonctl
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/oyasmi/agentmux/internal/apperr"
+	"github.com/oyasmi/agentmux/internal/capture"
+	"github.com/oyasmi/agentmux/internal/instance"
+)
+
+const (
+	HarnessType               = "claude-code-ndjson"
+	inputFIFOName             = "input.fifo"
+	outputJSONLName           = "output.jsonl"
+	stderrLogName             = "stderr.log"
+	stateFileName             = "state.json"
+	processFileName           = "process.json"
+	fifoWriteTimeout          = 5 * time.Second
+	defaultPollInterval       = 250 * time.Millisecond
+	sessionStateEventsEnvName = "CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS"
+)
+
+type Controller struct {
+	StateDir string
+	PollMS   int
+}
+
+type StartInput struct {
+	Instance        instance.Instance
+	Command         string
+	SystemPrompt    string
+	ClaudeSessionID string
+	Resume          bool
+}
+
+type StartResult struct {
+	Instance instance.Instance
+}
+
+type HaltOptions struct {
+	Immediately bool
+	Timeout     time.Duration
+}
+
+type processMeta struct {
+	Version     int       `json:"version"`
+	PID         int       `json:"pid"`
+	PGID        int       `json:"pgid"`
+	StartedAt   time.Time `json:"started_at"`
+	CWD         string    `json:"cwd"`
+	Command     string    `json:"command"`
+	Argv0       string    `json:"argv0"`
+	Fingerprint string    `json:"fingerprint"`
+}
+
+func (c Controller) Start(ctx context.Context, in StartInput) (StartResult, error) {
+	inst := in.Instance
+	claudeID := in.ClaudeSessionID
+	if claudeID == "" {
+		var err error
+		claudeID, err = newUUID()
+		if err != nil {
+			return StartResult{}, err
+		}
+	}
+	dir := inst.TransportDir
+	if dir == "" {
+		dir = filepath.Join(c.StateDir, "ndjson", inst.SessionID)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return StartResult{}, apperr.Wrap("ndjson_process_error", err, "create transport dir")
+	}
+	for _, name := range []string{outputJSONLName, stderrLogName} {
+		f, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			return StartResult{}, apperr.Wrap("ndjson_process_error", err, "create %s", name)
+		}
+		_ = f.Close()
+	}
+	fifoPath := filepath.Join(dir, inputFIFOName)
+	if err := ensureFIFO(fifoPath); err != nil {
+		return StartResult{}, err
+	}
+
+	finalCommand := buildClaudeCommand(in.Command, in.SystemPrompt, claudeID, in.Resume)
+	if err := writeRunScript(dir, finalCommand); err != nil {
+		return StartResult{}, err
+	}
+	cmd := exec.Command("/bin/sh", filepath.Join(dir, "run.sh"))
+	cmd.Dir = inst.CWD
+	cmd.Env = envList(inst.Env, map[string]string{sessionStateEventsEnvName: "1"})
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return StartResult{}, apperr.Wrap("ndjson_process_error", err, "start claude ndjson process")
+	}
+	go func() { _ = cmd.Wait() }()
+	pgid, _ := syscall.Getpgid(cmd.Process.Pid)
+	if pgid <= 0 {
+		pgid = cmd.Process.Pid
+	}
+	now := nowUTC()
+	inst.ClaudeSessionID = claudeID
+	inst.TransportDir = dir
+	inst.ProcessID = cmd.Process.Pid
+	inst.ProcessGroupID = pgid
+	inst.Command = finalCommand
+	inst.Status = instance.StatusStarting
+	inst.PaneTitle = ""
+	if err := saveProcessMeta(filepath.Join(dir, processFileName), processMeta{
+		Version:     1,
+		PID:         cmd.Process.Pid,
+		PGID:        pgid,
+		StartedAt:   now,
+		CWD:         inst.CWD,
+		Command:     finalCommand,
+		Argv0:       "/bin/sh",
+		Fingerprint: "agentmux:" + inst.SessionID + ":" + claudeID,
+	}); err != nil {
+		return StartResult{}, err
+	}
+	st := initialState(claudeID, now)
+	if err := saveState(filepath.Join(dir, stateFileName), st); err != nil {
+		return StartResult{}, err
+	}
+	if err := c.waitStarted(ctx, inst, 250*time.Millisecond); err != nil {
+		_ = syscall.Kill(-pgid, syscall.SIGTERM)
+		return StartResult{}, err
+	}
+	_ = withStateLocked(filepath.Join(dir, stateFileName), func(st *State) error {
+		st.Status = "idle"
+		st.SessionIdle = true
+		return nil
+	})
+	inst.Status = instance.StatusIdle
+	inst.UpdatedAt = nowUTC()
+	return StartResult{Instance: inst}, nil
+}
+
+func (c Controller) waitStarted(ctx context.Context, inst instance.Instance, delay time.Duration) error {
+	if delay > 0 {
+		if err := sleepPoll(ctx, delay); err != nil {
+			return err
+		}
+	}
+	if !processAlive(inst.ProcessID) {
+		return apperr.New("process_not_running", "claude ndjson process exited during startup: "+tailFile(stderrPath(inst), 2048))
+	}
+	return nil
+}
+
+func (c Controller) Reconcile(ctx context.Context, inst instance.Instance) (instance.Instance, error) {
+	if inst.ProcessID <= 0 {
+		inst.Status = instance.StatusLost
+		inst.UpdatedAt = nowUTC()
+		return inst, nil
+	}
+	if !processAlive(inst.ProcessID) {
+		inst.Status = instance.StatusExited
+		inst.UpdatedAt = nowUTC()
+		return inst, nil
+	}
+	err := withStateLocked(statePath(inst), func(st *State) error {
+		events, next, err := readEvents(outputPath(inst), st.LastReadOffset, 0)
+		if err != nil {
+			return err
+		}
+		applyEvents(st, events)
+		st.LastReadOffset = maxInt64(st.LastReadOffset, next)
+		return nil
+	})
+	if err != nil {
+		return inst, err
+	}
+	st, _ := loadState(statePath(inst))
+	inst.Status = instance.Status(st.Status)
+	if inst.Status == "" || inst.Status == instance.StatusStarting {
+		inst.Status = instance.StatusIdle
+	}
+	inst.UpdatedAt = nowUTC()
+	return inst, nil
+}
+
+func (c Controller) SendPrompt(ctx context.Context, inst instance.Instance, text string) (instance.Instance, error) {
+	payload := strings.TrimSpace(text)
+	if payload == "" {
+		return inst, nil
+	}
+	uuid, err := newUUID()
+	if err != nil {
+		return inst, err
+	}
+	msg := UserMessage{Type: "user", UUID: uuid}
+	msg.Message.Role = "user"
+	msg.Message.Content = []TextContent{{Type: "text", Text: payload}}
+	b, err := json.Marshal(msg)
+	if err != nil {
+		return inst, apperr.Wrap("ndjson_fifo_broken", err, "marshal prompt")
+	}
+	startOffset := fileSize(outputPath(inst))
+	if err := writeFIFO(ctx, filepath.Join(inst.TransportDir, inputFIFOName), append(b, '\n'), fifoWriteTimeout); err != nil {
+		return inst, err
+	}
+	now := nowUTC()
+	if err := withStateLocked(statePath(inst), func(st *State) error {
+		st.PendingPrompts = append(st.PendingPrompts, PendingPrompt{
+			UUID:        uuid,
+			SentAt:      now,
+			StartOffset: startOffset,
+			State:       PromptSent,
+		})
+		if st.ActivePromptUUID == "" {
+			st.ActivePromptUUID = uuid
+		}
+		st.LastPromptAt = now
+		st.SessionIdle = false
+		st.Status = "busy"
+		return nil
+	}); err != nil {
+		return inst, err
+	}
+	inst.FirstPromptSent = true
+	inst.Status = instance.StatusBusy
+	inst.LastActivityAt = now
+	inst.UpdatedAt = now
+	return inst, nil
+}
+
+func (c Controller) Capture(ctx context.Context, inst instance.Instance, history int) (capture.Snapshot, error) {
+	st, err := c.syncState(inst)
+	if err != nil {
+		return capture.Snapshot{}, err
+	}
+	from := promptStartOffset(st)
+	events, _, err := readEvents(outputPath(inst), from, 0)
+	if err != nil {
+		return capture.Snapshot{}, err
+	}
+	msgs, content, usage, cost := normalizeEvents(events)
+	msgs = trimMessages(msgs, history)
+	return capture.Snapshot{
+		History:    history,
+		Content:    content,
+		CapturedAt: nowUTC(),
+		Extra: map[string]any{
+			"messages":          msgs,
+			"usage":             usageMap(usage, cost),
+			"claude_session_id": inst.ClaudeSessionID,
+			"turns":             st.TotalTurns,
+			"raw_event_count":   len(events),
+		},
+	}, nil
+}
+
+func (c Controller) Wait(ctx context.Context, inst instance.Instance, timeout time.Duration) (capture.Snapshot, error) {
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		st, err := c.syncState(inst)
+		if err != nil {
+			return capture.Snapshot{}, err
+		}
+		if !hasUnfinishedPrompt(st.PendingPrompts) && st.SessionIdle {
+			return capture.Snapshot{CapturedAt: nowUTC()}, nil
+		}
+		if !processAlive(inst.ProcessID) {
+			return capture.Snapshot{}, apperr.New("process_not_running", "claude ndjson process is not running")
+		}
+		if time.Now().After(deadline) {
+			return capture.Snapshot{}, apperr.New("capture_timeout", "capture timed out before claude became idle")
+		}
+		if err := sleepPoll(ctx, c.poll()); err != nil {
+			return capture.Snapshot{}, err
+		}
+	}
+}
+
+func (c Controller) Halt(ctx context.Context, inst instance.Instance, opts HaltOptions) error {
+	if opts.Timeout <= 0 {
+		opts.Timeout = 5 * time.Second
+	}
+	if inst.ProcessGroupID > 0 && processAlive(inst.ProcessID) {
+		sig := syscall.SIGTERM
+		if opts.Immediately {
+			sig = syscall.SIGKILL
+		}
+		_ = syscall.Kill(-inst.ProcessGroupID, sig)
+		if !opts.Immediately {
+			deadline := time.Now().Add(opts.Timeout)
+			for processAlive(inst.ProcessID) && time.Now().Before(deadline) {
+				if err := sleepPoll(ctx, 100*time.Millisecond); err != nil {
+					return err
+				}
+			}
+			if processAlive(inst.ProcessID) {
+				_ = syscall.Kill(-inst.ProcessGroupID, syscall.SIGKILL)
+			}
+		}
+	}
+	_ = os.Remove(filepath.Join(inst.TransportDir, inputFIFOName))
+	_ = withStateLocked(statePath(inst), func(st *State) error {
+		st.Status = "exited"
+		for i := range st.PendingPrompts {
+			if st.PendingPrompts[i].State == PromptSent || st.PendingPrompts[i].State == PromptReplayed || st.PendingPrompts[i].State == PromptResult {
+				st.PendingPrompts[i].State = PromptCancelled
+			}
+		}
+		return nil
+	})
+	return nil
+}
+
+func (c Controller) Interrupt(ctx context.Context, inst instance.Instance) (instance.Instance, error) {
+	if inst.ProcessGroupID > 0 && processAlive(inst.ProcessID) {
+		_ = syscall.Kill(-inst.ProcessGroupID, syscall.SIGINT)
+	}
+	_ = withStateLocked(statePath(inst), func(st *State) error {
+		for i := range st.PendingPrompts {
+			if st.PendingPrompts[i].State == PromptSent || st.PendingPrompts[i].State == PromptReplayed || st.PendingPrompts[i].State == PromptResult {
+				st.PendingPrompts[i].State = PromptCancelled
+			}
+		}
+		st.ActivePromptUUID = ""
+		st.Status = "idle"
+		st.SessionIdle = true
+		return nil
+	})
+	inst.Status = instance.StatusIdle
+	inst.UpdatedAt = nowUTC()
+	return inst, nil
+}
+
+func (c Controller) Attach(inst instance.Instance) *exec.Cmd {
+	return exec.Command("tail", "-f", outputPath(inst))
+}
+
+func (c Controller) syncState(inst instance.Instance) (State, error) {
+	var out State
+	err := withStateLocked(statePath(inst), func(st *State) error {
+		events, next, err := readEvents(outputPath(inst), st.LastReadOffset, 0)
+		if err != nil {
+			return err
+		}
+		applyEvents(st, events)
+		st.LastReadOffset = maxInt64(st.LastReadOffset, next)
+		out = *st
+		return nil
+	})
+	return out, err
+}
+
+func (c Controller) poll() time.Duration {
+	if c.PollMS > 0 {
+		return time.Duration(c.PollMS) * time.Millisecond
+	}
+	return defaultPollInterval
+}
+
+func outputPath(inst instance.Instance) string {
+	return filepath.Join(inst.TransportDir, outputJSONLName)
+}
+func stderrPath(inst instance.Instance) string {
+	return filepath.Join(inst.TransportDir, stderrLogName)
+}
+func statePath(inst instance.Instance) string { return filepath.Join(inst.TransportDir, stateFileName) }
+
+func nowUTC() time.Time { return time.Now().UTC() }
+
+func newUUID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", apperr.Wrap("ndjson_process_error", err, "generate uuid")
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	hexed := hex.EncodeToString(b[:])
+	return fmt.Sprintf("%s-%s-%s-%s-%s", hexed[0:8], hexed[8:12], hexed[12:16], hexed[16:20], hexed[20:32]), nil
+}
