@@ -3,8 +3,9 @@ package ndjsonctl
 import "encoding/json"
 
 type Event struct {
-	Offset int64
-	Raw    json.RawMessage
+	Offset    int64
+	EndOffset int64
+	Raw       json.RawMessage
 
 	Type    string
 	Subtype string

@@ -138,7 +138,7 @@ func (c Controller) Start(ctx context.Context, in StartInput) (StartResult, erro
 	}
 	_ = withStateLocked(filepath.Join(dir, stateFileName), func(st *State) error {
 		st.Status = "idle"
-		st.SessionIdle = true
+		st.SessionIdle = false
 		return nil
 	})
 	inst.Status = instance.StatusIdle
@@ -169,19 +169,20 @@ func (c Controller) Reconcile(ctx context.Context, inst instance.Instance) (inst
 		inst.UpdatedAt = nowUTC()
 		return inst, nil
 	}
-	err := withStateLocked(statePath(inst), func(st *State) error {
-		events, next, err := readEvents(outputPath(inst), st.LastReadOffset, 0)
+	var st State
+	err := withStateLocked(statePath(inst), func(locked *State) error {
+		events, next, err := readEvents(outputPath(inst), syncReadOffset(*locked), 0)
 		if err != nil {
 			return err
 		}
-		applyEvents(st, events)
-		st.LastReadOffset = maxInt64(st.LastReadOffset, next)
+		applyEvents(locked, events)
+		locked.LastReadOffset = maxInt64(locked.LastReadOffset, next)
+		st = *locked
 		return nil
 	})
 	if err != nil {
 		return inst, err
 	}
-	st, _ := loadState(statePath(inst))
 	inst.Status = instance.Status(st.Status)
 	if inst.Status == "" || inst.Status == instance.StatusStarting {
 		inst.Status = instance.StatusIdle
@@ -222,6 +223,9 @@ func (c Controller) SendPrompt(ctx context.Context, inst instance.Instance, text
 			st.ActivePromptUUID = uuid
 		}
 		st.LastPromptAt = now
+		if st.LastReadOffset > startOffset {
+			st.LastReadOffset = startOffset
+		}
 		st.SessionIdle = false
 		st.Status = "busy"
 		return nil
@@ -332,11 +336,11 @@ func (c Controller) Interrupt(ctx context.Context, inst instance.Instance) (inst
 			}
 		}
 		st.ActivePromptUUID = ""
-		st.Status = "idle"
-		st.SessionIdle = true
+		st.Status = "busy"
+		st.SessionIdle = false
 		return nil
 	})
-	inst.Status = instance.StatusIdle
+	inst.Status = instance.StatusBusy
 	inst.UpdatedAt = nowUTC()
 	return inst, nil
 }
@@ -348,7 +352,7 @@ func (c Controller) Attach(inst instance.Instance) *exec.Cmd {
 func (c Controller) syncState(inst instance.Instance) (State, error) {
 	var out State
 	err := withStateLocked(statePath(inst), func(st *State) error {
-		events, next, err := readEvents(outputPath(inst), st.LastReadOffset, 0)
+		events, next, err := readEvents(outputPath(inst), syncReadOffset(*st), 0)
 		if err != nil {
 			return err
 		}

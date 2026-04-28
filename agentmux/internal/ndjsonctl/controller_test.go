@@ -2,9 +2,11 @@ package ndjsonctl
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -81,6 +83,95 @@ func TestControllerPromptWaitCaptureAndHalt(t *testing.T) {
 	}
 	if err := ctrl.Halt(context.Background(), inst, HaltOptions{Immediately: true}); err != nil {
 		t.Fatalf("halt: %v", err)
+	}
+}
+
+func TestWriteFIFOTimeoutDoesNotWaitForReader(t *testing.T) {
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "input.fifo")
+	if err := ensureFIFO(fifo); err != nil {
+		t.Fatalf("ensure fifo: %v", err)
+	}
+
+	start := time.Now()
+	err := writeFIFO(context.Background(), fifo, []byte("late\n"), 50*time.Millisecond)
+	if err == nil {
+		t.Fatalf("expected timeout without fifo reader")
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("writeFIFO blocked too long: %s", elapsed)
+	}
+
+	// Opening a reader after the timeout must not receive a delayed write from
+	// a leftover goroutine.
+	rfd, err := syscall.Open(fifo, syscall.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		t.Fatalf("open fifo reader: %v", err)
+	}
+	defer syscall.Close(rfd)
+	buf := make([]byte, 16)
+	n, err := syscall.Read(rfd, buf)
+	if n > 0 || (err != nil && err != syscall.EAGAIN) {
+		t.Fatalf("unexpected stale fifo data n=%d err=%v data=%q", n, err, string(buf[:n]))
+	}
+}
+
+func TestSyncStateReplaysFromPendingStartWithoutDoubleCounting(t *testing.T) {
+	dir := t.TempDir()
+	user := `{"type":"user","uuid":"prompt-1","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}` + "\n"
+	resultOffset := int64(len(user))
+	result := `{"type":"result","subtype":"success","is_error":false,"result":"done","total_cost_usd":0.01,"usage":{"input_tokens":2,"output_tokens":3}}` + "\n"
+	idle := `{"type":"system","subtype":"session_state_changed","state":"idle"}` + "\n"
+	output := filepath.Join(dir, outputJSONLName)
+	if err := os.WriteFile(output, []byte(user+result+idle), 0o600); err != nil {
+		t.Fatalf("write output: %v", err)
+	}
+	st := initialState("session-1", time.Now().UTC())
+	st.LastReadOffset = int64(len(user + result + idle))
+	st.LastResultOffset = resultOffset
+	st.TotalTurns = 1
+	st.TotalCostUSD = 0.01
+	st.TotalInputTokens = 2
+	st.TotalOutputTokens = 3
+	st.SessionIdle = false
+	st.Status = "busy"
+	st.PendingPrompts = []PendingPrompt{{
+		UUID:         "prompt-1",
+		StartOffset:  0,
+		ResultOffset: resultOffset,
+		State:        PromptResult,
+	}}
+	if err := saveState(filepath.Join(dir, stateFileName), st); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+
+	ctrl := Controller{PollMS: 10}
+	got, err := ctrl.syncState(instance.Instance{TransportDir: dir})
+	if err != nil {
+		t.Fatalf("sync state: %v", err)
+	}
+	if !got.SessionIdle || got.Status != "idle" || got.PendingPrompts[0].State != PromptIdle {
+		t.Fatalf("expected idle prompt after replay, got status=%s idle=%v prompt=%s", got.Status, got.SessionIdle, got.PendingPrompts[0].State)
+	}
+	if got.TotalTurns != 1 || got.TotalInputTokens != 2 || got.TotalOutputTokens != 3 || got.TotalCostUSD != 0.01 {
+		t.Fatalf("expected no duplicate accounting, got turns=%d input=%d output=%d cost=%v", got.TotalTurns, got.TotalInputTokens, got.TotalOutputTokens, got.TotalCostUSD)
+	}
+}
+
+func TestNormalizeEventsUsesAuthoritativeResultTextAndUsage(t *testing.T) {
+	events := []Event{
+		{Type: "stream_event", Event: StreamEvent{Delta: json.RawMessage(`{"type":"text_delta","text":"do"}`)}},
+		{Type: "stream_event", Event: StreamEvent{Type: "message_delta", Delta: json.RawMessage(`{"type":"text_delta","text":"ne"}`), Usage: Usage{InputTokens: 5, OutputTokens: 6}}},
+		{Type: "assistant", Message: Message{Content: json.RawMessage(`[{"type":"text","text":"done"}]`), Usage: Usage{InputTokens: 7, OutputTokens: 8}}},
+		{Type: "result", Result: "done", Usage: Usage{InputTokens: 2, OutputTokens: 3}, CostUSD: 0.01},
+	}
+
+	_, content, usage, cost := normalizeEvents(events)
+	if content != "done" {
+		t.Fatalf("expected final result content without duplicated deltas, got %q", content)
+	}
+	if usage.InputTokens != 2 || usage.OutputTokens != 3 || cost != 0.01 {
+		t.Fatalf("expected result usage/cost, got input=%d output=%d cost=%v", usage.InputTokens, usage.OutputTokens, cost)
 	}
 }
 

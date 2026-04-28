@@ -36,11 +36,12 @@ func readEvents(path string, from int64, limit int) ([]Event, int64, error) {
 				break
 			}
 			next += int64(len(line))
+			lineEnd := next
 			line = bytes.TrimSpace(line)
 			if len(line) == 0 {
 				continue
 			}
-			ev, err := parseEvent(lineStart, line)
+			ev, err := parseEvent(lineStart, lineEnd, line)
 			if err != nil {
 				return events, next, err
 			}
@@ -56,7 +57,7 @@ func readEvents(path string, from int64, limit int) ([]Event, int64, error) {
 	return events, next, nil
 }
 
-func parseEvent(offset int64, line []byte) (Event, error) {
+func parseEvent(offset, endOffset int64, line []byte) (Event, error) {
 	var base struct {
 		Type      string          `json:"type"`
 		Subtype   string          `json:"subtype"`
@@ -75,6 +76,7 @@ func parseEvent(offset int64, line []byte) (Event, error) {
 	}
 	ev := Event{
 		Offset:    offset,
+		EndOffset: endOffset,
 		Raw:       append(json.RawMessage(nil), line...),
 		Type:      base.Type,
 		Subtype:   base.Subtype,
@@ -95,7 +97,7 @@ func parseEvent(offset int64, line []byte) (Event, error) {
 
 func applyEvents(st *State, events []Event) {
 	for _, ev := range events {
-		st.LastReadOffset = maxInt64(st.LastReadOffset, ev.Offset+int64(len(ev.Raw))+1)
+		st.LastReadOffset = maxInt64(st.LastReadOffset, ev.EndOffset)
 		switch ev.Type {
 		case "user":
 			if ev.UUID != "" {
@@ -110,14 +112,16 @@ func applyEvents(st *State, events []Event) {
 				}
 			}
 		case "result":
-			st.LastResultOffset = ev.Offset
-			st.LastResultAt = nowUTC()
-			st.TotalTurns++
-			st.TotalCostUSD += ev.CostUSD
-			st.TotalInputTokens += ev.Usage.InputTokens
-			st.TotalOutputTokens += ev.Usage.OutputTokens
-			if ev.IsError {
-				st.LastError = ev.Result
+			if ev.Offset > st.LastResultOffset || (st.LastResultOffset == 0 && st.TotalTurns == 0) {
+				st.LastResultOffset = ev.Offset
+				st.LastResultAt = nowUTC()
+				st.TotalTurns++
+				st.TotalCostUSD += ev.CostUSD
+				st.TotalInputTokens += ev.Usage.InputTokens
+				st.TotalOutputTokens += ev.Usage.OutputTokens
+				if ev.IsError {
+					st.LastError = ev.Result
+				}
 			}
 			for i := range st.PendingPrompts {
 				if st.PendingPrompts[i].State == PromptReplayed {
@@ -143,11 +147,6 @@ func applyEvents(st *State, events []Event) {
 					st.SessionIdle = false
 				}
 			}
-		case "stream_event":
-			if ev.Event.Type == "message_start" || ev.Event.Type == "message_delta" {
-				st.TotalInputTokens = maxInt64(st.TotalInputTokens, ev.Event.Usage.InputTokens)
-				st.TotalOutputTokens = maxInt64(st.TotalOutputTokens, ev.Event.Usage.OutputTokens)
-			}
 		}
 	}
 	if hasUnfinishedPrompt(st.PendingPrompts) {
@@ -159,8 +158,11 @@ func applyEvents(st *State, events []Event) {
 
 func normalizeEvents(events []Event) ([]NormalizedMessage, string, Usage, float64) {
 	out := []NormalizedMessage{}
-	var resultText string
-	var usage Usage
+	var finalText string
+	var deltaText string
+	var resultUsage Usage
+	var fallbackUsage Usage
+	var sawResultUsage bool
 	var cost float64
 	for _, ev := range events {
 		switch ev.Type {
@@ -168,31 +170,38 @@ func normalizeEvents(events []Event) ([]NormalizedMessage, string, Usage, float6
 			msgs, text := normalizeContent(ev.Message.Content, "assistant")
 			out = append(out, msgs...)
 			if text != "" {
-				resultText = text
+				finalText = text
 			}
-			usage = addUsage(usage, ev.Message.Usage)
+			fallbackUsage = addUsage(fallbackUsage, ev.Message.Usage)
 		case "user":
 			msgs, _ := normalizeContent(ev.Message.Content, "user")
 			out = append(out, msgs...)
 		case "result":
 			if ev.Result != "" {
-				resultText = ev.Result
+				finalText = ev.Result
 			}
-			usage = addUsage(usage, ev.Usage)
+			resultUsage = addUsage(resultUsage, ev.Usage)
+			sawResultUsage = true
 			cost += ev.CostUSD
 			out = append(out, NormalizedMessage{Type: "result", Text: ev.Result, Raw: ev.Raw})
 		case "system":
 			out = append(out, NormalizedMessage{Type: "system", ContentType: ev.Subtype, Text: ev.State, Raw: ev.Raw})
 		case "stream_event":
 			if txt := streamTextDelta(ev); txt != "" {
-				resultText += txt
+				deltaText += txt
 				out = append(out, NormalizedMessage{Type: "assistant", ContentType: "text_delta", Text: txt, Raw: ev.Raw})
+			}
+			if ev.Event.Type == "message_start" || ev.Event.Type == "message_delta" {
+				fallbackUsage = maxUsage(fallbackUsage, ev.Event.Usage)
 			}
 		default:
 			out = append(out, NormalizedMessage{Type: ev.Type, Raw: ev.Raw})
 		}
 	}
-	return out, resultText, usage, cost
+	if sawResultUsage {
+		return out, textOrFallback(finalText, deltaText), resultUsage, cost
+	}
+	return out, textOrFallback(finalText, deltaText), fallbackUsage, cost
 }
 
 func normalizeContent(raw json.RawMessage, role string) ([]NormalizedMessage, string) {
@@ -260,6 +269,22 @@ func addUsage(a, b Usage) Usage {
 	}
 }
 
+func maxUsage(a, b Usage) Usage {
+	return Usage{
+		InputTokens:              maxInt64(a.InputTokens, b.InputTokens),
+		OutputTokens:             maxInt64(a.OutputTokens, b.OutputTokens),
+		CacheReadInputTokens:     maxInt64(a.CacheReadInputTokens, b.CacheReadInputTokens),
+		CacheCreationInputTokens: maxInt64(a.CacheCreationInputTokens, b.CacheCreationInputTokens),
+	}
+}
+
+func textOrFallback(finalText, deltaText string) string {
+	if finalText != "" {
+		return finalText
+	}
+	return deltaText
+}
+
 func firstActivePrompt(prompts []PendingPrompt) string {
 	for _, p := range prompts {
 		if p.State == PromptSent || p.State == PromptReplayed || p.State == PromptResult {
@@ -298,6 +323,21 @@ func promptStartOffset(st State) int64 {
 		return completed.StartOffset
 	}
 	return st.LastResultOffset
+}
+
+func syncReadOffset(st State) int64 {
+	offset := st.LastReadOffset
+	for _, p := range st.PendingPrompts {
+		if p.State == PromptSent || p.State == PromptReplayed || p.State == PromptResult {
+			if p.StartOffset < offset {
+				offset = p.StartOffset
+			}
+		}
+	}
+	if offset < 0 {
+		return 0
+	}
+	return offset
 }
 
 func trimMessages(msgs []NormalizedMessage, history int) []NormalizedMessage {
