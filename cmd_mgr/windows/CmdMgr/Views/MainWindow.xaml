@@ -1,0 +1,192 @@
+<Window x:Class="CmdMgr.Views.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:CmdMgr.ViewModels"
+        Title="Command Manager" Height="540" Width="720"
+        MinWidth="600" MinHeight="420"
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource SurfaceBrush}"
+        Closing="Window_Closing">
+
+    <Window.DataContext>
+        <vm:MainViewModel/>
+    </Window.DataContext>
+
+    <Window.InputBindings>
+        <KeyBinding Key="N" Modifiers="Ctrl" Command="{Binding AddCommand}"/>
+    </Window.InputBindings>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <DockPanel Grid.Row="0" Margin="20,14,20,14">
+            <TextBlock Text="Command Manager" FontSize="18" FontWeight="Bold"
+                       VerticalAlignment="Center" DockPanel.Dock="Left"/>
+            <Button Content="＋ Add Command"
+                    Style="{StaticResource PrimaryButton}"
+                    Command="{Binding AddCommand}"
+                    DockPanel.Dock="Right" HorizontalAlignment="Right"
+                    Padding="16,8" FontSize="13" ToolTip="Ctrl+N"/>
+        </DockPanel>
+
+        <!-- Search bar -->
+        <Border Grid.Row="1" Margin="20,0,20,12"
+                Background="{StaticResource CardBrush}"
+                BorderBrush="{StaticResource BorderBrush}"
+                BorderThickness="1" CornerRadius="8" Padding="10,7">
+            <DockPanel>
+                <TextBlock Text="🔍" DockPanel.Dock="Left" VerticalAlignment="Center"
+                           Margin="0,0,6,0" Foreground="{StaticResource MutedBrush}"/>
+                <Button DockPanel.Dock="Right"
+                        Command="{Binding ClearSearchCommand}"
+                        Style="{StaticResource ModernButton}"
+                        BorderThickness="0" Padding="4,2"
+                        Visibility="{Binding SearchText.Length,
+                            Converter={StaticResource CountToVisibilityConverter}}">
+                    <TextBlock Text="✕" FontSize="11" Foreground="{StaticResource MutedBrush}"/>
+                </Button>
+                <TextBox Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                         BorderThickness="0" Background="Transparent"
+                         VerticalAlignment="Center" FontSize="13"/>
+            </DockPanel>
+        </Border>
+
+        <Separator Grid.Row="2" Margin="0"/>
+
+        <!-- Command list -->
+        <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto"
+                      Padding="16,12,16,12">
+            <ItemsControl ItemsSource="{Binding FilteredCommands}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border Style="{StaticResource CommandCard}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- Status indicator -->
+                                <Ellipse Grid.Column="0" Width="10" Height="10"
+                                         VerticalAlignment="Center" Margin="0,0,12,0"
+                                         x:Name="StatusDot" Fill="{StaticResource MutedBrush}"/>
+
+                                <!-- Name and command preview -->
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="SemiBold"
+                                                   VerticalAlignment="Center"/>
+                                        <Border x:Name="TypeBadge" Style="{StaticResource TypeBadge}"
+                                                Margin="8,0,0,0" VerticalAlignment="Center">
+                                            <TextBlock x:Name="TypeText" FontSize="10" FontWeight="Medium"/>
+                                        </Border>
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding DisplayCommand}" FontSize="11"
+                                               FontFamily="Consolas" Foreground="{StaticResource MutedBrush}"
+                                               Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/>
+                                </StackPanel>
+
+                                <!-- Action buttons -->
+                                <StackPanel Grid.Column="2" Orientation="Horizontal"
+                                            VerticalAlignment="Center">
+                                    <!-- Long-running: Start/Stop -->
+                                    <Button x:Name="LongRunningToggleButton"
+                                            Content="▶" Style="{StaticResource ModernButton}"
+                                            Command="{Binding DataContext.ToggleLongRunningCommand,
+                                                RelativeSource={RelativeSource AncestorType=Window}}"
+                                            CommandParameter="{Binding}" ToolTip="Start"
+                                            Margin="0,0,4,0" Padding="8,6"
+                                            Visibility="Collapsed"/>
+                                    <!-- One-shot: Execute (disabled while running) -->
+                                    <Button x:Name="OneShotExecuteButton"
+                                            Content="▶" Style="{StaticResource ModernButton}"
+                                            Command="{Binding DataContext.ExecuteOneShotCommand,
+                                                RelativeSource={RelativeSource AncestorType=Window}}"
+                                            CommandParameter="{Binding}" ToolTip="Execute"
+                                            Margin="0,0,4,0" Padding="8,6"
+                                            Visibility="Collapsed"/>
+                                    <!-- View Output (enabled by IsRunning or HasLastOutput) -->
+                                    <Button x:Name="OutputButton"
+                                            Content="📄" Style="{StaticResource ModernButton}"
+                                            Command="{Binding DataContext.ShowOutputCommand,
+                                                RelativeSource={RelativeSource AncestorType=Window}}"
+                                            CommandParameter="{Binding}" ToolTip="View Output"
+                                            Margin="0,0,4,0" Padding="8,6"
+                                            IsEnabled="False"/>
+                                    <!-- History (both types) -->
+                                    <Button Content="📜" Style="{StaticResource ModernButton}"
+                                            Command="{Binding DataContext.ShowHistoryCommand,
+                                                RelativeSource={RelativeSource AncestorType=Window}}"
+                                            CommandParameter="{Binding}" ToolTip="History"
+                                            Margin="0,0,4,0" Padding="8,6"/>
+                                    <!-- Edit -->
+                                    <Button Content="✏" Style="{StaticResource ModernButton}"
+                                            Command="{Binding DataContext.EditCommand,
+                                                RelativeSource={RelativeSource AncestorType=Window}}"
+                                            CommandParameter="{Binding}" ToolTip="Edit"
+                                            Margin="0,0,4,0" Padding="8,6"/>
+                                    <!-- Delete -->
+                                    <Button Content="🗑" Style="{StaticResource DangerButton}"
+                                            Command="{Binding DataContext.DeleteCommand,
+                                                RelativeSource={RelativeSource AncestorType=Window}}"
+                                            CommandParameter="{Binding}" ToolTip="Delete"
+                                            Padding="8,6"/>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+
+                        <DataTemplate.Triggers>
+                            <DataTrigger Binding="{Binding IsLongRunning}" Value="True">
+                                <Setter TargetName="LongRunningToggleButton" Property="Visibility" Value="Visible"/>
+                                <Setter TargetName="TypeBadge" Property="Background" Value="#DBEAFE"/>
+                                <Setter TargetName="TypeText" Property="Text" Value="Long-running"/>
+                                <Setter TargetName="TypeText" Property="Foreground" Value="#3B82F6"/>
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsOneShot}" Value="True">
+                                <Setter TargetName="OneShotExecuteButton" Property="Visibility" Value="Visible"/>
+                                <Setter TargetName="TypeBadge" Property="Background" Value="#FEF3C7"/>
+                                <Setter TargetName="TypeText" Property="Text" Value="One-shot"/>
+                                <Setter TargetName="TypeText" Property="Foreground" Value="#D97706"/>
+                            </DataTrigger>
+                            <!-- Running state: toggle button becomes Stop, one-shot grays out, output enabled -->
+                            <DataTrigger Binding="{Binding IsRunning}" Value="True">
+                                <Setter TargetName="StatusDot" Property="Fill" Value="{StaticResource SuccessBrush}"/>
+                                <Setter TargetName="LongRunningToggleButton" Property="Content" Value="■"/>
+                                <Setter TargetName="LongRunningToggleButton" Property="ToolTip" Value="Stop"/>
+                                <Setter TargetName="OneShotExecuteButton" Property="Content" Value="⏳"/>
+                                <Setter TargetName="OneShotExecuteButton" Property="IsEnabled" Value="False"/>
+                                <Setter TargetName="OutputButton" Property="IsEnabled" Value="True"/>
+                            </DataTrigger>
+                            <!-- Completed run: keep output button enabled -->
+                            <DataTrigger Binding="{Binding HasLastOutput}" Value="True">
+                                <Setter TargetName="OutputButton" Property="IsEnabled" Value="True"/>
+                            </DataTrigger>
+                        </DataTemplate.Triggers>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+
+        <!-- Empty state overlay -->
+        <StackPanel Grid.Row="3" HorizontalAlignment="Center" VerticalAlignment="Center"
+                    Visibility="{Binding FilteredCommands.Count,
+                        Converter={StaticResource CountToVisibilityConverter},
+                        ConverterParameter=invert, FallbackValue=Collapsed}">
+            <TextBlock Text="{Binding EmptyStateIcon}" FontSize="48"
+                       HorizontalAlignment="Center" Margin="0,0,0,12"
+                       Foreground="{StaticResource MutedBrush}"/>
+            <TextBlock Text="{Binding EmptyStateTitle}" FontSize="16" FontWeight="Medium"
+                       Foreground="{StaticResource MutedBrush}" HorizontalAlignment="Center"/>
+            <TextBlock Text="{Binding EmptyStateHint}" FontSize="12"
+                       Foreground="{StaticResource MutedBrush}"
+                       HorizontalAlignment="Center" Margin="0,4,0,0"/>
+        </StackPanel>
+    </Grid>
+</Window>

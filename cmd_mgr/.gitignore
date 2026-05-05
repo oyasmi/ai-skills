@@ -1,0 +1,29 @@
+# General
+.DS_Store
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+python/build/
+python/dist/
+python/*.spec
+python/cmd_mgr.db
+
+# macOS / Swift
+macos/.build/
+macos/build/
+macos/dist/
+macos/CmdMgr.xcodeproj/project.xcworkspace/xcuserdata/
+macos/CmdMgr.xcodeproj/xcuserdata/
+
+# Windows / .NET
+windows/CmdMgr/bin/
+windows/CmdMgr/obj/
+windows/dist/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
