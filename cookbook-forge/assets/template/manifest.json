@@ -1,0 +1,48 @@
+{
+  "_comment": "cookbook-forge 清单（中文版）。驱动封面、侧栏与路由。删除真实文件里的 _ 开头注释键（build.mjs 也会自动剥离）。",
+  "site": {
+    "brand": "食谱",
+    "_brand_help": "封面与侧栏的题字。其中的 '·'、'.'、'—' 会被自动渲染成强调色。如『织·经』。",
+    "brandTag": "现场\n指南",
+    "_brandTag_help": "侧栏题字旁的小号大写标签；\\n 表示换行。可选。",
+    "title": "某主题 · 一本食谱",
+    "tagline": "一份手把手掌握 <主题> 的实战手册",
+    "kicker": "主题 · 一本 COOKBOOK",
+    "lead": "封面上一两句话的承诺。用 **双星号** 包住的关键词会被强调。",
+    "stats": [["12", "章"], ["40+", "信源"], ["6", "实战配方"], ["中文", "语言"]],
+    "_stats_help": "封面统计条，每项 [数字, 标签]。",
+    "dateline": ["cookbook-forge 出品", "2026 更新"],
+    "_dateline_help": "封面日期/署名行，多项之间以 ◆ 分隔。",
+    "env": "由 cookbook-forge 生成",
+    "repo": "",
+    "repoLabel": "源码"
+  },
+  "parts": [
+    {
+      "id": "front",
+      "label": "",
+      "hideOnCover": true,
+      "_help": "hideOnCover:true 让该部分不出现在封面目录格（用于卷首）。label 为空则侧栏不显示分组标题。",
+      "chapters": [
+        { "id": "00-preface", "num": "序", "title": "前言", "file": "docs/00-preface.md" }
+      ]
+    },
+    {
+      "id": "part-1",
+      "label": "第一部 · 基础",
+      "desc": "封面上分部标题下的一行可选说明。",
+      "chapters": [
+        { "id": "p1-01", "num": "01", "title": "第一章标题", "file": "docs/p1-01-first.md" },
+        { "id": "p1-02", "num": "02", "title": "第二章标题", "file": "docs/p1-02-second.md" }
+      ]
+    },
+    {
+      "id": "appendix",
+      "label": "附录",
+      "chapters": [
+        { "id": "app-a", "num": "A", "title": "术语表", "file": "docs/app-a-glossary.md" },
+        { "id": "app-b", "num": "B", "title": "信源索引", "file": "docs/app-b-sources.md" }
+      ]
+    }
+  ]
+}
