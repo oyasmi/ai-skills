@@ -132,3 +132,228 @@ Pick from these; rename them in the topic's own language. Not all apply.
 - Chapters should be **substantial but not sprawling** — roughly one sitting to
   read. If a chapter needs three sittings, it's two chapters. If five chapters
   read in two minutes each, some should merge.
+
+---
+
+## Inside a chapter — the internal structure template
+
+Knowing which chapters to write is half the job. You also need to know what one
+chapter looks like *inside*. The template below is distilled from a 29-chapter
+production cookbook and is battle-tested.
+
+### The five parts of one chapter
+
+**Hook → Body (N numbered sections) → Summary → Bridge → Next-chapter link.**
+
+#### 1. Opening hook (required)
+
+Every chapter opens with a blockquote that does two things: state the thesis in
+one bolded sentence, then locate the chapter in the wider book in 1–2 sentences.
+
+```markdown
+# 第 XX 章 · 章标题
+
+> 一句话：**[本章核心论点，加粗，可独立成立]。**
+>
+> [1–2 句话解释本章教什么、为什么在这个位置出现、需要什么前置知识（或指向哪一章）。]
+```
+
+Worked example:
+
+```markdown
+# 第 01 章 · Workflow 是什么
+
+> 一句话：**Workflow 是 Claude Code 内置的一个工具，让你用一段纯 JavaScript 脚本，确定性地编排任意多个 subagent。**
+>
+> 这一章不急着写复杂脚本。先把三件事讲透：它到底是个什么东西、运行时发生了什么、为什么值得专门花时间学——这是后面所有配方的地基。
+```
+
+#### 2. Body — numbered sections (X.1, X.2, …)
+
+Number sections as `chapter.section` (chapter 10's third section is `## 10.3
+标题`). Use H3 for sub-sections.
+
+**Section 1 follows a fixed pattern — start from something concrete:**
+
+```markdown
+## X.1 从一次真实的 [具体事物] 说起
+
+[A minimal, concrete example — code / output / screenshot / scenario]
+
+[Then take it apart block by block]
+```
+
+Why: readers build a mental model faster from an example than from a definition.
+Whole first, parts second.
+
+**Later sections each add one layer of depth or introduce one new concept.**
+Common section types:
+
+| Section type | Purpose | Core visual elements |
+|--------------|---------|---------------------|
+| Concept | Introduce one core concept | Table of fields + mermaid of structure + `tip` callout for the key insight |
+| Comparison | Help the reader pick between options | Comparison table + side-by-side mermaid + `info` callout with the decision rule |
+| Anti-pattern | What not to do | Anti-pattern table (name / problem / correct alternative) + `warn` callout |
+| Design notes | Justify the recipe's choices | Numbered bold list: **① 要点.** 1–3 sentence rationale |
+| Variants | Variations on the main recipe | A single `info` callout, each variant a bolded sub-title + 1–2 sentences |
+
+*Comparison-section skeleton:*
+
+```markdown
+## X.N [选择 A] vs [选择 B]：核心取舍
+
+[一段话说清楚岔路口在哪]
+
+| 维度 | 选择 A | 选择 B |
+|------|--------|--------|
+| 适用场景 | ... | ... |
+| 成本 | ... | ... |
+| 风险 | ... | ... |
+
+[mermaid 并排对比图]
+
+<div class="callout info">
+
+**决策规则**：[帮读者做选择的一句话。]
+
+</div>
+```
+
+*Variants-section skeleton:*
+
+```markdown
+## X.N 变体
+
+<div class="callout info">
+
+**变体 A · [名称]**：[1–2 句描述如何修改主配方以适应不同场景。]
+
+**变体 B · [名称]**：[...]
+
+**变体 C · [名称]**：[...]
+
+</div>
+```
+
+#### 3. Chapter summary (required)
+
+```markdown
+## X.N 本章小结
+
+- [要点 1——完整句子，脱离上下文也能独立阅读]
+- [要点 2]
+- [要点 3——引用具体数据]
+- [要点 4]
+- [要点 5——桥接到下一章的主题]
+```
+
+Discipline:
+- 4–7 bullets.
+- Each bullet is a **complete sentence**, not a fragment.
+- First bullet restates the chapter's thesis.
+- Last bullet pivots toward the next chapter.
+- Include numbers wherever they exist.
+
+#### 4. Bridge paragraph (required, between summary and next-chapter link)
+
+Not "click here for the next chapter" — 1–2 prose sentences that tell the reader
+**why** to keep going. Engineer the page-turn.
+
+Worked example:
+
+```markdown
+下一章换个角度：先不聊 API，聊聊**为什么**——Workflow 还没出现的时候，大家是怎么手动编排多 Agent 的、又踩过哪些坑，搞明白「确定性编排」到底解决了什么真问题。
+
+> 继续阅读：[第 02 章 · 为什么需要确定性编排](#/p1-02)
+```
+
+#### 5. Cross-references (throughout the chapter)
+
+Link as you write:
+
+```markdown
+（见第 X 章对此概念的基础讲解）        ← backward reference
+（第 Y 章会详细展开这个模式）          ← forward reference
+（完整参考见附录 A）                  ← appendix reference
+```
+
+Every chapter should reference at least two other chapters. This makes the book
+read as a **network**, not a string of isolated essays.
+
+### Full chapter skeleton — copy and fill in
+
+```markdown
+# 第 XX 章 · [标题]
+
+> 一句话：**[核心论点]。**
+>
+> [定位与上下文]
+
+---
+
+## X.1 从一个真实的 [具体事物] 说起
+
+[最小具体例子]
+
+[逐块拆解]
+
+---
+
+## X.2 [核心概念]
+
+[讲解 + 图表]
+
+| 要素 | 说明 |
+|------|------|
+| ... | ... |
+
+<div class="callout tip">
+
+**[洞察].** [为什么重要。]
+
+</div>
+
+---
+
+## X.3 [深化 / 对比]
+
+[更深入的讲解或两种方案的对比]
+
+```mermaid
+flowchart LR
+  A --> B --> C
+```
+
+<div class="callout warn">
+
+**[警告].** [什么会出问题。]
+
+</div>
+
+---
+
+## X.4 [实践 / 应用]
+
+[代码示例或实际应用场景]
+
+---
+
+## X.5 设计要点
+
+**① [要点].** [理由。]
+**② [要点].** [理由。]
+
+---
+
+## X.6 本章小结
+
+- [论点重述]
+- [关键概念 1]
+- [关键概念 2]
+- [数据点]
+- [向下一章过渡]
+
+[桥接段落——叙述性地引出下一章]
+
+> 继续阅读：[第 XX+1 章 · 下一章标题](#/pN-XX)
+```
