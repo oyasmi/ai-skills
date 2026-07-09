@@ -673,13 +673,21 @@ PR 1–2 是给 execjson 腾地方，本身不引入新功能，可以先合。
 | `halt` | `status=exited`，进程组无残留 |
 | stdin 重定向正确 | stderr 无 `Reading additional input from stdin...` |
 | 无效模型（`turn.failed`） | turn 标记 `failed`，`last_error` 可见，实例仍 `idle` 且可继续 prompt |
+| `--sandbox workspace-write` 真实工作 | agent 成功写出 `proof.txt`，`capture` 中出现 `tool_use` 消息 |
+| 5 个 turn 的会话连续性 | `output.jsonl` 中 5 条 `thread.started` 同一 id；`turns/000` 无 resume，其余全部 `resume '<tid>'` |
+| 被 `C-c` 取消的 turn 不污染线程 | turn 3 `cancelled` 之后，turn 4 正常 `completed` |
+| 前缀校验 | `--ask-for-approval` / `--ephemeral` / `--json` / 缺 `exec` / 管道 均在 summon 阶段被 `config_invalid` 拒绝 |
 
-SIGINT 经 node wrapper 转发给 rust 子进程是可靠的（进程组信号，实测 turn 进程组无残留），§16 原第 4 项疑虑排除。
+53 条断言，全部通过（一次失败是 smoke 脚本自身把 `jq` 多行输出当行数计，非产品问题，已修）。
+
+两条原「待确认」由本次验证结清：
+
+1. **SIGINT 经 npm 的 node wrapper 转发给 rust 子进程是可靠的。** 进程组信号，实测 `C-c` 与 `halt` 之后均无残留进程。
+2. **`thread.started` 已产生但 turn 失败的 session 可以 resume。** 实测对一个仅有 `turn.failed` 的 thread 执行 `codex exec resume`，成功恢复并完成新 turn；codex 只是提示模型不一致（`This session was recorded with model X but is resuming with Y`），不阻断。§10.5 的假设成立。
 
 ## 17. 仍待确认
 
 1. `item.updated` 在何种 item 上真实出现（至今未观测到；`command_execution` 长输出、`todo_list` 更新是候选）。归一化已按 last-write-wins 处理，出现时不会出错。
 2. `file_change` / `mcp_tool_call` / `todo_list` 的 item 字段形状（未触发，归一化先保 `raw`）。`mcp_tool_call` 的工具名字段猜测为 `server`+`tool`/`name`，需实测校正。
-3. `codex exec resume` 对「`thread.started` 已产生但 turn 失败」的 session 是否可恢复（§10.5 假设可以；smoke test 中失败 turn 之后未再验证 resume）。
-4. `codex exec` 收到 SIGTERM 时是否会正常落盘 session；若不会，`halt` 后的 `thread_id` 可能不可 resume。
-5. 默认模板不传 `--model`：可用模型取决于账号与套餐（本机 ChatGPT 账号下 `gpt-5.1-codex` / `gpt-5.3-codex` 均被拒），交由 codex 自身配置决定更稳。
+3. `codex exec` 收到 SIGTERM 时是否会正常落盘 session；若不会，`halt` 后的 `thread_id` 可能不可 resume。（`halt` 会删除 registry 记录，实践中很少再 resume，优先级低。）
+4. 默认模板不传 `--model`：可用模型取决于账号与套餐（本机 ChatGPT 账号下 `gpt-5.1-codex` / `gpt-5.3-codex` 均被拒），交由 codex 自身配置决定更稳。
