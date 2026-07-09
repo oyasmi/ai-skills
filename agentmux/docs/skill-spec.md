@@ -236,6 +236,11 @@ skill 应提醒使用它的 Agent：
    - 必要时重新 `summon`
 5. `invalid_key`
    - 改用支持的白名单键名
+6. `execjson_instance_busy`
+   - 只出现在 `codex-cli-execjson`；该 prompt 未发出
+   - 先 `wait`，再原样重发；不要立刻重试，也不要用 `halt` 解锁
+7. `config_invalid`
+   - 若发生在 `codex-cli-execjson` 的 `summon`，说明模板 `command` 不是一个只带父级 flag 的 `codex exec` 前缀
 
 ---
 
@@ -264,11 +269,18 @@ SKILL.md 不应包含：
 
 ## 11. `agents/openai.yaml` 建议
 
+`agents/` 只放这一个文件，且它是 **skill 的接口元数据**，不是 harness 或 agent 的注册表。新增 harness type 时不要在这里加文件——没有任何东西会读取它们；应该改的是 `SKILL.md` 的行为规则，以及本文件的描述文案。
+
 建议元数据语义：
 
 1. `display_name`: `AgentMux`
-2. `short_description`: 面向 AI Agent 的 tmux 实例控制技能
-3. `default_prompt`: 指导 Agent 使用 `agentmux` 管理和驱动终端 Agent 实例
+2. `short_description`: 面向 AI Agent 的实例控制技能，涵盖 tmux TUI harness 与结构化 harness
+3. `default_prompt`: 指导 Agent 使用 `agentmux` 管理和驱动 Agent 实例，并提示先读 `harness_type`
+
+`default_prompt` 里值得前置的两条，是最容易被上层 Agent 搞错的：
+
+1. 结构化 harness（`claude-code-ndjson`、`codex-cli-execjson`）没有屏幕，不需要补 `Enter`
+2. `codex-cli-execjson` 空闲时本就没有进程；busy 时 `prompt` 会以 `execjson_instance_busy` 失败且什么都没发出去
 
 这一文件应与 `SKILL.md` 保持一致，不要额外扩展无关承诺。
 
