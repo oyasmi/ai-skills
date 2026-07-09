@@ -234,12 +234,15 @@ func (c Controller) SendPrompt(ctx context.Context, inst instance.Instance, text
 	return inst, nil
 }
 
-func (c Controller) Capture(ctx context.Context, inst instance.Instance, history int) (capture.Snapshot, error) {
+func (c Controller) Capture(ctx context.Context, inst instance.Instance, history int, scope capture.Scope) (capture.Snapshot, error) {
 	st, err := c.syncState(inst)
 	if err != nil {
 		return capture.Snapshot{}, err
 	}
-	from := promptStartOffset(st)
+	var from int64
+	if scope != capture.ScopeSession {
+		from = promptStartOffset(st)
+	}
 	events, _, err := readEvents(outputPath(inst), from, 0)
 	if err != nil {
 		return capture.Snapshot{}, err

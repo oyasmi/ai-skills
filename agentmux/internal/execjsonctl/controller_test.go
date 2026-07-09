@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/oyasmi/agentmux/internal/apperr"
+	"github.com/oyasmi/agentmux/internal/capture"
 	"github.com/oyasmi/agentmux/internal/instance"
 )
 
@@ -150,7 +151,7 @@ func TestPromptWaitCaptureThenResumeSecondTurn(t *testing.T) {
 		t.Fatal("a thread that emitted thread.started must be resumable")
 	}
 
-	snap, err := ctrl.Capture(context.Background(), inst, 0)
+	snap, err := ctrl.Capture(context.Background(), inst, 0, capture.ScopeCurrent)
 	if err != nil {
 		t.Fatalf("capture: %v", err)
 	}
@@ -178,6 +179,20 @@ func TestPromptWaitCaptureThenResumeSecondTurn(t *testing.T) {
 	if !strings.Contains(string(script), "resume 'thread-fake-1'") {
 		t.Fatalf("second turn must resume the thread, got:\n%s", script)
 	}
+	current, err := ctrl.Capture(context.Background(), inst, 0, capture.ScopeCurrent)
+	if err != nil {
+		t.Fatalf("capture current: %v", err)
+	}
+	if strings.Contains(messagesText(current), "echo:hello") || !strings.Contains(messagesText(current), "echo:again") {
+		t.Fatalf("current scope must only include the latest turn, got %s", messagesText(current))
+	}
+	session, err := ctrl.Capture(context.Background(), inst, 0, capture.ScopeSession)
+	if err != nil {
+		t.Fatalf("capture session: %v", err)
+	}
+	if !strings.Contains(messagesText(session), "echo:hello") || !strings.Contains(messagesText(session), "echo:again") {
+		t.Fatalf("session scope must include both turns, got %s", messagesText(session))
+	}
 
 	st, err := loadState(statePath(inst))
 	if err != nil {
@@ -186,6 +201,17 @@ func TestPromptWaitCaptureThenResumeSecondTurn(t *testing.T) {
 	if st.TotalTurns != 2 || st.TotalInputTokens != 10 || st.TotalCachedInputTokens != 2 {
 		t.Fatalf("usage must accumulate across turns, got %+v", st)
 	}
+}
+
+func messagesText(snap capture.Snapshot) string {
+	msgs, _ := snap.Extra["messages"].([]NormalizedMessage)
+	var parts []string
+	for _, msg := range msgs {
+		if msg.Text != "" {
+			parts = append(parts, msg.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func TestPromptWhileBusyIsRejected(t *testing.T) {
@@ -276,7 +302,7 @@ func TestTurnFailedIsRecordedWithoutFailingWait(t *testing.T) {
 	if _, err := ctrl.Wait(context.Background(), inst, 10*time.Second); err != nil {
 		t.Fatalf("wait must succeed even when the turn failed: %v", err)
 	}
-	snap, err := ctrl.Capture(context.Background(), inst, 0)
+	snap, err := ctrl.Capture(context.Background(), inst, 0, capture.ScopeCurrent)
 	if err != nil {
 		t.Fatalf("capture: %v", err)
 	}
@@ -379,6 +405,20 @@ func TestStartRejectsInvalidCommand(t *testing.T) {
 	_, err := ctrl.Start(context.Background(), inst, "codex exec --ephemeral", "", false)
 	if err == nil {
 		t.Fatal("expected --ephemeral to be rejected at summon")
+	}
+	if code := apperr.Code(err); code != "config_invalid" {
+		t.Fatalf("expected config_invalid, got %s", code)
+	}
+}
+
+func TestStartRejectsPositionalPromptInCommand(t *testing.T) {
+	dir := t.TempDir()
+	fake := writeFakeCodex(t, dir)
+	ctrl, inst := newTestInstance(t, dir, fake, nil)
+
+	_, err := ctrl.Start(context.Background(), inst, "codex exec hello", "", false)
+	if err == nil {
+		t.Fatal("expected positional prompt to be rejected")
 	}
 	if code := apperr.Code(err); code != "config_invalid" {
 		t.Fatalf("expected config_invalid, got %s", code)

@@ -24,6 +24,22 @@ var rejectedSubcommands = map[string]string{
 	"review": "codex exec review is not supported by this harness",
 }
 
+var allowedBoolFlags = map[string]bool{
+	"--skip-git-repo-check":                      true,
+	"--dangerously-bypass-approvals-and-sandbox": true,
+}
+
+var allowedValueFlags = map[string]bool{
+	"-s":        true,
+	"--sandbox": true,
+	"-C":        true,
+	"--cd":      true,
+	"--add-dir": true,
+	"--color":   true,
+	"-m":        true,
+	"--model":   true,
+}
+
 // validateCommand enforces that the template command is a plain `codex exec`
 // prefix carrying only parent-level flags. Everything after it -- the `resume`
 // subcommand, `--json`, and the `-` stdin marker -- is appended by agentmux.
@@ -45,7 +61,8 @@ func validateCommand(command string) error {
 	if len(fields) < 2 || filepath.Base(fields[0]) != "codex" || fields[1] != "exec" {
 		return apperr.New("config_invalid", "codex-cli-execjson command must start with `codex exec`")
 	}
-	for _, f := range fields[2:] {
+	for i := 2; i < len(fields); i++ {
+		f := fields[i]
 		name := f
 		if eq := strings.IndexByte(name, '='); eq > 0 {
 			name = name[:eq]
@@ -56,6 +73,26 @@ func validateCommand(command string) error {
 		if reason, bad := rejectedSubcommands[name]; bad {
 			return apperr.New("config_invalid", fmt.Sprintf("codex-cli-execjson command must not contain `%s`: %s", name, reason))
 		}
+		if allowedBoolFlags[name] {
+			if strings.Contains(f, "=") {
+				return apperr.New("config_invalid", fmt.Sprintf("codex-cli-execjson flag %s must not use a value", name))
+			}
+			continue
+		}
+		if allowedValueFlags[name] {
+			if strings.Contains(f, "=") {
+				continue
+			}
+			i++
+			if i >= len(fields) || strings.HasPrefix(fields[i], "-") {
+				return apperr.New("config_invalid", fmt.Sprintf("codex-cli-execjson flag %s requires a value", name))
+			}
+			continue
+		}
+		if strings.HasPrefix(f, "-") {
+			return apperr.New("config_invalid", fmt.Sprintf("codex-cli-execjson command contains unsupported flag %s", name))
+		}
+		return apperr.New("config_invalid", fmt.Sprintf("codex-cli-execjson command must not contain positional argument %q; prompts are supplied by agentmux", f))
 	}
 	return nil
 }

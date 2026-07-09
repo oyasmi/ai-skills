@@ -10,7 +10,7 @@ usage:
   agentmux summon --template <template-name> [--name <instance-name>] [--cwd <path>] [--model <model>] [--command <shell-command>] [--system-prompt <text>] [--prompt <text>] [--json]
   agentmux inspect <instance-name> [--json]
   agentmux prompt <instance-name> [--text <text> | --stdin] [--key <key>] [--json]
-  agentmux capture <instance-name> [--history <lines>] [--json]
+  agentmux capture <instance-name> [--scope current|session] [--history <limit>] [--json]
   agentmux wait <instance-name> [--stable <duration-or-ms>] [--timeout <duration-or-ms>] [--json]
   agentmux attach [<instance-name>]
   agentmux halt <instance-name> [--json]
@@ -73,7 +73,7 @@ func helpForArgs(args []string) (string, bool) {
 
 func rootHelp() string {
 	return strings.TrimSpace(`
-agentmux manages isolated tmux-backed terminal agent instances for AI orchestrators.
+agentmux manages isolated terminal or headless agent instances for AI orchestrators.
 
 Usage:
   agentmux <command> [arguments]
@@ -86,7 +86,7 @@ Core commands:
   summon          Create or reuse an instance
   inspect         Query one instance's current status and metadata
   prompt          Send text or a special key to an instance
-  capture         Capture current screen text from an instance
+  capture         Read the latest observable output from an instance
   wait            Wait until an agent appears done with/without a timeout
   attach          Attach a human terminal to an instance
   halt            Stop an instance
@@ -265,7 +265,7 @@ Examples:
 
 func captureHelp() string {
 	return strings.TrimSpace(`
-capture returns pure text captured from the instance screen through tmux capture-pane.
+capture reads the latest observable output from an instance without waiting.
 
 Usage:
   agentmux capture <instance-name> [flags]
@@ -274,23 +274,27 @@ Arguments:
   <instance-name>           Target instance name
 
 Flags:
-  --history <lines>         Include N history lines above the visible screen
+  --scope <scope>           Output scope: current or session, default current
+  --history <limit>         TUI: history lines; structured: message limit
   --json                    Return JSON output
   -h, --help                Show this help
 
 Output:
-  Text mode prints captured screen text only.
-  JSON mode returns cursor position, screen size, pane title, and content.
+  Text mode prints the current content only.
+  JSON mode returns scope, harness type, content, and harness-specific metadata.
 
 Notes:
-  capture always returns the current screen immediately.
-  capture is for reading terminal output, not for waiting or querying status by itself.
+  capture always returns immediately.
+  For TUI harnesses, current means current screen plus optional history lines.
+  For structured harnesses, current means the active or most recent turn; session spans the whole recorded conversation.
+  capture is for reading output, not for waiting or querying status by itself.
   Use inspect --json when you only need current status or pane title.
   Use wait if you need to block until the agent appears done.
 
 Examples:
   agentmux capture 编码助手-A
   agentmux capture 编码助手-A --history 120 --json
+  agentmux capture 编码助手-A --scope session --history 40 --json
 `)
 }
 

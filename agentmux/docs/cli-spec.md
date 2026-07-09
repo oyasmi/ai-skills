@@ -382,28 +382,30 @@ JSON 示例：
 
 用途：
 
-抓取实例当前屏幕文本。
+立即读取实例当前可观测输出。
 
 语法：
 
 ```bash
-agentmux capture <instance-name> [flags]
+agentmux capture <instance-name> [--scope current|session] [--history <limit>] [--json]
 ```
 
 参数：
 
-1. `--history <lines>`
-2. `--json`
+1. `--scope current|session`，默认 `current`
+2. `--history <limit>`
+3. `--json`
 
 行为：
 
-1. 默认抓当前屏幕可见文本
-2. `--history` 允许向上抓取更多历史行
-3. 调用后立即返回当前屏幕内容，不承担等待职责
+1. 默认 `--scope current`
+2. TUI harness 下，`current` 表示当前屏幕，`--history` 表示向上抓取的历史行数
+3. 结构化 harness 下，`current` 表示当前或最近 turn，`session` 表示整段已记录会话，`--history` 表示归一化消息数量限制
+4. 调用后立即返回当前可解析内容，不承担等待职责
 
 说明：
 
-1. `capture` 的职责是读取终端输出文本
+1. `capture` 的职责是读取输出
 2. 它不是等待接口，也不是专门的状态查询接口
 3. 若需要等待 agent 完成工作，应使用 `wait`
 
@@ -424,8 +426,9 @@ JSON 示例：
     "cursor_y": 23,
     "width": 120,
     "height": 24,
+    "scope": "current",
+    "harness_type": "claude-code",
     "history_lines": 120,
-    "stable_for_ms": 1750,
     "content": "...\n"
   }
 }

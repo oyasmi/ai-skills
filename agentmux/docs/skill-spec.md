@@ -62,7 +62,7 @@ SKILL.md 中应明确写出以下规则：
 3. 不假设实例不存在，先 `list`
 4. 不假设模板存在，必要时先 `template list`
 5. 人类要求实时查看时才使用 `attach`
-6. `capture` 默认拿纯文本，不要求 ANSI
+6. `capture` 默认读取当前可观测输出；TUI 返回屏幕文本，结构化 harness 返回聚合内容
 7. 使用 `summon` 时，要明确区分“新建”与“复用”
 8. 长任务策略应集中写在单独的 `Patience & Polling Strategy` 章节，不要把同一规则在多个章节重复展开
 

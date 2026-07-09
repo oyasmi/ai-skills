@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/oyasmi/agentmux/internal/apperr"
+	"github.com/oyasmi/agentmux/internal/capture"
 	"github.com/oyasmi/agentmux/internal/config"
+	"github.com/oyasmi/agentmux/internal/execjsonctl"
 	"github.com/oyasmi/agentmux/internal/instance"
 	"github.com/oyasmi/agentmux/internal/ndjsonctl"
 	"github.com/oyasmi/agentmux/internal/tmuxctl"
@@ -778,6 +780,30 @@ func TestSummonRejectsReuseAcrossTemplates(t *testing.T) {
 	}
 }
 
+func TestSummonRejectsModelOverrideWhenExecJSONCommandHasNoPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	svc, _ := newTestService(t, &fakeTmux{sessions: map[string]bool{}})
+	svc.Config.Templates["codex-headless"] = config.Template{
+		Command:     "codex exec --sandbox workspace-write --skip-git-repo-check",
+		HarnessType: execjsonctl.HarnessType,
+		CWD:         svc.Config.Defaults.CWD,
+	}
+
+	_, err := svc.Summon(ctx, SummonInput{
+		TemplateName: "codex-headless",
+		Name:         "codex",
+		Model:        strPtr("gpt-5.1-codex"),
+	})
+	if err == nil {
+		t.Fatal("expected --model override to be rejected without $MODEL")
+	}
+	if code := apperr.Code(err); code != "invalid_arguments" {
+		t.Fatalf("expected invalid_arguments, got %s", code)
+	}
+}
+
 func TestInspectReconcilesOnlyTargetInstance(t *testing.T) {
 	t.Parallel()
 
@@ -871,7 +897,7 @@ func TestCaptureStableMarksIdleAndReturnsContent(t *testing.T) {
 	svc.Config.Defaults.Capture.PollMS = 1
 	saveRunningInstance(t, registryPath, "worker", "live-session", instance.StatusBusy, true, time.Now().UTC().Add(-2*time.Second))
 
-	inst, snap, err := svc.Capture(ctx, "worker", 10)
+	inst, snap, err := svc.Capture(ctx, "worker", 10, capture.ScopeCurrent)
 	if err != nil {
 		t.Fatalf("capture: %v", err)
 	}
@@ -1178,7 +1204,7 @@ func TestNDJSONHarnessDoesNotUseTmuxForPromptWaitCaptureHalt(t *testing.T) {
 	if inst.Status != instance.StatusIdle {
 		t.Fatalf("expected idle after wait, got %s", inst.Status)
 	}
-	_, snap, err := svc.Capture(ctx, "agent", 0)
+	_, snap, err := svc.Capture(ctx, "agent", 0, capture.ScopeCurrent)
 	if err != nil {
 		t.Fatalf("capture ndjson: %v", err)
 	}

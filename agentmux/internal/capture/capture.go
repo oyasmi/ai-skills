@@ -30,6 +30,13 @@ type Snapshot struct {
 	Extra       map[string]any
 }
 
+type Scope string
+
+const (
+	ScopeCurrent Scope = "current"
+	ScopeSession Scope = "session"
+)
+
 type TitleIdleFunc func(paneTitle string) bool
 
 // WaitUntilTitleIdle is the lightweight wait path used when a harness exposes

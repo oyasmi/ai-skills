@@ -11,6 +11,7 @@ func TestValidateCommandAcceptsPlainExecPrefix(t *testing.T) {
 	for _, cmd := range []string{
 		"codex exec",
 		"codex exec --sandbox workspace-write --skip-git-repo-check --model gpt-5.1-codex",
+		"codex exec --sandbox=workspace-write -C /tmp --add-dir /tmp/shared",
 		"/usr/local/bin/codex exec -s read-only",
 	} {
 		if err := validateCommand(cmd); err != nil {
@@ -30,6 +31,9 @@ func TestValidateCommandRejectsUnsupportedInput(t *testing.T) {
 		"approval flag":        "codex exec --ask-for-approval never",
 		"approval shorthand":   "codex exec -a never",
 		"ephemeral":            "codex exec --ephemeral",
+		"unsupported flag":     "codex exec --output-schema schema.json",
+		"positional prompt":    "codex exec hello",
+		"missing flag value":   "codex exec --sandbox",
 		"pipe":                 "codex exec | tee log",
 		"redirect":             "codex exec > out.log",
 		"chain":                "codex exec && echo done",

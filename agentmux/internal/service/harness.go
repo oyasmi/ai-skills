@@ -20,7 +20,7 @@ type harness interface {
 	Start(ctx context.Context, inst instance.Instance, command, systemPrompt string, resume bool) (instance.Instance, error)
 	Reconcile(ctx context.Context, inst instance.Instance) (instance.Instance, error)
 	SendPrompt(ctx context.Context, inst instance.Instance, text string) (instance.Instance, error)
-	Capture(ctx context.Context, inst instance.Instance, history int) (capture.Snapshot, error)
+	Capture(ctx context.Context, inst instance.Instance, history int, scope capture.Scope) (capture.Snapshot, error)
 	Wait(ctx context.Context, inst instance.Instance, timeout time.Duration) (capture.Snapshot, error)
 	Interrupt(ctx context.Context, inst instance.Instance) (instance.Instance, error)
 	Halt(ctx context.Context, inst instance.Instance, immediately bool, timeout time.Duration) error

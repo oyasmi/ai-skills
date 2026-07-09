@@ -317,15 +317,15 @@ func (c Controller) finalize(inst instance.Instance, st *State, i int, cancelled
 	}
 }
 
-func (c Controller) Capture(ctx context.Context, inst instance.Instance, history int) (capture.Snapshot, error) {
+func (c Controller) Capture(ctx context.Context, inst instance.Instance, history int, scope capture.Scope) (capture.Snapshot, error) {
 	st, err := c.load(inst)
 	if err != nil {
 		return capture.Snapshot{}, err
 	}
-	// history<=0 scopes the view to the current (or most recent) turn; a
-	// positive history means "last N messages" and may span turns.
+	// Current scope reads the current (or most recent) turn. Session scope reads
+	// from the beginning and lets history act as a message limit.
 	var from int64
-	if history <= 0 {
+	if scope != capture.ScopeSession {
 		if i := lastTurn(&st); i >= 0 {
 			from = st.Turns[i].StartOffset
 		}

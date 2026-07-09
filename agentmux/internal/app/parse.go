@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/oyasmi/agentmux/internal/apperr"
+	"github.com/oyasmi/agentmux/internal/capture"
 	"github.com/oyasmi/agentmux/internal/service"
 )
 
@@ -91,24 +92,35 @@ func parsePromptArgs(args []string) (name, text, key string, useStdin bool, err 
 	return name, text, key, useStdin, nil
 }
 
-func parseCaptureArgs(args []string) (name string, history int, err error) {
+func parseCaptureArgs(args []string) (name string, history int, scope capture.Scope, err error) {
 	if len(args) == 0 {
-		return "", 0, apperr.New("invalid_arguments", "missing instance name\n\n"+captureHelp())
+		return "", 0, "", apperr.New("invalid_arguments", "missing instance name\n\n"+captureHelp())
 	}
 	name = args[0]
 	history = -1
+	scope = capture.ScopeCurrent
+	var scopeRaw string
 	fs := newFlagSet("capture")
 	fs.IntVar(&history, "history", -1, "")
+	fs.StringVar(&scopeRaw, "scope", string(capture.ScopeCurrent), "")
 	if err := fs.Parse(args[1:]); err != nil {
-		return "", 0, err
+		return "", 0, "", err
 	}
 	if fs.NArg() > 0 {
-		return "", 0, apperr.New("invalid_arguments", "capture does not accept positional arguments after instance name")
+		return "", 0, "", apperr.New("invalid_arguments", "capture does not accept positional arguments after instance name")
 	}
 	if history < -1 {
-		return "", 0, apperr.New("invalid_arguments", "invalid value for --history: must be -1 or a non-negative integer")
+		return "", 0, "", apperr.New("invalid_arguments", "invalid value for --history: must be -1 or a non-negative integer")
 	}
-	return name, history, nil
+	switch capture.Scope(strings.TrimSpace(scopeRaw)) {
+	case capture.ScopeCurrent, "":
+		scope = capture.ScopeCurrent
+	case capture.ScopeSession:
+		scope = capture.ScopeSession
+	default:
+		return "", 0, "", apperr.New("invalid_arguments", "invalid value for --scope: must be current or session")
+	}
+	return name, history, scope, nil
 }
 
 func parseWaitArgs(args []string) (name string, stableMS, timeoutMS int, err error) {

@@ -175,16 +175,18 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 		fmt.Fprintf(stdout, "%s\t%s\n", inst.Name, inst.Status)
 		return 0
 	case "capture":
-		name, history, err := parseCaptureArgs(args[1:])
+		name, history, scope, err := parseCaptureArgs(args[1:])
 		if err != nil {
 			return writeErr(stdout, stderr, jsonMode, "capture", "", err)
 		}
-		inst, snap, err := svc.Capture(ctx, name, history)
+		inst, snap, err := svc.Capture(ctx, name, history, scope)
 		if err != nil {
 			return writeErr(stdout, stderr, jsonMode, "capture", name, err)
 		}
 		if jsonMode {
 			data := map[string]any{
+				"harness_type":  inst.HarnessType,
+				"scope":         string(scope),
 				"cursor_x":      snap.CursorX,
 				"cursor_y":      snap.CursorY,
 				"width":         snap.Width,

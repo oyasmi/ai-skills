@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oyasmi/agentmux/internal/capture"
 	"github.com/oyasmi/agentmux/internal/instance"
 )
 
@@ -67,7 +68,7 @@ func TestControllerPromptWaitCaptureAndHalt(t *testing.T) {
 	if _, err := ctrl.Wait(context.Background(), inst, 2*time.Second); err != nil {
 		t.Fatalf("wait: %v", err)
 	}
-	snap, err := ctrl.Capture(context.Background(), inst, 0)
+	snap, err := ctrl.Capture(context.Background(), inst, 0, capture.ScopeCurrent)
 	if err != nil {
 		t.Fatalf("capture: %v", err)
 	}

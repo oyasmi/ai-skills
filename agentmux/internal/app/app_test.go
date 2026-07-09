@@ -64,17 +64,32 @@ func TestParsePromptArgsRejectsRemovedEnterFlag(t *testing.T) {
 }
 
 func TestParseCaptureArgsRejectsLegacyWaitFlags(t *testing.T) {
-	name, history, err := parseCaptureArgs([]string{"demo", "--history", "120"})
+	name, history, scope, err := parseCaptureArgs([]string{"demo", "--history", "120"})
 	if err != nil {
 		t.Fatalf("parseCaptureArgs: %v", err)
 	}
-	if name != "demo" || history != 120 {
-		t.Fatalf("unexpected parsed values: %q %d", name, history)
+	if name != "demo" || history != 120 || scope != "current" {
+		t.Fatalf("unexpected parsed values: %q %d %s", name, history, scope)
 	}
 
-	_, _, err = parseCaptureArgs([]string{"demo", "--stable", "1500"})
+	_, _, _, err = parseCaptureArgs([]string{"demo", "--stable", "1500"})
 	if err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {
 		t.Fatalf("expected legacy stable flag to fail, got %v", err)
+	}
+}
+
+func TestParseCaptureArgsSupportsScope(t *testing.T) {
+	name, history, scope, err := parseCaptureArgs([]string{"demo", "--scope", "session"})
+	if err != nil {
+		t.Fatalf("parseCaptureArgs: %v", err)
+	}
+	if name != "demo" || history != -1 || scope != "session" {
+		t.Fatalf("unexpected parsed values: %q %d %s", name, history, scope)
+	}
+
+	_, _, _, err = parseCaptureArgs([]string{"demo", "--scope", "all"})
+	if err == nil || !strings.Contains(err.Error(), "current or session") {
+		t.Fatalf("expected invalid scope to fail, got %v", err)
 	}
 }
 

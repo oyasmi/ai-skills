@@ -177,6 +177,9 @@ func (s Service) Summon(ctx context.Context, in SummonInput) (SummonResult, erro
 	if err != nil {
 		return SummonResult{}, err
 	}
+	if in.Model != nil && resolved.HarnessType == execjsonctl.HarnessType && !strings.Contains(resolved.Command, "$MODEL") {
+		return SummonResult{}, apperr.New("invalid_arguments", "summon --model has no effect for codex-cli-execjson unless the template command contains $MODEL")
+	}
 	cwd, err := config.ExpandPath(resolved.CWD)
 	if err != nil {
 		return SummonResult{}, apperr.Wrap("config_invalid", err, "resolve cwd")
@@ -200,12 +203,6 @@ func (s Service) Summon(ctx context.Context, in SummonInput) (SummonResult, erro
 						return err
 					}
 					reg.Put(resumed)
-					if prompt := strings.TrimSpace(resolved.Prompt); prompt != "" {
-						if err := s.sendPrompt(ctx, &resumed, prompt, true); err != nil {
-							return err
-						}
-						reg.Put(resumed)
-					}
 					res = SummonResult{Instance: resumed, Reused: false}
 					return nil
 				}
@@ -215,12 +212,6 @@ func (s Service) Summon(ctx context.Context, in SummonInput) (SummonResult, erro
 				reg.Put(inst)
 				if inst.Template != resolved.Name {
 					return apperr.New("instance_template_mismatch", fmt.Sprintf("instance %q already exists with template %q; use a new name to summon template %q", name, inst.Template, resolved.Name))
-				}
-				if prompt := strings.TrimSpace(resolved.Prompt); prompt != "" {
-					if err := s.sendPrompt(ctx, &inst, prompt, false); err != nil {
-						return err
-					}
-					reg.Put(inst)
 				}
 				res = SummonResult{Instance: inst, Reused: true}
 				return nil
@@ -268,17 +259,18 @@ func (s Service) Summon(ctx context.Context, in SummonInput) (SummonResult, erro
 			inst.Status = instance.StatusIdle
 		}
 		reg.Put(inst)
-		if prompt := strings.TrimSpace(resolved.Prompt); prompt != "" {
-			if err := s.sendPrompt(ctx, &inst, prompt, true); err != nil {
-				return err
-			}
-			reg.Put(inst)
-		}
 		res = SummonResult{Instance: inst, Reused: false}
 		return nil
 	})
 	if err != nil {
 		return SummonResult{}, err
+	}
+	if prompt := strings.TrimSpace(resolved.Prompt); prompt != "" {
+		inst, err := s.Prompt(ctx, res.Instance.Name, prompt, "")
+		if err != nil {
+			return SummonResult{}, err
+		}
+		res.Instance = inst
 	}
 	return res, nil
 }
@@ -287,59 +279,76 @@ func (s Service) Prompt(ctx context.Context, name string, text string, key strin
 	if strings.TrimSpace(text) == "" && strings.TrimSpace(key) == "" {
 		return instance.Instance{}, apperr.New("invalid_arguments", "prompt requires --text or --key")
 	}
-	var out instance.Instance
+	var mapped string
+	if key != "" {
+		var ok bool
+		mapped, ok = validKey(key)
+		if !ok {
+			return instance.Instance{}, apperr.New("invalid_key", fmt.Sprintf("unsupported key %q", key))
+		}
+	}
+	var inst instance.Instance
 	err := s.withRegistryReconcileOne(ctx, name, func(reg *instance.Registry) error {
-		inst, ok := reg.Get(name)
+		current, ok := reg.Get(name)
 		if !ok {
 			return apperr.New("instance_not_found", fmt.Sprintf("instance %q not found", name))
 		}
-		if inst.Status == instance.StatusLost || inst.Status == instance.StatusExited {
+		if current.Status == instance.StatusLost || current.Status == instance.StatusExited {
 			reg.Delete(name)
 			return apperr.New("process_not_running", fmt.Sprintf("instance %q is not running", name))
 		}
-		if strings.TrimSpace(text) != "" {
-			if err := s.sendPrompt(ctx, &inst, text, !inst.FirstPromptSent); err != nil {
-				return err
-			}
-		}
-		h, structured := s.harnessFor(inst)
-		if key != "" {
-			mapped, ok := validKey(key)
-			if !ok {
-				return apperr.New("invalid_key", fmt.Sprintf("unsupported key %q", key))
-			}
-			if structured {
-				// Structured harnesses have no TUI: only C-c carries meaning,
-				// every other navigation key is a no-op.
-				if mapped == "C-c" {
-					next, err := h.Interrupt(ctx, inst)
-					if err != nil {
-						return err
-					}
-					inst = next
-				}
-			} else {
-				if err := s.Tmux.SendKeys(ctx, target(inst.SessionID), mapped); err != nil {
-					return err
-				}
-			}
-		}
-		if !structured || strings.TrimSpace(text) != "" {
-			inst.Status = instance.StatusBusy
-			inst.UpdatedAt = time.Now()
-			inst.LastActivityAt = inst.UpdatedAt
-		}
-		reg.Put(inst)
-		out = inst
+		inst = current
 		return nil
 	})
 	if err != nil {
 		return instance.Instance{}, err
 	}
-	return out, nil
+	if strings.TrimSpace(text) != "" {
+		if err := s.sendPrompt(ctx, &inst, text, !inst.FirstPromptSent); err != nil {
+			return instance.Instance{}, err
+		}
+	}
+	h, structured := s.harnessFor(inst)
+	if key != "" {
+		if structured {
+			// Structured harnesses have no TUI: only C-c carries meaning,
+			// every other navigation key is a no-op.
+			if mapped == "C-c" {
+				next, err := h.Interrupt(ctx, inst)
+				if err != nil {
+					return instance.Instance{}, err
+				}
+				inst = next
+			}
+		} else {
+			if err := s.Tmux.SendKeys(ctx, target(inst.SessionID), mapped); err != nil {
+				return instance.Instance{}, err
+			}
+		}
+	}
+	if !structured || strings.TrimSpace(text) != "" {
+		inst.Status = instance.StatusBusy
+		inst.UpdatedAt = time.Now()
+		inst.LastActivityAt = inst.UpdatedAt
+	}
+	err = s.withRegistry(ctx, func(reg *instance.Registry) error {
+		current, ok := reg.Get(name)
+		if !ok {
+			return apperr.New("instance_not_found", fmt.Sprintf("instance %q not found", name))
+		}
+		if current.SessionID != inst.SessionID {
+			return apperr.New("instance_changed", fmt.Sprintf("instance %q changed while prompt was being sent", name))
+		}
+		reg.Put(inst)
+		return nil
+	})
+	if err != nil {
+		return instance.Instance{}, err
+	}
+	return inst, nil
 }
 
-func (s Service) Capture(ctx context.Context, name string, history int) (instance.Instance, capture.Snapshot, error) {
+func (s Service) Capture(ctx context.Context, name string, history int, scope capture.Scope) (instance.Instance, capture.Snapshot, error) {
 	inst, err := s.getInstanceForCapture(ctx, name)
 	if err != nil {
 		return instance.Instance{}, capture.Snapshot{}, err
@@ -348,11 +357,11 @@ func (s Service) Capture(ctx context.Context, name string, history int) (instanc
 		return instance.Instance{}, capture.Snapshot{}, apperr.New("session_not_found", fmt.Sprintf("session for %q not found", name))
 	}
 	h := history
-	if h < 0 {
+	if h < 0 && scope == capture.ScopeSession {
 		h = s.Config.Defaults.Capture.History
 	}
 	if hs, structured := s.harnessFor(inst); structured {
-		snap, err := hs.Capture(ctx, inst, h)
+		snap, err := hs.Capture(ctx, inst, h, scope)
 		if err != nil {
 			return instance.Instance{}, capture.Snapshot{}, err
 		}
@@ -370,6 +379,9 @@ func (s Service) Capture(ctx context.Context, name string, history int) (instanc
 			return instance.Instance{}, capture.Snapshot{}, err
 		}
 		return inst, snap, nil
+	}
+	if h < 0 {
+		h = s.Config.Defaults.Capture.History
 	}
 	snap, err := capture.Once(ctx, s.Tmux, target(inst.SessionID), h)
 	if err != nil {
