@@ -46,6 +46,22 @@ templates:
     prompt: ""
     cwd: .
 
+  # command 必须是一个 `codex exec` 前缀，只带父级 flag。
+  # agentmux 会自行追加 `resume <thread_id>`、`--json` 和 `-`。
+  #
+  # 默认不传 --model，交给 codex 自己的配置决定；可用的 model 取决于账号与套餐。
+  # 想固定模型时改成：
+  #   command: codex exec --sandbox workspace-write --skip-git-repo-check --model $MODEL
+  #   model: gpt-5.5
+  codex-cli-execjson:
+    description: Codex CLI 通用编程智能体（execjson 结构化模式）
+    command: codex exec --sandbox workspace-write --skip-git-repo-check
+    model: ""
+    harness_type: codex-cli-execjson
+    system_prompt: ""
+    prompt: ""
+    cwd: .
+
   gemini-cli:
     description: Gemini CLI 通用编程智能体
     command: gemini

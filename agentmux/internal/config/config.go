@@ -61,6 +61,15 @@ templates:
     prompt: ""
     cwd: .
 
+  codex-cli-execjson:
+    description: Codex CLI 通用编程智能体（execjson 结构化模式）
+    command: codex exec --sandbox workspace-write --skip-git-repo-check
+    model: ""
+    harness_type: codex-cli-execjson
+    system_prompt: ""
+    prompt: ""
+    cwd: .
+
   gemini-cli:
     description: Gemini CLI 通用编程智能体
     command: gemini

@@ -404,10 +404,14 @@ harness_type: claude-code
 
 1. 可选
 2. 若模板未设置，则继承 `defaults.harness_type`
-3. 当前内建识别 `claude-code`、`codex-cli`、`gemini-cli`
+3. 当前内建识别 `claude-code`、`codex-cli`、`gemini-cli` 三类 TUI harness
 4. 这三类 harness 启用基于 tmux `pane_title` 的精确 idle 检测
 5. 对 `wait` 命令，这三类 harness 可走轻量 pane 元信息轮询，不必反复 `capture-pane`
-6. 未知值保留在实例元数据中，但行为回退到通用模式
+6. 另识别两类结构化 harness，它们不使用 tmux：
+   - `claude-code-ndjson`：一个长驻的 Claude Code `stream-json` 进程承载所有 turn
+   - `codex-cli-execjson`：每个 turn 拉起一个 `codex exec --json` 进程，多轮靠 `resume <thread_id>` 串联
+7. `codex-cli-execjson` 的 `command` 必须是只带父级 flag 的 `codex exec` 前缀；`resume`、`--json`、`-` 由 agentmux 注入，`--ask-for-approval`、`--ephemeral`、`--json`、`-o`、管道与重定向会在 `summon` 阶段被拒绝
+8. 未知值保留在实例元数据中，但行为回退到通用模式
 
 ---
 

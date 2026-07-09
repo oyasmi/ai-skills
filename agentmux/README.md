@@ -19,6 +19,7 @@ Windows 不是首要目标。
 6. `summon` 默认同名复用
 7. `capture` 默认返回纯文本
 8. `claude-code-ndjson` 可绕过 tmux 终端界面，直接使用 Claude Code 的 stream-json 协议
+9. `codex-cli-execjson` 可绕过 tmux 终端界面，直接使用 `codex exec --json` 的事件流
 
 ## 近期优化
 
@@ -33,13 +34,29 @@ Windows 不是首要目标。
 9. 新增 `harness_type` 驱动的状态检测，`claude-code`、`codex-cli`、`gemini-cli` 可用 `pane_title` 精确判断 idle，`wait` 可提前返回
 10. `inspect`、`list`、`capture`、`wait` 的 JSON 输出现在包含 `harness_type` 或 `pane_title` 等状态观测字段
 11. 新增 `claude-code-ndjson` harness type，通过 Claude Code `stream-json` 协议直接读写 NDJSON，`wait` 可等待协议级完成事件，`capture --json` 可返回结构化消息和 usage 信息
+12. 新增 `codex-cli-execjson` harness type，通过 `codex exec --json` 事件流驱动 Codex CLI，`wait` 等待 turn 进程退出与终局事件，`capture --json` 返回结构化消息、`thread_id` 和 usage
 
 命令职责上建议这样理解：
 
 1. `list` 用于批量查看实例及其当前状态
 2. `inspect --json` 用于查看单个实例当前状态、`pane_title` 和元数据
 3. `wait` 用于阻塞到 agent 看起来完成当前工作
-4. `capture` 用于读取实例输出；TUI harness 返回终端文本，`claude-code-ndjson` 返回协议消息聚合后的文本和结构化数据
+4. `capture` 用于读取实例输出；TUI harness 返回终端文本，结构化 harness 返回协议消息聚合后的文本和结构化数据
+
+### 两种结构化 harness 的差异
+
+`claude-code-ndjson` 与 `codex-cli-execjson` 都不依赖 tmux，但底层进程模型完全不同：
+
+| | `claude-code-ndjson` | `codex-cli-execjson` |
+|---|---|---|
+| 进程模型 | 1 实例 = 1 长驻进程 = N turns | 1 实例 = N 个短命进程，每 turn 一个 |
+| 多轮机制 | 同一进程内连续 turn | `codex exec resume <thread_id>` |
+| 实例存活 | 等同于进程存活 | 与进程无关；turn 之间没有进程 |
+| `summon` | 立即启动进程 | 不启动任何进程 |
+| busy 时 `prompt` | 入队 | 报错 `execjson_instance_busy` |
+| 成本字段 | `total_cost_usd` | codex 不提供，恒为 0 |
+
+因此 `codex-cli-execjson` 实例在两个 turn 之间是 `idle` 且 `process_id` 为 0，这是正常状态，不代表实例已退出。
 
 补充约束：
 
@@ -52,6 +69,7 @@ Windows 不是首要目标。
 
 1. `tmux >= 3.x`，用于 `claude-code`、`codex-cli`、`gemini-cli` 等 TUI harness
 2. `claude`，用于 `claude-code-ndjson` harness
+3. `codex >= 0.142`，用于 `codex-cli-execjson` harness
 
 构建依赖：
 
@@ -252,6 +270,28 @@ templates:
 
 `agentmux` 会自动追加 NDJSON 所需的协议参数，例如 `-p`、`--input-format stream-json`、`--output-format stream-json`、`--verbose`、`--include-partial-messages`、`--replay-user-messages` 和会话参数；这些参数不需要写进模板命令。
 
+Codex CLI execjson 模板同样不启动 TUI、不使用 tmux，而是每个 turn 拉起一个 `codex exec --json` 进程：
+
+```yaml
+templates:
+  codex-cli-execjson:
+    command: codex exec --sandbox workspace-write --skip-git-repo-check
+    model: ""
+    harness_type: codex-cli-execjson
+```
+
+`command` 必须是一个只带父级 flag 的 `codex exec` 前缀。`agentmux` 会自行追加 `resume <thread_id>`、`--json` 和读取 prompt 的 `-`，这些不要写进模板命令。
+
+`agentmux` 会在 `summon` 阶段拒绝以下命令，以便尽早失败：
+
+1. 含 `--json` / `-o` / `--output-last-message`：由 agentmux 管理
+2. 含 `resume` / `review` 子命令：由 agentmux 注入
+3. 含 `--ask-for-approval` / `-a`：`codex exec` 不接受该参数，会直接报错退出；权限请用 `--sandbox`
+4. 含 `--ephemeral`：不落盘 session，会使多轮 `resume` 永久不可用
+5. 含管道、重定向、`&&` 或命令替换
+
+默认模板不传 `--model`，交由 codex 自身配置决定，因为可用模型取决于账号与套餐。需要固定模型时自行加上 `--model $MODEL` 并设置 `model`。
+
 ## 常用命令
 
 列出模板：
@@ -343,12 +383,13 @@ agentmux version --json
 
 1. TUI harness 通过 `tmux capture-pane` 抓纯文本
 2. `claude-code-ndjson` 读取 Claude Code 的 `output.jsonl`，文本模式只输出聚合后的 `content`
-3. `capture --json` 对 TUI harness 返回屏幕字段；对 `claude-code-ndjson` 额外返回 `messages`、`usage`、`claude_session_id`、`turns` 等协议数据
-4. TUI harness 下 `--history` 控制向上抓取的历史行数；`claude-code-ndjson` 下表示最近 N 条归一化消息
-5. 总是立即返回当前可见/可解析输出，不等待“工作完成”
-6. `capture` 的主要职责是读输出，不是做状态查询，也不是等待接口
-7. 若只想获知某个实例当前状态，应使用 `inspect --json`
-8. 若需要等待 agent 完成工作，应先执行 `wait`
+3. `codex-cli-execjson` 读取 `codex exec --json` 写入的 `output.jsonl`，文本模式只输出聚合后的 `content`
+4. `capture --json` 对 TUI harness 返回屏幕字段；对 `claude-code-ndjson` 额外返回 `messages`、`usage`、`claude_session_id`、`turns`；对 `codex-cli-execjson` 额外返回 `messages`、`usage`、`thread_id`、`turns`、`turn_state`、`last_error`
+5. TUI harness 下 `--history` 控制向上抓取的历史行数；结构化 harness 下表示最近 N 条归一化消息
+6. 总是立即返回当前可见/可解析输出，不等待“工作完成”
+7. `capture` 的主要职责是读输出，不是做状态查询，也不是等待接口
+8. 若只想获知某个实例当前状态，应使用 `inspect --json`
+9. 若需要等待 agent 完成工作，应先执行 `wait`
 
 ### `wait`
 
@@ -356,9 +397,10 @@ agentmux version --json
 2. 适合上层 Agent 只想阻塞等待、避免传回大段文本时使用
 3. 若实例的 `harness_type` 支持 `pane_title` 信号（如 `claude-code`、`codex-cli`、`gemini-cli`），优先通过 `pane_title` 判定是否完成
 4. `claude-code-ndjson` 通过 user replay、`result` 和 `session_state_changed=idle` 等协议事件判定完成，不依赖屏幕稳定
-5. 其他 harness 则回退到“屏幕静止”这类通用启发式
-6. 支持 `pane_title` 信号的 harness 会走轻量 pane 元信息轮询，不再抓取屏幕文本
-7. 若只是想知道当前是 `idle` 还是 `busy`，单实例使用 `inspect --json`，多实例使用 `list --json`
+5. `codex-cli-execjson` 等待 turn 进程退出并解析 `turn.completed`/`turn.failed`；turn 失败也算“等到了”，失败原因通过 `capture --json` 的 `last_error` 暴露
+6. 其他 harness 则回退到“屏幕静止”这类通用启发式
+7. 支持 `pane_title` 信号的 harness 会走轻量 pane 元信息轮询，不再抓取屏幕文本
+8. 若只是想知道当前是 `idle` 还是 `busy`，单实例使用 `inspect --json`，多实例使用 `list --json`
 
 ### `prompt`
 
@@ -368,6 +410,8 @@ agentmux version --json
 4. `--text` 与 `--stdin` 会在粘贴文本后自动提交
 5. 若文本已进入输入框但未开始执行，可补发 `--key Enter`
 6. `claude-code-ndjson` 下 `--text`/`--stdin` 写入一条 user NDJSON 消息；`--key C-c` 会尝试中断进程，其余 TUI 导航键为 no-op
+7. `codex-cli-execjson` 下 `--text`/`--stdin` 启动一个新 turn 进程；实例正在跑 turn 时会报错 `execjson_instance_busy`，因为 codex 无法向执行中的 turn 追加输入
+8. `codex-cli-execjson` 下 `--key C-c` 会中断当前 turn（进程直接结束），其余 TUI 导航键为 no-op
 
 ### `busy` 状态
 
@@ -375,13 +419,14 @@ agentmux version --json
 2. 若后续执行 `wait`，状态会正常收敛回 `idle`
 3. 若实例的 `harness_type` 支持 `pane_title` 信号（如 `claude-code`、`codex-cli`、`gemini-cli`），还可以通过 `pane_title` 精确收敛到 `idle`
 4. `claude-code-ndjson` 会根据 Claude Code 协议事件收敛到 `idle`
-5. 若调用方没有继续观测，通用 TUI harness 的 `busy` 会在 `defaults.status.busy_ttl_ms` 到期后自动退化为 `idle`
-6. 若 `busy_ttl_ms: 0`，表示禁用自动退化，实例不会仅因 TTL 到期而自动回到 `idle`
+5. `codex-cli-execjson` 在 turn 进程退出后收敛到 `idle`；两个 turn 之间没有进程存在，`idle` 且 `process_id=0` 是正常状态
+6. 若调用方没有继续观测，通用 TUI harness 的 `busy` 会在 `defaults.status.busy_ttl_ms` 到期后自动退化为 `idle`
+7. 若 `busy_ttl_ms: 0`，表示禁用自动退化，实例不会仅因 TTL 到期而自动回到 `idle`
 
 ### `attach`
 
 1. TUI harness 会进入对应 tmux session
-2. `claude-code-ndjson` 没有交互式 TUI，`attach` 会跟随输出实例的 `output.jsonl`，用于调试协议事件流
+2. `claude-code-ndjson` 和 `codex-cli-execjson` 没有交互式 TUI，`attach` 会跟随实例的 `output.jsonl`，用于调试事件流
 
 ## 并发安全
 
@@ -428,6 +473,33 @@ agentmux version --json
       "total_cost_usd": 0.0681822
     },
     "turns": 1
+  }
+}
+```
+
+`codex-cli-execjson` 的 `capture --json` 字段略有不同：codex 不提供成本，`cache_read_input_tokens` 来自 `cached_input_tokens`，并额外给出 `reasoning_output_tokens`：
+
+```json
+{
+  "ok": true,
+  "command": "capture",
+  "instance": "codex-smoke",
+  "status": "idle",
+  "data": {
+    "content": "alpha",
+    "thread_id": "019f46a1-90c1-7751-8ccc-ad04a6c65f4b",
+    "messages": [],
+    "usage": {
+      "input_tokens": 11924,
+      "output_tokens": 5,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 9600,
+      "reasoning_output_tokens": 0,
+      "total_cost_usd": 0
+    },
+    "turns": 1,
+    "turn_state": "completed",
+    "last_error": ""
   }
 }
 ```

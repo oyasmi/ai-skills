@@ -12,6 +12,7 @@ import (
 	"github.com/oyasmi/agentmux/internal/apperr"
 	"github.com/oyasmi/agentmux/internal/capture"
 	"github.com/oyasmi/agentmux/internal/config"
+	"github.com/oyasmi/agentmux/internal/execjsonctl"
 	"github.com/oyasmi/agentmux/internal/instance"
 	"github.com/oyasmi/agentmux/internal/logx"
 	"github.com/oyasmi/agentmux/internal/naming"
@@ -20,13 +21,12 @@ import (
 )
 
 const (
-	haltSecondInterruptDelay    = 500 * time.Millisecond
-	haltPollInterval            = 100 * time.Millisecond
-	promptSubmitDelay           = 150 * time.Millisecond
-	claudeCodeHarnessType       = "claude-code"
-	claudeCodeNDJSONHarnessType = ndjsonctl.HarnessType
-	codexCLIHarnessType         = "codex-cli"
-	geminiCLIHarnessType        = "gemini-cli"
+	haltSecondInterruptDelay = 500 * time.Millisecond
+	haltPollInterval         = 100 * time.Millisecond
+	promptSubmitDelay        = 150 * time.Millisecond
+	claudeCodeHarnessType    = "claude-code"
+	codexCLIHarnessType      = "codex-cli"
+	geminiCLIHarnessType     = "gemini-cli"
 )
 
 type tmuxClient interface {
@@ -47,6 +47,7 @@ type Service struct {
 	Config config.Config
 	Tmux   tmuxClient
 	NDJSON ndjsonctl.Controller
+	Codex  execjsonctl.Controller
 }
 
 type SummonInput struct {
@@ -73,6 +74,10 @@ func New(paths config.Paths, cfg config.Config) Service {
 			LoadUserConfig: cfg.Defaults.Tmux.LoadUserConfig,
 		},
 		NDJSON: ndjsonctl.Controller{
+			StateDir: paths.StateDir,
+			PollMS:   cfg.Defaults.Capture.PollMS,
+		},
+		Codex: execjsonctl.Controller{
 			StateDir: paths.StateDir,
 			PollMS:   cfg.Defaults.Capture.PollMS,
 		},
@@ -133,7 +138,10 @@ func (s Service) Inspect(ctx context.Context, name string) (instance.Instance, e
 	return out, err
 }
 
-func (s Service) resumeNDJSON(ctx context.Context, old instance.Instance, resolved config.ResolvedTemplate, cwd, name string) (instance.Instance, error) {
+// resumeStructured rebuilds a dead structured instance against its existing
+// agent-side session, in a fresh transport dir so one directory maps to one
+// process lifetime.
+func (s Service) resumeStructured(ctx context.Context, h harness, old instance.Instance, resolved config.ResolvedTemplate, cwd, name string) (instance.Instance, error) {
 	sessionID, err := naming.GenerateSessionID()
 	if err != nil {
 		return instance.Instance{}, err
@@ -155,17 +163,7 @@ func (s Service) resumeNDJSON(ctx context.Context, old instance.Instance, resolv
 	inst.Status = instance.StatusStarting
 	inst.UpdatedAt = now
 	inst.LastActivityAt = now
-	started, err := s.NDJSON.Start(ctx, ndjsonctl.StartInput{
-		Instance:        inst,
-		Command:         command,
-		SystemPrompt:    resolved.SystemPrompt,
-		ClaudeSessionID: old.ClaudeSessionID,
-		Resume:          true,
-	})
-	if err != nil {
-		return instance.Instance{}, err
-	}
-	return started.Instance, nil
+	return h.Start(ctx, inst, command, resolved.SystemPrompt, true)
 }
 
 func (s Service) Summon(ctx context.Context, in SummonInput) (SummonResult, error) {
@@ -195,8 +193,9 @@ func (s Service) Summon(ctx context.Context, in SummonInput) (SummonResult, erro
 		if inst, ok := reg.Get(name); ok {
 			next := s.reconcile(ctx, inst)
 			if next.Status == instance.StatusLost || next.Status == instance.StatusExited {
-				if s.isNDJSON(next) && next.Template == resolved.Name && next.ClaudeSessionID != "" {
-					resumed, err := s.resumeNDJSON(ctx, next, resolved, cwd, name)
+				h, structured := s.harnessFor(next)
+				if structured && next.Template == resolved.Name && h.CanResume(next) {
+					resumed, err := s.resumeStructured(ctx, h, next, resolved, cwd, name)
 					if err != nil {
 						return err
 					}
@@ -256,17 +255,12 @@ func (s Service) Summon(ctx context.Context, in SummonInput) (SummonResult, erro
 			LastActivityAt:  now,
 			FirstPromptSent: false,
 		}
-		if s.isNDJSON(inst) {
-			started, err := s.NDJSON.Start(ctx, ndjsonctl.StartInput{
-				Instance:        inst,
-				Command:         command,
-				SystemPrompt:    resolved.SystemPrompt,
-				ClaudeSessionID: "",
-			})
+		if h, structured := s.harnessFor(inst); structured {
+			started, err := h.Start(ctx, inst, command, resolved.SystemPrompt, false)
 			if err != nil {
 				return err
 			}
-			inst = started.Instance
+			inst = started
 		} else {
 			if err := s.Tmux.NewSession(ctx, sessionID, cwd, shellCommand(inst.Shell, inst.Command), inst.Env); err != nil {
 				return err
@@ -308,14 +302,17 @@ func (s Service) Prompt(ctx context.Context, name string, text string, key strin
 				return err
 			}
 		}
+		h, structured := s.harnessFor(inst)
 		if key != "" {
 			mapped, ok := validKey(key)
 			if !ok {
 				return apperr.New("invalid_key", fmt.Sprintf("unsupported key %q", key))
 			}
-			if s.isNDJSON(inst) {
+			if structured {
+				// Structured harnesses have no TUI: only C-c carries meaning,
+				// every other navigation key is a no-op.
 				if mapped == "C-c" {
-					next, err := s.NDJSON.Interrupt(ctx, inst)
+					next, err := h.Interrupt(ctx, inst)
 					if err != nil {
 						return err
 					}
@@ -327,7 +324,7 @@ func (s Service) Prompt(ctx context.Context, name string, text string, key strin
 				}
 			}
 		}
-		if !s.isNDJSON(inst) || strings.TrimSpace(text) != "" {
+		if !structured || strings.TrimSpace(text) != "" {
 			inst.Status = instance.StatusBusy
 			inst.UpdatedAt = time.Now()
 			inst.LastActivityAt = inst.UpdatedAt
@@ -354,8 +351,8 @@ func (s Service) Capture(ctx context.Context, name string, history int) (instanc
 	if h < 0 {
 		h = s.Config.Defaults.Capture.History
 	}
-	if s.isNDJSON(inst) {
-		snap, err := s.NDJSON.Capture(ctx, inst, h)
+	if hs, structured := s.harnessFor(inst); structured {
+		snap, err := hs.Capture(ctx, inst, h)
 		if err != nil {
 			return instance.Instance{}, capture.Snapshot{}, err
 		}
@@ -407,18 +404,17 @@ func (s Service) Wait(ctx context.Context, name string, stableMS, timeoutMS int)
 	if err != nil {
 		return instance.Instance{}, capture.Snapshot{}, err
 	}
-	if s.isNDJSON(inst) {
-		snap, err := s.NDJSON.Wait(ctx, inst, time.Duration(timeoutMS)*time.Millisecond)
+	if h, structured := s.harnessFor(inst); structured {
+		snap, err := h.Wait(ctx, inst, time.Duration(timeoutMS)*time.Millisecond)
 		if err != nil {
 			return instance.Instance{}, capture.Snapshot{}, err
 		}
-		err = s.withRegistry(ctx, func(reg *instance.Registry) error {
+		err = s.withRegistryReconcileOne(ctx, name, func(reg *instance.Registry) error {
 			current, ok := reg.Get(name)
 			if !ok {
 				return apperr.New("instance_not_found", fmt.Sprintf("instance %q not found", name))
 			}
 			inst = current
-			inst.Status = instance.StatusIdle
 			inst.UpdatedAt = time.Now()
 			reg.Put(inst)
 			return nil
@@ -538,8 +534,8 @@ func (s Service) Halt(ctx context.Context, name string) (instance.Instance, erro
 }
 
 func (s Service) AttachCommand(inst instance.Instance) *exec.Cmd {
-	if s.isNDJSON(inst) {
-		return s.NDJSON.Attach(inst)
+	if h, structured := s.harnessFor(inst); structured {
+		return h.Attach(inst)
 	}
 	return s.Tmux.Attach(inst.SessionID)
 }
@@ -551,8 +547,8 @@ func (s Service) HaltWithOptions(ctx context.Context, name string, immediately b
 		if !ok {
 			return apperr.New("instance_not_found", fmt.Sprintf("instance %q not found", name))
 		}
-		if s.isNDJSON(inst) {
-			if err := s.NDJSON.Halt(ctx, inst, ndjsonctl.HaltOptions{Immediately: immediately, Timeout: timeout}); err != nil {
+		if h, structured := s.harnessFor(inst); structured {
+			if err := h.Halt(ctx, inst, immediately, timeout); err != nil {
 				return err
 			}
 		} else if s.Tmux.HasSession(ctx, inst.SessionID) {
@@ -686,8 +682,8 @@ func (s Service) sendPrompt(ctx context.Context, inst *instance.Instance, text s
 	if payload == "" {
 		return nil
 	}
-	if s.isNDJSON(*inst) {
-		next, err := s.NDJSON.SendPrompt(ctx, *inst, payload)
+	if h, structured := s.harnessFor(*inst); structured {
+		next, err := h.SendPrompt(ctx, *inst, payload)
 		if err != nil {
 			return err
 		}
@@ -729,13 +725,14 @@ func waitForPromptSubmit(ctx context.Context) error {
 }
 
 func (s Service) reconcile(ctx context.Context, inst instance.Instance) instance.Instance {
-	if s.isNDJSON(inst) {
-		next, err := s.NDJSON.Reconcile(ctx, inst)
+	if h, structured := s.harnessFor(inst); structured {
+		next, err := h.Reconcile(ctx, inst)
 		if err != nil {
-			logx.Debug("reconcile_ndjson_failed", map[string]any{
-				"instance":   inst.Name,
-				"session_id": inst.SessionID,
-				"error":      err.Error(),
+			logx.Debug("reconcile_structured_failed", map[string]any{
+				"instance":     inst.Name,
+				"session_id":   inst.SessionID,
+				"harness_type": inst.HarnessType,
+				"error":        err.Error(),
 			})
 			return inst
 		}
@@ -777,10 +774,6 @@ func (s Service) reconcile(ctx context.Context, inst instance.Instance) instance
 	}
 	inst.UpdatedAt = time.Now()
 	return inst
-}
-
-func (s Service) isNDJSON(inst instance.Instance) bool {
-	return inst.HarnessType == claudeCodeNDJSONHarnessType
 }
 
 type titleStateFn func(string) string

@@ -49,15 +49,11 @@ func TestControllerPromptWaitCaptureAndHalt(t *testing.T) {
 		CreatedAt:   time.Now().UTC(),
 		UpdatedAt:   time.Now().UTC(),
 	}
-	res, err := ctrl.Start(context.Background(), StartInput{
-		Instance:        inst,
-		Command:         fake,
-		ClaudeSessionID: "550e8400-e29b-41d4-a716-446655440000",
-	})
+	inst.ClaudeSessionID = "550e8400-e29b-41d4-a716-446655440000"
+	inst, err := ctrl.Start(context.Background(), inst, fake, "", false)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	inst = res.Instance
 	if inst.ProcessID <= 0 || inst.ProcessGroupID <= 0 {
 		t.Fatalf("expected process metadata, got pid=%d pgid=%d", inst.ProcessID, inst.ProcessGroupID)
 	}
@@ -81,7 +77,7 @@ func TestControllerPromptWaitCaptureAndHalt(t *testing.T) {
 	if snap.Extra["claude_session_id"] != inst.ClaudeSessionID {
 		t.Fatalf("expected claude session id in extra")
 	}
-	if err := ctrl.Halt(context.Background(), inst, HaltOptions{Immediately: true}); err != nil {
+	if err := ctrl.Halt(context.Background(), inst, true, 0); err != nil {
 		t.Fatalf("halt: %v", err)
 	}
 }

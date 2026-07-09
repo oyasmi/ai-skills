@@ -35,13 +35,17 @@ type Instance struct {
 	Status          Status            `json:"status"`
 	PaneTitle       string            `json:"pane_title,omitempty"`
 	ClaudeSessionID string            `json:"claude_session_id,omitempty"`
+	ThreadID        string            `json:"thread_id,omitempty"`
 	TransportDir    string            `json:"transport_dir,omitempty"`
-	ProcessID       int               `json:"process_id,omitempty"`
-	ProcessGroupID  int               `json:"process_group_id,omitempty"`
-	CreatedAt       time.Time         `json:"created_at"`
-	UpdatedAt       time.Time         `json:"updated_at"`
-	LastActivityAt  time.Time         `json:"last_activity_at"`
-	FirstPromptSent bool              `json:"first_prompt_sent"`
+	// ProcessID is the long-lived harness process for claude-code-ndjson, but
+	// only the currently running turn for codex-cli-execjson, where it is 0
+	// between turns. A dead ProcessID never implies a dead execjson instance.
+	ProcessID       int       `json:"process_id,omitempty"`
+	ProcessGroupID  int       `json:"process_group_id,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+	LastActivityAt  time.Time `json:"last_activity_at"`
+	FirstPromptSent bool      `json:"first_prompt_sent"`
 }
 
 type Registry struct {

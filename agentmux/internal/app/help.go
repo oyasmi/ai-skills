@@ -253,6 +253,8 @@ Notes:
   --text and --stdin submit automatically after the text is pasted.
   If text appears in the input box but execution does not start, follow up with --key Enter.
   For some TUI harnesses, especially Claude Code, very long stdin payloads may be less reliable than writing instructions to a file and sending a short follow-up prompt.
+  On structured harnesses only C-c is meaningful; other keys are accepted as no-ops.
+  On codex-cli-execjson each prompt starts one turn process. Prompting while a turn runs fails with execjson_instance_busy, since codex cannot take input into a running turn; wait first.
 
 Examples:
   agentmux prompt 编码助手-A --text "继续" --json
@@ -316,6 +318,8 @@ Notes:
   wait means "wait until the agent seems done", not "wait until the terminal is visually static".
   Use inspect or list when you want to query status without blocking.
   For title-signaling harnesses such as claude-code, codex-cli, and gemini-cli, completion is inferred from pane_title idle markers.
+  For claude-code-ndjson, completion is inferred from protocol events.
+  For codex-cli-execjson, completion means the turn process exited; a failed turn still satisfies wait, and the reason is reported by capture --json as last_error.
   For generic harnesses, completion falls back to screen stability heuristics.
   The title-signaling path polls pane metadata only and does not capture screen content.
 

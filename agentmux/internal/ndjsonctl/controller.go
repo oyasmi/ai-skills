@@ -35,23 +35,6 @@ type Controller struct {
 	PollMS   int
 }
 
-type StartInput struct {
-	Instance        instance.Instance
-	Command         string
-	SystemPrompt    string
-	ClaudeSessionID string
-	Resume          bool
-}
-
-type StartResult struct {
-	Instance instance.Instance
-}
-
-type HaltOptions struct {
-	Immediately bool
-	Timeout     time.Duration
-}
-
 type processMeta struct {
 	Version     int       `json:"version"`
 	PID         int       `json:"pid"`
@@ -63,14 +46,26 @@ type processMeta struct {
 	Fingerprint string    `json:"fingerprint"`
 }
 
-func (c Controller) Start(ctx context.Context, in StartInput) (StartResult, error) {
-	inst := in.Instance
-	claudeID := in.ClaudeSessionID
+// CanResume reports whether the instance carries a Claude session that has
+// produced a persisted transcript, which is what `claude --resume` needs.
+func (c Controller) CanResume(inst instance.Instance) bool {
+	if inst.ClaudeSessionID == "" {
+		return false
+	}
+	st, err := loadState(statePath(inst))
+	if err != nil {
+		return false
+	}
+	return st.ResumeAvailable
+}
+
+func (c Controller) Start(ctx context.Context, inst instance.Instance, command, systemPrompt string, resume bool) (instance.Instance, error) {
+	claudeID := inst.ClaudeSessionID
 	if claudeID == "" {
 		var err error
 		claudeID, err = newUUID()
 		if err != nil {
-			return StartResult{}, err
+			return instance.Instance{}, err
 		}
 	}
 	dir := inst.TransportDir
@@ -78,30 +73,30 @@ func (c Controller) Start(ctx context.Context, in StartInput) (StartResult, erro
 		dir = filepath.Join(c.StateDir, "ndjson", inst.SessionID)
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return StartResult{}, apperr.Wrap("ndjson_process_error", err, "create transport dir")
+		return instance.Instance{}, apperr.Wrap("ndjson_process_error", err, "create transport dir")
 	}
 	for _, name := range []string{outputJSONLName, stderrLogName} {
 		f, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 		if err != nil {
-			return StartResult{}, apperr.Wrap("ndjson_process_error", err, "create %s", name)
+			return instance.Instance{}, apperr.Wrap("ndjson_process_error", err, "create %s", name)
 		}
 		_ = f.Close()
 	}
 	fifoPath := filepath.Join(dir, inputFIFOName)
 	if err := ensureFIFO(fifoPath); err != nil {
-		return StartResult{}, err
+		return instance.Instance{}, err
 	}
 
-	finalCommand := buildClaudeCommand(in.Command, in.SystemPrompt, claudeID, in.Resume)
+	finalCommand := buildClaudeCommand(command, systemPrompt, claudeID, resume)
 	if err := writeRunScript(dir, finalCommand); err != nil {
-		return StartResult{}, err
+		return instance.Instance{}, err
 	}
 	cmd := exec.Command("/bin/sh", filepath.Join(dir, "run.sh"))
 	cmd.Dir = inst.CWD
 	cmd.Env = envList(inst.Env, map[string]string{sessionStateEventsEnvName: "1"})
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
-		return StartResult{}, apperr.Wrap("ndjson_process_error", err, "start claude ndjson process")
+		return instance.Instance{}, apperr.Wrap("ndjson_process_error", err, "start claude ndjson process")
 	}
 	go func() { _ = cmd.Wait() }()
 	pgid, _ := syscall.Getpgid(cmd.Process.Pid)
@@ -126,15 +121,15 @@ func (c Controller) Start(ctx context.Context, in StartInput) (StartResult, erro
 		Argv0:       "/bin/sh",
 		Fingerprint: "agentmux:" + inst.SessionID + ":" + claudeID,
 	}); err != nil {
-		return StartResult{}, err
+		return instance.Instance{}, err
 	}
 	st := initialState(claudeID, now)
 	if err := saveState(filepath.Join(dir, stateFileName), st); err != nil {
-		return StartResult{}, err
+		return instance.Instance{}, err
 	}
 	if err := c.waitStarted(ctx, inst, 250*time.Millisecond); err != nil {
 		_ = syscall.Kill(-pgid, syscall.SIGTERM)
-		return StartResult{}, err
+		return instance.Instance{}, err
 	}
 	_ = withStateLocked(filepath.Join(dir, stateFileName), func(st *State) error {
 		st.Status = "idle"
@@ -143,7 +138,7 @@ func (c Controller) Start(ctx context.Context, in StartInput) (StartResult, erro
 	})
 	inst.Status = instance.StatusIdle
 	inst.UpdatedAt = nowUTC()
-	return StartResult{Instance: inst}, nil
+	return inst, nil
 }
 
 func (c Controller) waitStarted(ctx context.Context, inst instance.Instance, delay time.Duration) error {
@@ -290,18 +285,18 @@ func (c Controller) Wait(ctx context.Context, inst instance.Instance, timeout ti
 	}
 }
 
-func (c Controller) Halt(ctx context.Context, inst instance.Instance, opts HaltOptions) error {
-	if opts.Timeout <= 0 {
-		opts.Timeout = 5 * time.Second
+func (c Controller) Halt(ctx context.Context, inst instance.Instance, immediately bool, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = 5 * time.Second
 	}
 	if inst.ProcessGroupID > 0 && processAlive(inst.ProcessID) {
 		sig := syscall.SIGTERM
-		if opts.Immediately {
+		if immediately {
 			sig = syscall.SIGKILL
 		}
 		_ = syscall.Kill(-inst.ProcessGroupID, sig)
-		if !opts.Immediately {
-			deadline := time.Now().Add(opts.Timeout)
+		if !immediately {
+			deadline := time.Now().Add(timeout)
 			for processAlive(inst.ProcessID) && time.Now().Before(deadline) {
 				if err := sleepPoll(ctx, 100*time.Millisecond); err != nil {
 					return err

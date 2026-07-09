@@ -569,6 +569,20 @@ JSON 示例：
 8. `invalid_key`
 9. `invalid_arguments`
 
+`claude-code-ndjson` 专用错误码：
+
+1. `ndjson_fifo_broken`
+2. `ndjson_parse_error`
+3. `ndjson_process_error`
+4. `ndjson_state_error`
+
+`codex-cli-execjson` 专用错误码：
+
+1. `execjson_parse_error`
+2. `execjson_process_error`
+3. `execjson_state_error`
+4. `execjson_instance_busy` — 实例正在执行一个 turn 时再次 `prompt`。codex 无法向执行中的 turn 追加输入，调用方应先 `wait`。
+
 ---
 
 ## 6. 典型调用序列
