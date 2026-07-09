@@ -1,11 +1,24 @@
 ---
 name: agentmux
-description: Manage isolated tmux-backed AI agent instances via `agentmux` CLI: summon, capture, prompt, wait, and halt. Trigger when user mentions `agentmux` or needs a reusable terminal agent.
+description: Manage isolated AI agent instances via `agentmux` CLI: summon, capture, prompt, wait, and halt. Covers tmux-backed TUI harnesses and structured harnesses (claude-code-ndjson, codex-cli-execjson). Trigger when user mentions `agentmux` or needs a reusable terminal agent.
 ---
 
 # Agentmux
 
 Use `agentmux` instead of calling `tmux` directly. Treat `agentmux` as the only control surface for external terminal agent instances.
+
+## Harness Families
+
+Which harness an instance uses changes how you drive it. Read `harness_type` from `list --json`, `inspect --json`, or `template list --json` before assuming.
+
+TUI harnesses (`claude-code`, `codex-cli`, `gemini-cli`) run a real terminal UI inside tmux. `capture` returns screen text. They may need startup time, may show upgrade prompts, and may need an explicit `Enter`.
+
+Structured harnesses do not use tmux, have no screen, and never need `Enter`:
+
+1. `claude-code-ndjson` — one long-lived Claude Code process serves every turn. `capture` returns protocol messages. Prompting while busy is allowed; messages queue.
+2. `codex-cli-execjson` — each prompt launches one `codex exec --json` process that exits when its turn ends. Multi-turn continuity comes from `resume <thread_id>`.
+
+The `codex-cli-execjson` rule worth internalizing: **between turns no process exists.** An instance sitting at `idle` with `process_id: 0` is healthy and resumable, not dead. And because codex cannot accept input into a running turn, prompting a busy instance fails with `execjson_instance_busy` instead of queueing — always `wait` first.
 
 ## Core Rules
 
@@ -14,24 +27,25 @@ Use `agentmux` instead of calling `tmux` directly. Treat `agentmux` as the only 
 3. Run `agentmux template list --json` before choosing a template if the available templates are not already known.
 4. Use `summon` to create or reuse an instance. Do not call `tmux new-session` yourself.
 5. Use `inspect --json` when you need the current status for one instance.
-6. Use `capture` when you need current screen text. Do not read raw tmux output or terminal stdout directly.
+6. Use `capture` when you need the agent's current output. Do not read raw tmux output or terminal stdout directly.
 7. Use `wait` when you only need to block until the agent appears done and do not need returned content.
 8. Use `prompt` to send the next text or special key after you inspect current state.
 9. Use `attach` only when a human explicitly asks to watch or debug interactively.
 10. Use `version --json` when you need to confirm the installed CLI version or check whether a newer command should exist.
 11. Prefer short, task-specific prompts. Do not resend large repeated context if the instance already has it.
-12. Do not rely on long `prompt --stdin` payloads for Claude Code. For long instructions, write them to a file first and then send a short `--text` message telling the agent to read that file.
+12. Do not rely on long `prompt --stdin` payloads for the `claude-code` TUI harness. For long instructions, write them to a file first and then send a short `--text` message telling the agent to read that file. Structured harnesses accept long payloads directly.
 13. Verify deliverables, not just status. `idle` or `wait` success does not prove the target file or artifact is correct.
 14. For long-running work, follow `Patience & Polling Strategy`.
+15. On `codex-cli-execjson`, always `wait` before the next `prompt`. Prompting a busy instance fails with `execjson_instance_busy`.
 
 ## Workflow
 
 1. List templates if the correct role template is unclear.
 2. List instances if the correct instance is unclear.
 3. Summon the target instance by template and optional name.
-4. If this is a fresh TUI-style harness launch, confirm it is ready before sending an important first prompt.
+4. If this is a fresh TUI-style harness launch, confirm it is ready before sending an important first prompt. Structured harnesses need no readiness check.
 5. Send the next instruction or key.
-6. If the prompt text appears to be buffered on screen but the agent does not start working, send one explicit `Enter` before assuming it is stuck.
+6. On TUI harnesses, if the prompt text appears to be buffered on screen but the agent does not start working, send one explicit `Enter` before assuming it is stuck. Structured harnesses never need this.
 7. Repeat `capture|wait -> decide -> prompt` until the task reaches a stopping point. For long-running work, follow `Patience & Polling Strategy`.
 8. After the agent reports completion, read the expected output files and verify the deliverable.
 
@@ -70,7 +84,18 @@ For long instructions to Claude Code, prefer a file-based handoff:
 agentmux prompt wiki审核-A --text "请阅读 /path/to/task.md 并按要求执行" --json
 ```
 
-Avoid treating long `--stdin` payloads as reliable for Claude Code. They may appear in the input buffer without actually starting execution.
+Avoid treating long `--stdin` payloads as reliable for the `claude-code` TUI harness. They may appear in the input buffer without actually starting execution.
+
+None of the above applies to structured harnesses: there is no input buffer, no upgrade prompt, and no readiness window. Summon and prompt immediately.
+
+```bash
+agentmux summon --template codex-cli-execjson --name 重构-A --json
+agentmux prompt 重构-A --text "阅读 src/ 并总结模块边界" --json
+agentmux wait 重构-A --timeout 180s --json
+agentmux capture 重构-A --json
+```
+
+On `codex-cli-execjson` the `prompt -> wait -> prompt` order is mandatory, not stylistic. A second `prompt` before `wait` returns `execjson_instance_busy` and sends nothing.
 
 ## Command Quick Reference
 
@@ -100,17 +125,21 @@ agentmux inspect 编码助手-A --json
 
 Use `list` for a multi-instance status overview, and use `inspect --json` for one instance's current status.
 
-Use `capture` when you need the visible screen text and recent history.
+Use `capture` when you need the agent's output. On TUI harnesses `--history` is a count of screen lines; on structured harnesses it is a count of normalized messages.
 
 ```bash
 agentmux capture 编码助手-A --history 120 --json
 ```
+
+Structured harnesses add fields under `data`. `claude-code-ndjson` returns `messages`, `usage`, `claude_session_id`, and `turns`. `codex-cli-execjson` returns `messages`, `usage`, `thread_id`, `turns`, `turn_state`, and `last_error`.
 
 Use `wait` when you only need the agent to appear done and want to avoid returning large text.
 
 ```bash
 agentmux wait 编码助手-A --stable 1500 --timeout 30s --json
 ```
+
+`--stable` applies only to TUI harnesses. Structured harnesses ignore it and return `stable_for_ms: 0`, since they detect completion from protocol events or process exit rather than screen stillness.
 
 Use `prompt` when the instance already exists and you want to separate control from creation.
 
@@ -121,7 +150,9 @@ agentmux prompt 编码助手-A --key Enter --json
 agentmux prompt 编码助手-A --key C-c --json
 ```
 
-If pasted text is visible in the harness input area but execution does not begin, send one explicit `Enter` with `agentmux prompt <name> --key Enter --json`.
+If pasted text is visible in the harness input area but execution does not begin, send one explicit `Enter` with `agentmux prompt <name> --key Enter --json`. This applies to TUI harnesses only.
+
+On structured harnesses only `--key C-c` does anything; it interrupts the current work. Other keys are accepted as no-ops. On `codex-cli-execjson`, `C-c` ends the running turn process and marks that turn `cancelled`; the instance returns to `idle` and stays usable.
 
 Use `halt` when the instance should stop. By default it attempts graceful interruption first.
 
@@ -136,6 +167,8 @@ Use `version` when you need to confirm which CLI surface is available.
 ```bash
 agentmux version --json
 ```
+
+Use `attach` only for interactive human debugging. On TUI harnesses it enters the tmux session. On structured harnesses there is no UI, so it follows the instance's raw `output.jsonl` event stream instead.
 
 ## Patience & Polling Strategy
 
@@ -172,7 +205,9 @@ If interruption becomes necessary:
 3. Verify with `inspect` or `capture`.
 4. Use `halt` only if the instance is truly unresponsive or the graceful interrupt did not work.
 
-If `capture` shows a direct blocker such as `Y/n`, a permissions prompt, or pasted text waiting for submission, answer the blocker directly instead of interrupting the whole run.
+On `codex-cli-execjson`, `C-c` is not a soft nudge: it ends the turn's process outright and the turn's work is lost. Weigh it accordingly. The instance itself survives and can be prompted again.
+
+If `capture` shows a direct blocker such as `Y/n`, a permissions prompt, or pasted text waiting for submission, answer the blocker directly instead of interrupting the whole run. Structured harnesses never present such blockers; on `codex-cli-execjson` permissions are decided up front by the template's `--sandbox` flag.
 
 ## Decision Rules
 
@@ -188,11 +223,13 @@ Prefer reusing a named instance when the user is clearly continuing previous wor
 
 Prefer `summon --prompt` only when the harness is already known-ready or the first instruction is cheap to retry.
 
-Prefer separate `summon -> capture -> prompt` for fresh Claude Code sessions and other TUI harnesses that may need startup time or may ask an initial question before accepting the real task.
+Prefer separate `summon -> capture -> prompt` for fresh Claude Code sessions and other TUI harnesses that may need startup time or may ask an initial question before accepting the real task. For structured harnesses, `summon --prompt` is always safe.
 
-Prefer `prompt --stdin` for short to medium multi-line text only. For long task descriptions, especially with Claude Code, prefer the file-based pattern instead of pushing the whole payload through stdin.
+Prefer `prompt --stdin` for short to medium multi-line text only. For long task descriptions on the `claude-code` TUI harness, prefer the file-based pattern instead of pushing the whole payload through stdin. Structured harnesses pass the payload through a file or protocol message, so length is not a concern.
 
-If the text prompt seems to have landed in the input box but no work starts, prefer sending a single `Enter` before retrying or interrupting the instance.
+If the text prompt seems to have landed in the input box but no work starts, prefer sending a single `Enter` before retrying or interrupting the instance. Never do this on a structured harness; there is no input box.
+
+Prefer `capture --json` and read `data.last_error` when a `codex-cli-execjson` turn finished but produced nothing useful. A failed turn still satisfies `wait`, so `wait` succeeding does not mean the turn succeeded.
 
 Prefer `wait` over `capture` when the only goal is to block until the instance appears done.
 
@@ -220,7 +257,7 @@ Read these top-level JSON fields first:
 6. `error_code`
 7. `error`
 
-Read `data.content` as the primary screen text for `capture`.
+Read `data.content` as the primary output for `capture`. On TUI harnesses it is screen text; on structured harnesses it is the agent's final message for the current or most recent turn.
 
 For `wait`, read `status` first. `data.stable_for_ms` is auxiliary wait metadata; no content is returned.
 
@@ -230,11 +267,15 @@ Treat `status: exited` as a deliberate stopped instance.
 
 Treat `status: lost` as a broken or missing runtime that may require a fresh `summon`.
 
-Treat `status: busy` as a recent-activity hint, not a permanent lock. It may automatically degrade back to `idle` if the configured busy TTL expires.
+Treat `status: busy` as a recent-activity hint, not a permanent lock. On TUI harnesses it may automatically degrade back to `idle` when the configured busy TTL expires. On structured harnesses it reflects real protocol or process state and does not expire.
+
+Treat `status: idle` with `process_id: 0` on a `codex-cli-execjson` instance as normal and healthy. Between turns that instance is a `thread_id` plus a state directory, with no process running. Do not re-summon it and do not treat it as lost.
+
+For `codex-cli-execjson`, read `data.turn_state` and `data.last_error` from `capture --json` to learn whether the last turn actually succeeded. `turn_state: failed` with a non-empty `last_error` means the turn failed but the instance is still usable; send a corrected prompt rather than re-summoning.
 
 Treat `status` from `inspect --json`, `list --json`, or `wait` as the authoritative state signal.
 
-Do not depend on `pane_title` to determine state. It is optional observational metadata and may be useful for debugging, but state decisions should be based on `status`.
+Do not depend on `pane_title` to determine state. It is optional observational metadata and may be useful for debugging, but state decisions should be based on `status`. Structured harnesses leave it empty.
 
 For lightweight single-instance status checks, prefer reading `status` from `inspect --json` instead of using `capture`.
 
@@ -267,6 +308,17 @@ agentmux capture <instance-name> --history 20 --json
 Do not treat `capture_timeout` as a cue to interrupt. In most cases it only means the agent is still working and you should keep waiting patiently.
 
 When `process_not_running` or `status: exited` appears, decide whether the user wants a fresh instance or whether work should stop.
+
+When `execjson_instance_busy` appears, nothing was sent. The `codex-cli-execjson` instance is running a turn and codex cannot take input into a running turn. Wait for it, then resend the same prompt:
+
+```bash
+agentmux wait <instance-name> --timeout 180s --json
+agentmux prompt <instance-name> --text "..." --json
+```
+
+Do not retry immediately, and do not `halt` the instance to unblock it.
+
+When `config_invalid` appears while summoning a `codex-cli-execjson` template, the template `command` is not a bare `codex exec` prefix. It must carry only parent-level flags such as `--sandbox` and `--cd`. Remove `--json`, `-o`, `resume`, `review`, `--ask-for-approval`, `--ephemeral`, pipes, and redirection; agentmux supplies the rest.
 
 When `invalid_key` appears, retry with a supported key such as `Enter`, `C-c`, `Escape`, `Up`, `Down`, or `Tab`.
 
