@@ -97,7 +97,7 @@ func parseEvent(offset, endOffset int64, line []byte) (Event, error) {
 
 func applyEvents(st *State, events []Event) {
 	for _, ev := range events {
-		st.LastReadOffset = maxInt64(st.LastReadOffset, ev.EndOffset)
+		st.LastReadOffset = max(st.LastReadOffset, ev.EndOffset)
 		switch ev.Type {
 		case "user":
 			if ev.UUID != "" {
@@ -271,10 +271,10 @@ func addUsage(a, b Usage) Usage {
 
 func maxUsage(a, b Usage) Usage {
 	return Usage{
-		InputTokens:              maxInt64(a.InputTokens, b.InputTokens),
-		OutputTokens:             maxInt64(a.OutputTokens, b.OutputTokens),
-		CacheReadInputTokens:     maxInt64(a.CacheReadInputTokens, b.CacheReadInputTokens),
-		CacheCreationInputTokens: maxInt64(a.CacheCreationInputTokens, b.CacheCreationInputTokens),
+		InputTokens:              max(a.InputTokens, b.InputTokens),
+		OutputTokens:             max(a.OutputTokens, b.OutputTokens),
+		CacheReadInputTokens:     max(a.CacheReadInputTokens, b.CacheReadInputTokens),
+		CacheCreationInputTokens: max(a.CacheCreationInputTokens, b.CacheCreationInputTokens),
 	}
 }
 
@@ -345,13 +345,6 @@ func trimMessages(msgs []NormalizedMessage, history int) []NormalizedMessage {
 		return msgs
 	}
 	return msgs[len(msgs)-history:]
-}
-
-func maxInt64(a, b int64) int64 {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 func parseResumeNotFound(stderr string) bool {

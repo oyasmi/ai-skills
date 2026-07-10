@@ -171,7 +171,7 @@ func (c Controller) Reconcile(ctx context.Context, inst instance.Instance) (inst
 			return err
 		}
 		applyEvents(locked, events)
-		locked.LastReadOffset = maxInt64(locked.LastReadOffset, next)
+		locked.LastReadOffset = max(locked.LastReadOffset, next)
 		st = *locked
 		return nil
 	})
@@ -355,7 +355,7 @@ func (c Controller) syncState(inst instance.Instance) (State, error) {
 			return err
 		}
 		applyEvents(st, events)
-		st.LastReadOffset = maxInt64(st.LastReadOffset, next)
+		st.LastReadOffset = max(st.LastReadOffset, next)
 		out = *st
 		return nil
 	})

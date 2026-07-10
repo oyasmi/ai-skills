@@ -311,7 +311,7 @@ func (c Controller) finalize(inst instance.Instance, st *State, i int, cancelled
 	}
 
 	st.TotalTurns++
-	st.LastReadOffset = maxInt64(st.LastReadOffset, next)
+	st.LastReadOffset = max(st.LastReadOffset, next)
 	if st.Status != statusExited {
 		st.Status = statusIdle
 	}
@@ -462,11 +462,4 @@ func (c Controller) load(inst instance.Instance) (State, error) {
 		return nil
 	})
 	return st, err
-}
-
-func maxInt64(a, b int64) int64 {
-	if a > b {
-		return a
-	}
-	return b
 }

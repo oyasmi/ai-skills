@@ -113,9 +113,6 @@ func withStateLocked(path string, fn func(*State) error) error {
 func loadState(path string) (State, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return State{}, apperr.Wrap("execjson_state_error", err, "read state")
-		}
 		return State{}, apperr.Wrap("execjson_state_error", err, "read state")
 	}
 	var st State
