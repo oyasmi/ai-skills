@@ -247,7 +247,7 @@ func (c Config) Validate() error {
 		return apperr.New("config_invalid", "tmux socket must not be empty")
 	}
 	if c.Defaults.MaxInstances < 0 {
-		return apperr.New("config_invalid", "max_instances must be positive")
+		return apperr.New("config_invalid", "max_instances must be non-negative")
 	}
 	for name, tpl := range c.Templates {
 		if strings.TrimSpace(name) == "" {

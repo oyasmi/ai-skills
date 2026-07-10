@@ -190,3 +190,54 @@ done
 	}
 	return path
 }
+
+// TestInterruptIdleInstanceDoesNotWedgeBusy guards the fix for interrupt
+// wedging: with no turn in flight, Interrupt must not force the instance into a
+// busy state it can never leave.
+func TestInterruptIdleInstanceDoesNotWedgeBusy(t *testing.T) {
+	dir := t.TempDir()
+	ctrl := Controller{StateDir: dir, PollMS: 10}
+	inst := instance.Instance{
+		Name:         "ndjson",
+		SessionID:    "i_idle",
+		HarnessType:  HarnessType,
+		TransportDir: dir,
+		ProcessID:    os.Getpid(), // a live pid; ProcessGroupID 0 so no signal is sent
+	}
+	st := initialState("550e8400-e29b-41d4-a716-446655440000", nowUTC())
+	st.Status = "idle"
+	if err := saveState(statePath(inst), st); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+	got, err := ctrl.Interrupt(context.Background(), inst)
+	if err != nil {
+		t.Fatalf("interrupt: %v", err)
+	}
+	if got.Status == instance.StatusBusy {
+		t.Fatalf("interrupt on idle instance wedged status to busy")
+	}
+}
+
+// TestWaitReturnsImmediatelyBeforeFirstPrompt guards the fix for wait hanging on
+// a freshly summoned instance that was never prompted (SessionIdle is still
+// false but nothing is in flight).
+func TestWaitReturnsImmediatelyBeforeFirstPrompt(t *testing.T) {
+	dir := t.TempDir()
+	ctrl := Controller{StateDir: dir, PollMS: 10}
+	inst := instance.Instance{
+		Name:         "ndjson",
+		SessionID:    "i_new",
+		HarnessType:  HarnessType,
+		TransportDir: dir,
+		ProcessID:    os.Getpid(),
+	}
+	st := initialState("550e8400-e29b-41d4-a716-446655440000", nowUTC())
+	st.Status = "idle"
+	st.SessionIdle = false
+	if err := saveState(statePath(inst), st); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+	if _, err := ctrl.Wait(context.Background(), inst, 500*time.Millisecond); err != nil {
+		t.Fatalf("wait before first prompt should return immediately, got %v", err)
+	}
+}

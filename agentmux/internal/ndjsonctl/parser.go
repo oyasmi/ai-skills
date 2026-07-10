@@ -4,10 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	"github.com/oyasmi/agentmux/internal/apperr"
 )
@@ -345,12 +343,4 @@ func trimMessages(msgs []NormalizedMessage, history int) []NormalizedMessage {
 		return msgs
 	}
 	return msgs[len(msgs)-history:]
-}
-
-func parseResumeNotFound(stderr string) bool {
-	return strings.Contains(stderr, "No conversation found with session ID")
-}
-
-func parseErrorAt(offset int64, err error) error {
-	return apperr.New("ndjson_parse_error", fmt.Sprintf("parse output line at offset %d: %v", offset, err))
 }

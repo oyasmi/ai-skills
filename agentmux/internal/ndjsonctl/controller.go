@@ -273,7 +273,10 @@ func (c Controller) Wait(ctx context.Context, inst instance.Instance, timeout ti
 		if err != nil {
 			return capture.Snapshot{}, err
 		}
-		if !hasUnfinishedPrompt(st.PendingPrompts) && st.SessionIdle {
+		// Done means "no turn in flight and the instance is at rest". SessionIdle
+		// only ever flips true after a prompt has run, so a freshly summoned
+		// instance that was never prompted is also at rest and must not hang.
+		if !hasUnfinishedPrompt(st.PendingPrompts) && (st.SessionIdle || len(st.PendingPrompts) == 0) {
 			return capture.Snapshot{CapturedAt: nowUTC()}, nil
 		}
 		if !processAlive(inst.ProcessID) {
@@ -324,6 +327,16 @@ func (c Controller) Halt(ctx context.Context, inst instance.Instance, immediatel
 }
 
 func (c Controller) Interrupt(ctx context.Context, inst instance.Instance) (instance.Instance, error) {
+	// With no turn in flight there is nothing to interrupt. Forcing the state to
+	// busy here would wedge an idle instance: nothing running will ever emit the
+	// session_state idle event needed to clear it. Treat it as a no-op instead.
+	st, err := c.syncState(inst)
+	if err != nil {
+		return inst, err
+	}
+	if !hasUnfinishedPrompt(st.PendingPrompts) {
+		return c.Reconcile(ctx, inst)
+	}
 	if inst.ProcessGroupID > 0 && processAlive(inst.ProcessID) {
 		_ = syscall.Kill(-inst.ProcessGroupID, syscall.SIGINT)
 	}
