@@ -185,6 +185,13 @@ func (c Controller) SendPrompt(ctx context.Context, inst instance.Instance, text
 		return nil
 	})
 	if err != nil {
+		// spawnTurn creates a detached process. If any later persistence step
+		// fails, the state transaction is discarded and no turn can track that
+		// process, so roll it back before returning the error.
+		if pid > 0 {
+			signalGroup(pgid, syscall.SIGKILL)
+			waitForExit(ctx, pid, interruptGrace)
+		}
 		return inst, err
 	}
 

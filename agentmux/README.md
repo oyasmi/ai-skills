@@ -421,7 +421,7 @@ agentmux version --json
 1. `prompt` 后实例会进入 `busy`
 2. 若后续执行 `wait`，状态会正常收敛回 `idle`
 3. 若实例的 `harness_type` 支持 `pane_title` 信号（如 `claude-code`、`codex-cli`、`gemini-cli`），还可以通过 `pane_title` 精确收敛到 `idle`
-4. `claude-code-ndjson` 会根据 Claude Code 协议事件收敛到 `idle`
+4. `claude-code-ndjson` 会根据 Claude Code 协议事件收敛到 `idle`；中断后若连续 5 秒没有新事件，也会兜底回到 `idle` 并记录 `interrupted`
 5. `codex-cli-execjson` 在 turn 进程退出后收敛到 `idle`；两个 turn 之间没有进程存在，`idle` 且 `process_id=0` 是正常状态
 6. 若调用方没有继续观测，通用 TUI harness 的 `busy` 会在 `defaults.status.busy_ttl_ms` 到期后自动退化为 `idle`
 7. 若 `busy_ttl_ms: 0`，表示禁用自动退化，实例不会仅因 TTL 到期而自动回到 `idle`

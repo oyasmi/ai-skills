@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"time"
 
 	"github.com/oyasmi/agentmux/internal/apperr"
 )
@@ -94,6 +95,9 @@ func parseEvent(offset, endOffset int64, line []byte) (Event, error) {
 }
 
 func applyEvents(st *State, events []Event) {
+	if len(events) > 0 {
+		st.LastEventAt = nowUTC()
+	}
 	for _, ev := range events {
 		st.LastReadOffset = max(st.LastReadOffset, ev.EndOffset)
 		switch ev.Type {
@@ -134,6 +138,7 @@ func applyEvents(st *State, events []Event) {
 			if ev.Subtype == "session_state_changed" {
 				if ev.State == "idle" {
 					st.SessionIdle = true
+					st.InterruptedAt = time.Time{}
 					for i := range st.PendingPrompts {
 						if st.PendingPrompts[i].State == PromptResult {
 							st.PendingPrompts[i].State = PromptIdle

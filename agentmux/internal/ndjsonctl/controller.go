@@ -27,6 +27,7 @@ const (
 	processFileName           = "process.json"
 	fifoWriteTimeout          = 5 * time.Second
 	defaultPollInterval       = 250 * time.Millisecond
+	interruptSilenceGrace     = 5 * time.Second
 	sessionStateEventsEnvName = "CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS"
 )
 
@@ -172,6 +173,7 @@ func (c Controller) Reconcile(ctx context.Context, inst instance.Instance) (inst
 		}
 		applyEvents(locked, events)
 		locked.LastReadOffset = max(locked.LastReadOffset, next)
+		degradeSilentInterrupt(locked, nowUTC())
 		st = *locked
 		return nil
 	})
@@ -218,6 +220,7 @@ func (c Controller) SendPrompt(ctx context.Context, inst instance.Instance, text
 			st.ActivePromptUUID = uuid
 		}
 		st.LastPromptAt = now
+		st.InterruptedAt = time.Time{}
 		if st.LastReadOffset > startOffset {
 			st.LastReadOffset = startOffset
 		}
@@ -340,7 +343,8 @@ func (c Controller) Interrupt(ctx context.Context, inst instance.Instance) (inst
 	if inst.ProcessGroupID > 0 && processAlive(inst.ProcessID) {
 		_ = syscall.Kill(-inst.ProcessGroupID, syscall.SIGINT)
 	}
-	_ = withStateLocked(statePath(inst), func(st *State) error {
+	now := nowUTC()
+	if err := withStateLocked(statePath(inst), func(st *State) error {
 		for i := range st.PendingPrompts {
 			if st.PendingPrompts[i].State == PromptSent || st.PendingPrompts[i].State == PromptReplayed || st.PendingPrompts[i].State == PromptResult {
 				st.PendingPrompts[i].State = PromptCancelled
@@ -349,11 +353,35 @@ func (c Controller) Interrupt(ctx context.Context, inst instance.Instance) (inst
 		st.ActivePromptUUID = ""
 		st.Status = "busy"
 		st.SessionIdle = false
+		st.InterruptedAt = now
+		st.LastError = "interrupted"
 		return nil
-	})
+	}); err != nil {
+		return inst, err
+	}
 	inst.Status = instance.StatusBusy
-	inst.UpdatedAt = nowUTC()
+	inst.UpdatedAt = now
 	return inst, nil
+}
+
+// degradeSilentInterrupt prevents a cancelled prompt from leaving a live
+// streaming process permanently busy when Claude emits no terminal idle event.
+// Any observed protocol event restarts the grace period, so an agent that is
+// still producing output is not declared idle prematurely.
+func degradeSilentInterrupt(st *State, now time.Time) {
+	if st.Status != "busy" || st.InterruptedAt.IsZero() || st.SessionIdle || hasUnfinishedPrompt(st.PendingPrompts) {
+		return
+	}
+	lastProgress := st.InterruptedAt
+	if st.LastEventAt.After(lastProgress) {
+		lastProgress = st.LastEventAt
+	}
+	if now.Sub(lastProgress) < interruptSilenceGrace {
+		return
+	}
+	st.Status = "idle"
+	st.SessionIdle = true
+	st.InterruptedAt = time.Time{}
 }
 
 func (c Controller) Attach(inst instance.Instance) *exec.Cmd {

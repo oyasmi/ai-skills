@@ -218,6 +218,69 @@ func TestInterruptIdleInstanceDoesNotWedgeBusy(t *testing.T) {
 	}
 }
 
+func TestReconcileDegradesSilentInterruptedPromptToIdle(t *testing.T) {
+	dir := t.TempDir()
+	ctrl := Controller{StateDir: dir, PollMS: 10}
+	inst := instance.Instance{
+		Name:         "ndjson",
+		SessionID:    "i_interrupted",
+		HarnessType:  HarnessType,
+		TransportDir: dir,
+		ProcessID:    os.Getpid(),
+	}
+	if err := os.WriteFile(outputPath(inst), nil, 0o600); err != nil {
+		t.Fatalf("write output: %v", err)
+	}
+	st := initialState("550e8400-e29b-41d4-a716-446655440000", nowUTC())
+	st.Status = "busy"
+	st.SessionIdle = false
+	st.InterruptedAt = nowUTC().Add(-interruptSilenceGrace - time.Second)
+	st.LastError = "interrupted"
+	st.PendingPrompts = []PendingPrompt{{UUID: "prompt-1", State: PromptCancelled}}
+	if err := saveState(statePath(inst), st); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+
+	got, err := ctrl.Reconcile(context.Background(), inst)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if got.Status != instance.StatusIdle {
+		t.Fatalf("silent interrupted prompt must degrade to idle, got %s", got.Status)
+	}
+	saved, err := loadState(statePath(inst))
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if !saved.SessionIdle || !saved.InterruptedAt.IsZero() || saved.LastError != "interrupted" {
+		t.Fatalf("expected persisted interrupted idle state, got %+v", saved)
+	}
+}
+
+func TestReconcileKeepsRecentlyInterruptedPromptBusy(t *testing.T) {
+	dir := t.TempDir()
+	ctrl := Controller{StateDir: dir, PollMS: 10}
+	inst := instance.Instance{TransportDir: dir, ProcessID: os.Getpid()}
+	if err := os.WriteFile(outputPath(inst), nil, 0o600); err != nil {
+		t.Fatalf("write output: %v", err)
+	}
+	st := initialState("550e8400-e29b-41d4-a716-446655440000", nowUTC())
+	st.Status = "busy"
+	st.InterruptedAt = nowUTC()
+	st.PendingPrompts = []PendingPrompt{{UUID: "prompt-1", State: PromptCancelled}}
+	if err := saveState(statePath(inst), st); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+
+	got, err := ctrl.Reconcile(context.Background(), inst)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if got.Status != instance.StatusBusy {
+		t.Fatalf("recently interrupted prompt must remain busy during grace period, got %s", got.Status)
+	}
+}
+
 // TestWaitReturnsImmediatelyBeforeFirstPrompt guards the fix for wait hanging on
 // a freshly summoned instance that was never prompted (SessionIdle is still
 // false but nothing is in flight).

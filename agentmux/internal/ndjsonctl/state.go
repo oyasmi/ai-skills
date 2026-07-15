@@ -37,6 +37,8 @@ type State struct {
 	StartedAt               time.Time       `json:"started_at"`
 	LastPromptAt            time.Time       `json:"last_prompt_at,omitempty"`
 	LastResultAt            time.Time       `json:"last_result_at,omitempty"`
+	LastEventAt             time.Time       `json:"last_event_at,omitempty"`
+	InterruptedAt           time.Time       `json:"interrupted_at,omitempty"`
 	LastReadOffset          int64           `json:"last_read_offset"`
 	LastResultOffset        int64           `json:"last_result_offset"`
 	ActivePromptUUID        string          `json:"active_prompt_uuid,omitempty"`

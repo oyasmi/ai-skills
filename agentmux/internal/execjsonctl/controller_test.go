@@ -2,6 +2,7 @@ package execjsonctl
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -238,6 +239,55 @@ func TestPromptWhileBusyIsRejected(t *testing.T) {
 	}
 	if code := apperr.Code(err); code != "execjson_instance_busy" {
 		t.Fatalf("expected execjson_instance_busy, got %s", code)
+	}
+}
+
+func TestSendPromptKillsSpawnedTurnWhenMetadataPersistenceFails(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns a local fake process")
+	}
+	dir := t.TempDir()
+	fake := writeFakeCodex(t, dir)
+	ctrl, inst := newTestInstance(t, dir, fake, map[string]string{"FAKE_MODE": "hang"})
+
+	inst, err := ctrl.Start(context.Background(), inst, "codex exec --skip-git-repo-check", "", false)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	// saveProcessMeta uses os.WriteFile, so a directory at its destination is
+	// a deterministic failure after the detached turn has already spawned.
+	if err := os.Mkdir(filepath.Join(inst.TransportDir, processFileName), 0o700); err != nil {
+		t.Fatalf("create blocking process metadata directory: %v", err)
+	}
+	if _, err := ctrl.SendPrompt(context.Background(), inst, "hello"); err == nil {
+		t.Fatal("expected process metadata persistence to fail")
+	}
+
+	logBytes, err := os.ReadFile(filepath.Join(inst.TransportDir, commandLogName))
+	if err != nil {
+		t.Fatalf("read command log: %v", err)
+	}
+	var pid int
+	for _, field := range strings.Fields(string(logBytes)) {
+		if strings.HasPrefix(field, "pid=") {
+			if _, err := fmt.Sscanf(field, "pid=%d", &pid); err != nil {
+				t.Fatalf("parse spawned pid: %v", err)
+			}
+			break
+		}
+	}
+	if pid <= 0 {
+		t.Fatalf("expected spawned pid in command log, got %q", logBytes)
+	}
+	if processAlive(pid) {
+		t.Fatalf("spawned turn pid %d survived failed state transaction", pid)
+	}
+	st, err := loadState(statePath(inst))
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if runningTurn(&st) >= 0 || st.Status != statusIdle {
+		t.Fatalf("failed prompt must leave no running turn, got %+v", st)
 	}
 }
 

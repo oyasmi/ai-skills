@@ -150,6 +150,8 @@ type Instance struct {
   "started_at": "2026-04-28T15:30:00+08:00",
   "last_prompt_at": "2026-04-28T15:35:00+08:00",
   "last_result_at": "2026-04-28T15:36:12+08:00",
+  "last_event_at": "2026-04-28T15:36:12+08:00",
+  "interrupted_at": null,
   "last_read_offset": 12345,
   "last_result_offset": 12001,
   "active_prompt_uuid": "",
@@ -173,6 +175,8 @@ type Instance struct {
 | `version` | state 文件 schema 版本 |
 | `claude_session_id` | Claude Code 会话 UUID |
 | `status` | `starting` / `idle` / `busy` / `exited` / `lost` |
+| `last_event_at` | agentmux 最近一次解析到协议事件的时间 |
+| `interrupted_at` | 最近一次尚待状态收敛的 SIGINT 时间；收敛后清空 |
 | `last_read_offset` | agentmux 已解析到的 output.jsonl 字节位置 |
 | `last_result_offset` | 最近一次 result 事件起始 offset |
 | `active_prompt_uuid` | 已 replay 但尚未完成的 prompt UUID |
@@ -459,7 +463,7 @@ prompt 排队：
 
 `prompt --key`：
 
-1. `C-c` 映射为向 Claude 进程组发送 `SIGINT`，作为 best-effort interrupt。随后将所有未完成 prompt 标记为 `cancelled`，并执行 reconcile；如果 Claude 进程仍存活，实例回到 `idle` 或保持后续事件决定的状态。
+1. `C-c` 映射为向 Claude 进程组发送 `SIGINT`，作为 best-effort interrupt。随后将所有未完成 prompt 标记为 `cancelled`；reconcile 优先服从后续协议事件，但若进程仍存活且连续 5 秒没有新事件，则兜底回到 `idle` 并保留 `last_error: "interrupted"`。
 2. `Enter`、`Escape`、`Up`、`Down`、`Tab` 等 TUI 导航键在 ndjson harness 下不发送任何内容。
 3. 对 no-op key 返回成功，并在 JSON data 增加：
 
