@@ -79,6 +79,15 @@ templates:
     prompt: ""
     cwd: .
 
+  pi-rpc:
+    description: pi 通用编程智能体（RPC 结构化模式）
+    command: pi --model $MODEL
+    model: anthropic/claude-sonnet-4.5
+    harness_type: pi-rpc
+    system_prompt: ""
+    prompt: ""
+    cwd: .
+
   文档专家:
     description: 面向需求梳理、设计说明、使用文档和交付说明的专家
     command: codex --model $MODEL

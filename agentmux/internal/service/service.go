@@ -17,6 +17,7 @@ import (
 	"github.com/oyasmi/agentmux/internal/logx"
 	"github.com/oyasmi/agentmux/internal/naming"
 	"github.com/oyasmi/agentmux/internal/ndjsonctl"
+	"github.com/oyasmi/agentmux/internal/rpcctl"
 	"github.com/oyasmi/agentmux/internal/tmuxctl"
 )
 
@@ -48,6 +49,7 @@ type Service struct {
 	Tmux   tmuxClient
 	NDJSON ndjsonctl.Controller
 	Codex  execjsonctl.Controller
+	PI     rpcctl.Controller
 }
 
 type SummonInput struct {
@@ -78,6 +80,10 @@ func New(paths config.Paths, cfg config.Config) Service {
 			PollMS:   cfg.Defaults.Capture.PollMS,
 		},
 		Codex: execjsonctl.Controller{
+			StateDir: paths.StateDir,
+			PollMS:   cfg.Defaults.Capture.PollMS,
+		},
+		PI: rpcctl.Controller{
 			StateDir: paths.StateDir,
 			PollMS:   cfg.Defaults.Capture.PollMS,
 		},

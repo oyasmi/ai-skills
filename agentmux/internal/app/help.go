@@ -255,6 +255,7 @@ Notes:
   For some TUI harnesses, especially Claude Code, very long stdin payloads may be less reliable than writing instructions to a file and sending a short follow-up prompt.
   On structured harnesses only C-c is meaningful; other keys are accepted as no-ops.
   On codex-cli-execjson each prompt starts one turn process. Prompting while a turn runs fails with execjson_instance_busy, since codex cannot take input into a running turn; wait first.
+  On pi-rpc, prompting while a run is in flight is accepted and queued as a follow-up, delivered after the current run finishes; C-c aborts the running turn in-band.
 
 Examples:
   agentmux prompt 编码助手-A --text "继续" --json
@@ -324,6 +325,7 @@ Notes:
   For title-signaling harnesses such as claude-code, codex-cli, and gemini-cli, completion is inferred from pane_title idle markers.
   For claude-code-ndjson, completion is inferred from protocol events.
   For codex-cli-execjson, completion means the turn process exited; a failed turn still satisfies wait, and the reason is reported by capture --json as last_error.
+  For pi-rpc, completion is inferred from the agent_settled protocol event, which fires only after retries, compaction, and any queued follow-up prompts have drained.
   For generic harnesses, completion falls back to screen stability heuristics.
   The title-signaling path polls pane metadata only and does not capture screen content.
 

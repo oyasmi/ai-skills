@@ -11,6 +11,7 @@ import (
 	"github.com/oyasmi/agentmux/internal/execjsonctl"
 	"github.com/oyasmi/agentmux/internal/instance"
 	"github.com/oyasmi/agentmux/internal/ndjsonctl"
+	"github.com/oyasmi/agentmux/internal/rpcctl"
 )
 
 func TestHarnessForRoutesByHarnessType(t *testing.T) {
@@ -32,6 +33,13 @@ func TestHarnessForRoutesByHarnessType(t *testing.T) {
 	}
 	if _, isExecJSON := h.(execjsonctl.Controller); !isExecJSON {
 		t.Fatalf("codex-cli-execjson routed to %T", h)
+	}
+	h, ok = svc.harnessFor(instance.Instance{HarnessType: rpcctl.HarnessType})
+	if !ok {
+		t.Fatal("pi-rpc must resolve")
+	}
+	if _, isRPC := h.(rpcctl.Controller); !isRPC {
+		t.Fatalf("pi-rpc routed to %T", h)
 	}
 }
 

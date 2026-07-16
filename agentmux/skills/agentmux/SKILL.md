@@ -1,6 +1,6 @@
 ---
 name: agentmux
-description: Manage isolated AI agent instances via `agentmux` CLI: summon, prompt, wait, capture, inspect, and halt. Covers tmux-backed TUI harnesses and structured harnesses (claude-code-ndjson, codex-cli-execjson). Trigger when user mentions `agentmux` or needs a reusable external coding agent.
+description: Manage isolated AI agent instances via `agentmux` CLI: summon, prompt, wait, capture, inspect, and halt. Covers tmux-backed TUI harnesses and structured harnesses (claude-code-ndjson, codex-cli-execjson, pi-rpc). Trigger when user mentions `agentmux` or needs a reusable external coding agent.
 ---
 
 # Agentmux
@@ -17,6 +17,7 @@ Structured harnesses have no terminal screen and never need `Enter`:
 
 1. `claude-code-ndjson`: one long-lived Claude Code process handles multiple turns. Prompting while busy is allowed; messages queue.
 2. `codex-cli-execjson`: each prompt launches one `codex exec --json` turn process. Multi-turn continuity uses `resume <thread_id>`.
+3. `pi-rpc`: one long-lived `pi --mode rpc` process handles multiple turns over an in-band JSONL command/event protocol. Prompting while busy is allowed; messages queue as follow-ups delivered after the current run. Completion is the `agent_settled` event.
 
 For `codex-cli-execjson`, an `idle` instance with `process_id: 0` is healthy between turns. Prompting while a turn is running fails with `execjson_instance_busy`; wait before sending the next prompt.
 
@@ -96,7 +97,7 @@ agentmux capture 重构-A --scope session --history 40 --json
 
 `capture` defaults to `--scope current`. For TUI harnesses, current means current screen plus optional history lines. For structured harnesses, current means the active or most recent turn; `--scope session` intentionally reads the recorded conversation. On TUI harnesses `--history` counts screen lines. On structured harnesses it limits normalized messages.
 
-Structured `capture --json` adds protocol fields. `claude-code-ndjson` returns `messages`, `usage`, `claude_session_id`, and `turns`. `codex-cli-execjson` returns `messages`, `usage`, `thread_id`, `turns`, `turn_state`, and `last_error`.
+Structured `capture --json` adds protocol fields. `claude-code-ndjson` returns `messages`, `usage`, `claude_session_id`, and `turns`. `codex-cli-execjson` returns `messages`, `usage`, `thread_id`, `turns`, `turn_state`, and `last_error`. `pi-rpc` returns `messages`, `usage`, `pi_session_id`, `turns`, and `last_error`.
 
 Wait without content:
 
@@ -116,7 +117,7 @@ agentmux prompt 编码助手-A --key Enter --json
 agentmux prompt 编码助手-A --key C-c --json
 ```
 
-Supported keys are `Enter`, `C-c`, `Escape`, `Up`, `Down`, and `Tab`. On structured harnesses only `C-c` has an effect; other keys are accepted as no-ops. On `codex-cli-execjson`, `C-c` kills the running turn process, marks that turn cancelled, and leaves the instance usable.
+Supported keys are `Enter`, `C-c`, `Escape`, `Up`, `Down`, and `Tab`. On structured harnesses only `C-c` has an effect; other keys are accepted as no-ops. On `codex-cli-execjson`, `C-c` kills the running turn process, marks that turn cancelled, and leaves the instance usable. On `pi-rpc`, `C-c` sends an in-band `abort` that stops the running turn while keeping the long-lived process alive; the instance stays usable.
 
 Stop:
 

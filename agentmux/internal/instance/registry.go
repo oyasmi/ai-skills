@@ -36,6 +36,7 @@ type Instance struct {
 	PaneTitle       string            `json:"pane_title,omitempty"`
 	ClaudeSessionID string            `json:"claude_session_id,omitempty"`
 	ThreadID        string            `json:"thread_id,omitempty"`
+	PiSessionID     string            `json:"pi_session_id,omitempty"`
 	TransportDir    string            `json:"transport_dir,omitempty"`
 	// ProcessID is the long-lived harness process for claude-code-ndjson, but
 	// only the currently running turn for codex-cli-execjson, where it is 0

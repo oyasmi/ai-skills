@@ -586,6 +586,15 @@ JSON 示例：
 3. `execjson_state_error`
 4. `execjson_instance_busy` — 实例正在执行一个 turn 时再次 `prompt`。codex 无法向执行中的 turn 追加输入，调用方应先 `wait`。
 
+`pi-rpc` 专用错误码：
+
+1. `rpc_fifo_broken`
+2. `rpc_parse_error`
+3. `rpc_process_error`
+4. `rpc_state_error`
+
+`pi-rpc` 在运行中再次 `prompt` 不会报错：消息经 `streamingBehavior:"followUp"` 排入 pi 的原生队列，在当前 run 结束后交付。
+
 ---
 
 ## 6. 典型调用序列

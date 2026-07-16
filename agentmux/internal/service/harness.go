@@ -9,6 +9,7 @@ import (
 	"github.com/oyasmi/agentmux/internal/execjsonctl"
 	"github.com/oyasmi/agentmux/internal/instance"
 	"github.com/oyasmi/agentmux/internal/ndjsonctl"
+	"github.com/oyasmi/agentmux/internal/rpcctl"
 )
 
 // harness is a structured (non-tmux) agent transport.
@@ -31,6 +32,7 @@ type harness interface {
 var (
 	_ harness = ndjsonctl.Controller{}
 	_ harness = execjsonctl.Controller{}
+	_ harness = rpcctl.Controller{}
 )
 
 // harnessFor returns the structured controller for an instance, or false when
@@ -41,6 +43,8 @@ func (s Service) harnessFor(inst instance.Instance) (harness, bool) {
 		return s.NDJSON, true
 	case execjsonctl.HarnessType:
 		return s.Codex, true
+	case rpcctl.HarnessType:
+		return s.PI, true
 	default:
 		return nil, false
 	}
