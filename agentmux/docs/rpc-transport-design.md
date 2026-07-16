@@ -93,8 +93,8 @@ cancelled -> interrupt 中止
 |---|---|
 | `response`(command=prompt) | 按 id 定位 pending，success→accepted，failure→failed + LastError |
 | `agent_start` | `AgentRunActive=true`，清 InterruptedAt |
-| `agent_settled` | `AgentRunActive=false`，`ResumeAvailable=true`，所有 sent/accepted → done |
-| `turn_end`(assistant) | `TotalTurns++`，累加 usage（tokens + cost.total） |
+| `agent_settled` | `AgentRunActive=false`，`ResumeAvailable=true`，所有 sent/accepted → done，每个完成的 prompt `TotalTurns++`（一次对话轮次） |
+| `turn_end`(assistant) | 累加 usage（tokens + cost.total）；不计 turns——pi 的 turn_end 是 agent-loop step（thinking/tool call/tool result），非对话轮次 |
 | `extension_ui_request`(dialog) | 记录待自动取消的对话框 id |
 
 状态派生：`busy` = `AgentRunActive || hasUnfinishedPrompt`，否则 `idle`（`exited` 为终态不覆盖）。

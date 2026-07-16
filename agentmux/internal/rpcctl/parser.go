@@ -129,17 +129,23 @@ func applyEvents(st *State, events []Event) {
 		case "agent_settled":
 			// A run settles only after retries, compaction retries, and all queued
 			// follow-ups have drained, so every accepted prompt is now complete.
+			// Count one conversation turn per completed user prompt here so turns
+			// aligns with claude-code-ndjson (one per result) and codex-cli-execjson
+			// (one per turn process). pi's own turn_end fires per agent-loop step
+			// (thinking, tool call, tool result), which would wildly inflate turns.
 			st.AgentRunActive = false
 			st.ResumeAvailable = true
 			st.InterruptedAt = zeroTime
 			for i := range st.PendingPrompts {
 				if st.PendingPrompts[i].State == PromptAccepted || st.PendingPrompts[i].State == PromptSent {
 					st.PendingPrompts[i].State = PromptDone
+					st.TotalTurns++
 				}
 			}
 
 		case "turn_end":
-			st.TotalTurns++
+			// A pi "turn" is one agent-loop step, not a conversation turn; only its
+			// usage is meaningful here. Turn counting happens on agent_settled.
 			st.ResumeAvailable = true
 			if ev.Message.Role == "assistant" {
 				accumulateUsage(st, ev.Message.Usage)

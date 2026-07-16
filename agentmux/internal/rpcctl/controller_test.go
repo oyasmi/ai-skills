@@ -167,6 +167,34 @@ func TestApplyEventsQueuedFollowUpDrainsInOneSettle(t *testing.T) {
 	if st.Status != "idle" {
 		t.Fatalf("expected idle, got %s", st.Status)
 	}
+	if st.TotalTurns != 2 {
+		t.Fatalf("draining two queued prompts must count two turns, got %d", st.TotalTurns)
+	}
+}
+
+// TestApplyEventsTurnEndDoesNotInflateTurns locks in that pi's per-step turn_end
+// events (thinking, tool call, tool result) count only usage, never turns. A
+// single user prompt that runs a tool and settles is exactly one turn, however
+// many turn_end events pi streams within it.
+func TestApplyEventsTurnEndDoesNotInflateTurns(t *testing.T) {
+	st := initialState("s1", nowUTC())
+	st.PendingPrompts = []PendingPrompt{{ID: "p1", State: PromptAccepted}}
+	st.AgentRunActive = true
+	st.Status = "busy"
+
+	events := []Event{{Type: "agent_start"}}
+	for i := 0; i < 16; i++ {
+		events = append(events, Event{Type: "turn_end", Message: AssistantMessage{Role: "assistant", Usage: mkUsage(1, 1, 0.001)}})
+	}
+	events = append(events, Event{Type: "agent_settled"})
+	applyEvents(&st, events)
+
+	if st.TotalTurns != 1 {
+		t.Fatalf("16 turn_end steps in one run must count one turn, got %d", st.TotalTurns)
+	}
+	if st.TotalOutputTokens != 16 {
+		t.Fatalf("usage must still accumulate per turn_end, got %d output tokens", st.TotalOutputTokens)
+	}
 }
 
 func TestNormalizeEventsFromMessageEnd(t *testing.T) {
