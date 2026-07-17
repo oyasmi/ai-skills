@@ -20,6 +20,7 @@ import (
 
 type fakeTmux struct {
 	sessions             map[string]bool
+	hasSessionErr        error
 	captureContent       string
 	captureCalls         int
 	captureSnapshotCalls int
@@ -32,9 +33,12 @@ type fakeTmux struct {
 	sendKeysHook         func(*fakeTmux, string, []string)
 }
 
-func (f *fakeTmux) HasSession(_ context.Context, sessionID string) bool {
+func (f *fakeTmux) HasSession(_ context.Context, sessionID string) (bool, error) {
 	f.hasSessionCalls = append(f.hasSessionCalls, sessionID)
-	return f.sessions[sessionID]
+	if f.hasSessionErr != nil {
+		return false, f.hasSessionErr
+	}
+	return f.sessions[sessionID], nil
 }
 
 func (f *fakeTmux) NewSession(_ context.Context, sessionID, _ string, _ string, _ map[string]string) error {
@@ -132,6 +136,38 @@ func TestListPrunesMissingSessions(t *testing.T) {
 	}
 	if _, ok := saved.Get("stale"); ok {
 		t.Fatalf("stale instance should have been removed from registry")
+	}
+}
+
+func TestListPreservesRegistryWhenTmuxProbeFails(t *testing.T) {
+	t.Parallel()
+
+	probeErr := apperr.New("tmux_unavailable", "tmux executable is unavailable")
+	svc, registryPath := newTestService(t, &fakeTmux{
+		sessions:      map[string]bool{"live-session": true},
+		hasSessionErr: probeErr,
+	})
+	reg := instance.Registry{Instances: map[string]instance.Instance{
+		"live": {
+			Name:      "live",
+			SessionID: "live-session",
+			Status:    instance.StatusIdle,
+			UpdatedAt: time.Now().UTC(),
+		},
+	}}
+	if err := instance.Save(registryPath, reg); err != nil {
+		t.Fatalf("save registry: %v", err)
+	}
+
+	if _, err := svc.List(context.Background()); err == nil || apperr.Code(err) != "tmux_unavailable" {
+		t.Fatalf("expected tmux_unavailable, got %v", err)
+	}
+	saved, err := instance.Load(registryPath)
+	if err != nil {
+		t.Fatalf("reload registry: %v", err)
+	}
+	if _, ok := saved.Get("live"); !ok {
+		t.Fatal("a probe failure must not prune a potentially live instance")
 	}
 }
 

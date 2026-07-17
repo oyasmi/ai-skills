@@ -101,7 +101,7 @@ cancelled -> interrupt 中止
 
 ### 5.3 usage / cost
 
-从 `turn_end` 的 assistant `usage` 累加：`input/output/cacheRead/cacheWrite` 及 `cost.total`。capture 的 usage 来自 state 累计值，与单次窗口无关。
+从 `turn_end` 的 assistant `usage` 累加：`input/output/cacheRead/cacheWrite` 及 `cost.total`。由于未完成 prompt 的同步可能从 `startOffset` 重放事件，累计时使用事件结束 offset 做幂等去重。capture 的 usage 来自 state 累计值，与单次窗口无关。
 
 ## 6. 各命令语义
 

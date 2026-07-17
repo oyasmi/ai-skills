@@ -104,6 +104,7 @@ func (c Controller) Start(ctx context.Context, inst instance.Instance, command, 
 	if pgid <= 0 {
 		pgid = cmd.Process.Pid
 	}
+	rollback := func() { _ = signalGroup(pgid, syscall.SIGKILL) }
 	now := nowUTC()
 	inst.ClaudeSessionID = claudeID
 	inst.TransportDir = dir
@@ -122,21 +123,26 @@ func (c Controller) Start(ctx context.Context, inst instance.Instance, command, 
 		Argv0:       "/bin/sh",
 		Fingerprint: "agentmux:" + inst.SessionID + ":" + claudeID,
 	}); err != nil {
+		rollback()
 		return instance.Instance{}, err
 	}
 	st := initialState(claudeID, now)
 	if err := saveState(filepath.Join(dir, stateFileName), st); err != nil {
+		rollback()
 		return instance.Instance{}, err
 	}
 	if err := c.waitStarted(ctx, inst, 250*time.Millisecond); err != nil {
-		_ = syscall.Kill(-pgid, syscall.SIGTERM)
+		rollback()
 		return instance.Instance{}, err
 	}
-	_ = withStateLocked(filepath.Join(dir, stateFileName), func(st *State) error {
+	if err := withStateLocked(filepath.Join(dir, stateFileName), func(st *State) error {
 		st.Status = "idle"
 		st.SessionIdle = false
 		return nil
-	})
+	}); err != nil {
+		rollback()
+		return instance.Instance{}, err
+	}
 	inst.Status = instance.StatusIdle
 	inst.UpdatedAt = nowUTC()
 	return inst, nil
@@ -303,7 +309,9 @@ func (c Controller) Halt(ctx context.Context, inst instance.Instance, immediatel
 		if immediately {
 			sig = syscall.SIGKILL
 		}
-		_ = syscall.Kill(-inst.ProcessGroupID, sig)
+		if err := signalGroup(inst.ProcessGroupID, sig); err != nil {
+			return apperr.Wrap("ndjson_process_error", err, "signal claude ndjson process group")
+		}
 		if !immediately {
 			deadline := time.Now().Add(timeout)
 			for processAlive(inst.ProcessID) && time.Now().Before(deadline) {
@@ -312,12 +320,16 @@ func (c Controller) Halt(ctx context.Context, inst instance.Instance, immediatel
 				}
 			}
 			if processAlive(inst.ProcessID) {
-				_ = syscall.Kill(-inst.ProcessGroupID, syscall.SIGKILL)
+				if err := signalGroup(inst.ProcessGroupID, syscall.SIGKILL); err != nil {
+					return apperr.Wrap("ndjson_process_error", err, "kill claude ndjson process group")
+				}
 			}
 		}
 	}
-	_ = os.Remove(filepath.Join(inst.TransportDir, inputFIFOName))
-	_ = withStateLocked(statePath(inst), func(st *State) error {
+	if err := os.Remove(filepath.Join(inst.TransportDir, inputFIFOName)); err != nil && !os.IsNotExist(err) {
+		return apperr.Wrap("ndjson_process_error", err, "remove claude input fifo")
+	}
+	if err := withStateLocked(statePath(inst), func(st *State) error {
 		st.Status = "exited"
 		for i := range st.PendingPrompts {
 			if st.PendingPrompts[i].State == PromptSent || st.PendingPrompts[i].State == PromptReplayed || st.PendingPrompts[i].State == PromptResult {
@@ -325,7 +337,9 @@ func (c Controller) Halt(ctx context.Context, inst instance.Instance, immediatel
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -341,7 +355,9 @@ func (c Controller) Interrupt(ctx context.Context, inst instance.Instance) (inst
 		return c.Reconcile(ctx, inst)
 	}
 	if inst.ProcessGroupID > 0 && processAlive(inst.ProcessID) {
-		_ = syscall.Kill(-inst.ProcessGroupID, syscall.SIGINT)
+		if err := signalGroup(inst.ProcessGroupID, syscall.SIGINT); err != nil {
+			return inst, apperr.Wrap("ndjson_process_error", err, "interrupt claude ndjson process group")
+		}
 	}
 	now := nowUTC()
 	if err := withStateLocked(statePath(inst), func(st *State) error {

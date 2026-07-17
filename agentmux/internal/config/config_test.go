@@ -27,6 +27,26 @@ func TestApplyDefaultsSetsTmuxSocket(t *testing.T) {
 	}
 }
 
+func TestLoadAppliesDefaultsBeforeValidation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := []byte("version: 1\ntemplates:\n  worker:\n    command: echo test\n")
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load config with omitted defaults: %v", err)
+	}
+	if cfg.Defaults.Tmux.Socket != RecommendedSocketPath() {
+		t.Fatalf("expected recommended socket %q, got %q", RecommendedSocketPath(), cfg.Defaults.Tmux.Socket)
+	}
+	if cfg.Defaults.Capture.PollMS != 250 || cfg.Defaults.Shell != "/bin/bash -lc" {
+		t.Fatalf("expected defaults to be applied, got %+v", cfg.Defaults)
+	}
+}
+
 func TestValidateRejectsEmptyTmuxSocket(t *testing.T) {
 	cfg := Config{
 		Version: 1,

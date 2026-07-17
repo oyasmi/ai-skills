@@ -51,6 +51,12 @@ jobs:
           echo "value=$value" >> "$GITHUB_OUTPUT"
           echo "VERSION=$value" >> "$GITHUB_ENV"
 
+      - name: Test
+        run: go test ./...
+
+      - name: Vet
+        run: go vet ./...
+
       - name: Build packages
         run: ./scripts/release.sh
 

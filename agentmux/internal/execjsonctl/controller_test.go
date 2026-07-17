@@ -291,6 +291,20 @@ func TestSendPromptKillsSpawnedTurnWhenMetadataPersistenceFails(t *testing.T) {
 	}
 }
 
+func TestHaltReturnsStateError(t *testing.T) {
+	dir := t.TempDir()
+	blocked := filepath.Join(dir, "not-a-directory")
+	if err := os.WriteFile(blocked, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write blocking path: %v", err)
+	}
+	ctrl := Controller{StateDir: dir}
+	inst := instance.Instance{TransportDir: blocked}
+
+	if err := ctrl.Halt(context.Background(), inst, true, 0); err == nil || apperr.Code(err) != "execjson_state_error" {
+		t.Fatalf("expected execjson_state_error, got %v", err)
+	}
+}
+
 // A turn that dies without turn.completed/turn.failed is a failed turn, but the
 // instance itself stays usable: it is a thread id, not a process.
 func TestCrashedTurnFailsButInstanceStaysIdle(t *testing.T) {

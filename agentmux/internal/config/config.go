@@ -202,10 +202,10 @@ func Load(path string) (Config, error) {
 	if err := yaml.Unmarshal(b, &cfg); err != nil {
 		return Config{}, apperr.Wrap("config_parse_error", err, "parse config file %s", path)
 	}
+	cfg.ApplyDefaults()
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
-	cfg.ApplyDefaults()
 	return cfg, nil
 }
 

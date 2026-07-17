@@ -42,3 +42,24 @@ func TestParseCaptureSnapshotSeparatesMetadataAndContent(t *testing.T) {
 		t.Fatalf("unexpected content: %q", snap.Content)
 	}
 }
+
+func TestIsMissingSessionErrorOnlyAcceptsAbsenceDiagnostics(t *testing.T) {
+	tests := []struct {
+		name    string
+		message string
+		want    bool
+	}{
+		{name: "missing target", message: "tmux has-session: can't find session: worker", want: true},
+		{name: "server absent", message: "tmux has-session: no server running on /tmp/agentmux.sock", want: true},
+		{name: "socket absent", message: "error connecting to /tmp/agentmux.sock (No such file or directory)", want: true},
+		{name: "permission denied", message: "error connecting to /tmp/agentmux.sock (Permission denied)", want: false},
+		{name: "binary missing", message: `exec: "tmux": executable file not found in $PATH`, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isMissingSessionError(tt.message); got != tt.want {
+				t.Fatalf("isMissingSessionError(%q) = %v, want %v", tt.message, got, tt.want)
+			}
+		})
+	}
+}

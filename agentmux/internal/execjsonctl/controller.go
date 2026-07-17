@@ -189,7 +189,7 @@ func (c Controller) SendPrompt(ctx context.Context, inst instance.Instance, text
 		// fails, the state transaction is discarded and no turn can track that
 		// process, so roll it back before returning the error.
 		if pid > 0 {
-			signalGroup(pgid, syscall.SIGKILL)
+			_ = signalGroup(pgid, syscall.SIGKILL)
 			waitForExit(ctx, pid, interruptGrace)
 		}
 		return inst, err
@@ -217,9 +217,12 @@ func (c Controller) Reconcile(ctx context.Context, inst instance.Instance) (inst
 		return inst, nil
 	}
 	if _, err := os.Stat(statePath(inst)); err != nil {
-		inst.Status = instance.StatusLost
-		inst.UpdatedAt = nowUTC()
-		return inst, nil
+		if os.IsNotExist(err) {
+			inst.Status = instance.StatusLost
+			inst.UpdatedAt = nowUTC()
+			return inst, nil
+		}
+		return inst, apperr.Wrap("execjson_state_error", err, "stat execjson state")
 	}
 	var st State
 	if err := withStateLocked(statePath(inst), func(locked *State) error {
@@ -404,10 +407,14 @@ func (c Controller) Interrupt(ctx context.Context, inst instance.Instance) (inst
 	if pid == 0 || !processAlive(pid) {
 		return c.Reconcile(ctx, inst)
 	}
-	signalGroup(pgid, syscall.SIGINT)
+	if err := signalGroup(pgid, syscall.SIGINT); err != nil {
+		return inst, apperr.Wrap("execjson_process_error", err, "interrupt codex turn process group")
+	}
 	waitForExit(ctx, pid, interruptGrace)
 	if processAlive(pid) {
-		signalGroup(pgid, syscall.SIGKILL)
+		if err := signalGroup(pgid, syscall.SIGKILL); err != nil {
+			return inst, apperr.Wrap("execjson_process_error", err, "kill codex turn process group")
+		}
 		waitForExit(ctx, pid, interruptGrace)
 	}
 
@@ -429,31 +436,41 @@ func (c Controller) Halt(ctx context.Context, inst instance.Instance, immediatel
 		timeout = 5 * time.Second
 	}
 	var pid, pgid int
-	_ = withStateLocked(statePath(inst), func(st *State) error {
+	if err := withStateLocked(statePath(inst), func(st *State) error {
 		if i := runningTurn(st); i >= 0 {
 			pid, pgid = st.Turns[i].PID, st.Turns[i].PGID
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
 	if pid > 0 && processAlive(pid) {
 		if immediately {
-			signalGroup(pgid, syscall.SIGKILL)
+			if err := signalGroup(pgid, syscall.SIGKILL); err != nil {
+				return apperr.Wrap("execjson_process_error", err, "kill codex turn process group")
+			}
 		} else {
-			signalGroup(pgid, syscall.SIGTERM)
+			if err := signalGroup(pgid, syscall.SIGTERM); err != nil {
+				return apperr.Wrap("execjson_process_error", err, "terminate codex turn process group")
+			}
 			waitForExit(ctx, pid, timeout)
 			if processAlive(pid) {
-				signalGroup(pgid, syscall.SIGKILL)
+				if err := signalGroup(pgid, syscall.SIGKILL); err != nil {
+					return apperr.Wrap("execjson_process_error", err, "kill codex turn process group")
+				}
 			}
 		}
 		waitForExit(ctx, pid, interruptGrace)
 	}
-	_ = withStateLocked(statePath(inst), func(st *State) error {
+	if err := withStateLocked(statePath(inst), func(st *State) error {
 		if i := runningTurn(st); i >= 0 {
 			c.finalize(inst, st, i, true)
 		}
 		st.Status = statusExited
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
 	return nil
 }
 

@@ -24,8 +24,8 @@ type e2eFakeTmux struct {
 	killed         []string
 }
 
-func (f *e2eFakeTmux) HasSession(_ context.Context, sessionID string) bool {
-	return f.sessions[sessionID]
+func (f *e2eFakeTmux) HasSession(_ context.Context, sessionID string) (bool, error) {
+	return f.sessions[sessionID], nil
 }
 
 func (f *e2eFakeTmux) NewSession(_ context.Context, sessionID, _ string, _ string, _ map[string]string) error {

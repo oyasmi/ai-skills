@@ -147,8 +147,15 @@ func applyEvents(st *State, events []Event) {
 			// A pi "turn" is one agent-loop step, not a conversation turn; only its
 			// usage is meaningful here. Turn counting happens on agent_settled.
 			st.ResumeAvailable = true
-			if ev.Message.Role == "assistant" {
+			// syncState can intentionally replay events from the beginning of an
+			// unfinished prompt. Offsets make billing fields exactly-once even
+			// though the rest of the state machine is replay-tolerant. Synthetic
+			// zero-offset events used by unit tests are treated as fresh events.
+			if ev.Message.Role == "assistant" && (ev.EndOffset <= 0 || ev.EndOffset > st.LastUsageOffset) {
 				accumulateUsage(st, ev.Message.Usage)
+				if ev.EndOffset > st.LastUsageOffset {
+					st.LastUsageOffset = ev.EndOffset
+				}
 			}
 
 		case "extension_ui_request":

@@ -91,11 +91,14 @@ func TestListKeepsIdleExecJSONInstanceWithNoProcess(t *testing.T) {
 func TestReconcileMarksExecJSONLostWhenStateIsGone(t *testing.T) {
 	svc, _ := newTestService(t, &fakeTmux{sessions: map[string]bool{}})
 
-	next := svc.reconcile(context.Background(), instance.Instance{
+	next, err := svc.reconcile(context.Background(), instance.Instance{
 		Name:         "codex",
 		HarnessType:  execjsonctl.HarnessType,
 		TransportDir: filepath.Join(t.TempDir(), "does-not-exist"),
 	})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
 	if next.Status != instance.StatusLost {
 		t.Fatalf("expected lost when state.json is gone, got %s", next.Status)
 	}

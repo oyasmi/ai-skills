@@ -1,0 +1,53 @@
+name: AgentMux Test
+
+on:
+  push:
+    paths:
+      - "agentmux/**"
+      - ".github/workflows/agentmux-*.yml"
+  pull_request:
+    paths:
+      - "agentmux/**"
+      - ".github/workflows/agentmux-*.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agentmux-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Go ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: agentmux
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: agentmux/go.mod
+          cache: true
+          cache-dependency-path: agentmux/go.sum
+
+      - name: Test
+        run: go test ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Race test
+        if: runner.os == 'Linux'
+        run: go test -race ./...

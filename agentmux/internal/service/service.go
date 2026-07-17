@@ -31,7 +31,7 @@ const (
 )
 
 type tmuxClient interface {
-	HasSession(ctx context.Context, sessionID string) bool
+	HasSession(ctx context.Context, sessionID string) (bool, error)
 	NewSession(ctx context.Context, sessionID, cwd, command string, env map[string]string) error
 	KillSession(ctx context.Context, sessionID string) error
 	CapturePane(ctx context.Context, target string, history int) (string, error)
@@ -110,14 +110,18 @@ func (s Service) withRegistry(ctx context.Context, fn func(*instance.Registry) e
 
 func (s Service) withRegistryReconcileAll(ctx context.Context, fn func(*instance.Registry) error) error {
 	return instance.WithLocked(s.Paths.Registry, func(reg *instance.Registry) error {
-		s.reconcileRegistry(ctx, reg)
+		if err := s.reconcileRegistry(ctx, reg); err != nil {
+			return err
+		}
 		return fn(reg)
 	})
 }
 
 func (s Service) withRegistryReconcileOne(ctx context.Context, name string, fn func(*instance.Registry) error) error {
 	return instance.WithLocked(s.Paths.Registry, func(reg *instance.Registry) error {
-		s.reconcileOne(ctx, reg, name)
+		if err := s.reconcileOne(ctx, reg, name); err != nil {
+			return err
+		}
 		return fn(reg)
 	})
 }
@@ -200,7 +204,10 @@ func (s Service) Summon(ctx context.Context, in SummonInput) (SummonResult, erro
 	var res SummonResult
 	err = s.withRegistry(ctx, func(reg *instance.Registry) error {
 		if inst, ok := reg.Get(name); ok {
-			next := s.reconcile(ctx, inst)
+			next, err := s.reconcile(ctx, inst)
+			if err != nil {
+				return err
+			}
 			if next.Status == instance.StatusLost || next.Status == instance.StatusExited {
 				h, structured := s.harnessFor(next)
 				if structured && next.Template == resolved.Name && h.CanResume(next) {
@@ -224,7 +231,9 @@ func (s Service) Summon(ctx context.Context, in SummonInput) (SummonResult, erro
 			}
 		}
 		if s.Config.Defaults.MaxInstances > 0 {
-			s.reconcileRegistry(ctx, reg)
+			if err := s.reconcileRegistry(ctx, reg); err != nil {
+				return err
+			}
 		}
 		if s.Config.Defaults.MaxInstances > 0 && len(reg.Instances) >= s.Config.Defaults.MaxInstances {
 			return apperr.New("config_invalid", "max_instances exceeded")
@@ -569,7 +578,18 @@ func (s Service) HaltWithOptions(ctx context.Context, name string, immediately b
 			if err := h.Halt(ctx, inst, immediately, timeout); err != nil {
 				return err
 			}
-		} else if s.Tmux.HasSession(ctx, inst.SessionID) {
+		} else {
+			exists, err := s.Tmux.HasSession(ctx, inst.SessionID)
+			if err != nil {
+				return err
+			}
+			if !exists {
+				inst.Status = instance.StatusExited
+				inst.UpdatedAt = time.Now()
+				reg.Delete(name)
+				out = inst
+				return nil
+			}
 			if immediately {
 				if err := s.Tmux.KillSession(ctx, inst.SessionID); err != nil {
 					return err
@@ -596,7 +616,11 @@ func (s Service) haltGracefully(ctx context.Context, sessionID string, timeout t
 	if err := s.Tmux.SendKeys(ctx, target(sessionID), "C-c"); err != nil {
 		return err
 	}
-	if !s.Tmux.HasSession(ctx, sessionID) {
+	exists, err := s.Tmux.HasSession(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if !exists {
 		return nil
 	}
 
@@ -605,7 +629,11 @@ func (s Service) haltGracefully(ctx context.Context, sessionID string, timeout t
 	secondSent := false
 
 	for {
-		if !s.Tmux.HasSession(ctx, sessionID) {
+		exists, err := s.Tmux.HasSession(ctx, sessionID)
+		if err != nil {
+			return err
+		}
+		if !exists {
 			return nil
 		}
 		now := time.Now()
@@ -614,7 +642,11 @@ func (s Service) haltGracefully(ctx context.Context, sessionID string, timeout t
 				return err
 			}
 			secondSent = true
-			if !s.Tmux.HasSession(ctx, sessionID) {
+			exists, err := s.Tmux.HasSession(ctx, sessionID)
+			if err != nil {
+				return err
+			}
+			if !exists {
 				return nil
 			}
 		}
@@ -624,7 +656,11 @@ func (s Service) haltGracefully(ctx context.Context, sessionID string, timeout t
 					return err
 				}
 				secondSent = true
-				if !s.Tmux.HasSession(ctx, sessionID) {
+				exists, err := s.Tmux.HasSession(ctx, sessionID)
+				if err != nil {
+					return err
+				}
+				if !exists {
 					return nil
 				}
 			}
@@ -653,34 +689,46 @@ func (s Service) haltGracefully(ctx context.Context, sessionID string, timeout t
 		}
 	}
 
-	if s.Tmux.HasSession(ctx, sessionID) {
+	exists, err = s.Tmux.HasSession(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if exists {
 		return s.Tmux.KillSession(ctx, sessionID)
 	}
 	return nil
 }
 
-func (s Service) reconcileRegistry(ctx context.Context, reg *instance.Registry) {
+func (s Service) reconcileRegistry(ctx context.Context, reg *instance.Registry) error {
 	for name, inst := range reg.Instances {
-		next := s.reconcile(ctx, inst)
+		next, err := s.reconcile(ctx, inst)
+		if err != nil {
+			return err
+		}
 		if next.Status == instance.StatusLost || next.Status == instance.StatusExited {
 			reg.Delete(name)
 			continue
 		}
 		reg.Put(next)
 	}
+	return nil
 }
 
-func (s Service) reconcileOne(ctx context.Context, reg *instance.Registry, name string) {
+func (s Service) reconcileOne(ctx context.Context, reg *instance.Registry, name string) error {
 	inst, ok := reg.Get(name)
 	if !ok {
-		return
+		return nil
 	}
-	next := s.reconcile(ctx, inst)
+	next, err := s.reconcile(ctx, inst)
+	if err != nil {
+		return err
+	}
 	if next.Status == instance.StatusLost || next.Status == instance.StatusExited {
 		reg.Delete(name)
-		return
+		return nil
 	}
 	reg.Put(next)
+	return nil
 }
 
 func (s Service) requireActiveInstance(reg *instance.Registry, name string) (instance.Instance, error) {
@@ -742,7 +790,7 @@ func waitForPromptSubmit(ctx context.Context) error {
 	}
 }
 
-func (s Service) reconcile(ctx context.Context, inst instance.Instance) instance.Instance {
+func (s Service) reconcile(ctx context.Context, inst instance.Instance) (instance.Instance, error) {
 	if h, structured := s.harnessFor(inst); structured {
 		next, err := h.Reconcile(ctx, inst)
 		if err != nil {
@@ -752,16 +800,20 @@ func (s Service) reconcile(ctx context.Context, inst instance.Instance) instance
 				"harness_type": inst.HarnessType,
 				"error":        err.Error(),
 			})
-			return inst
+			return inst, err
 		}
-		return next
+		return next, nil
 	}
-	if !s.Tmux.HasSession(ctx, inst.SessionID) {
+	exists, err := s.Tmux.HasSession(ctx, inst.SessionID)
+	if err != nil {
+		return inst, err
+	}
+	if !exists {
 		if inst.Status != instance.StatusExited {
 			inst.Status = instance.StatusLost
 		}
 		inst.UpdatedAt = time.Now()
-		return inst
+		return inst, nil
 	}
 	info, err := s.Tmux.PaneInfo(ctx, target(inst.SessionID))
 	if err != nil {
@@ -770,7 +822,7 @@ func (s Service) reconcile(ctx context.Context, inst instance.Instance) instance
 			"session_id": inst.SessionID,
 			"error":      err.Error(),
 		})
-		return inst
+		return inst, err
 	}
 	inst.PaneTitle = info.PaneTitle
 	if info.Dead {
@@ -791,7 +843,7 @@ func (s Service) reconcile(ctx context.Context, inst instance.Instance) instance
 		inst.Status = instance.StatusIdle
 	}
 	inst.UpdatedAt = time.Now()
-	return inst
+	return inst, nil
 }
 
 type titleStateFn func(string) string

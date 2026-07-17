@@ -92,6 +92,52 @@ func TestControllerPromptWaitCaptureAndHalt(t *testing.T) {
 	}
 }
 
+func TestStartKillsProcessWhenStatePersistenceFails(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns a local fake process")
+	}
+	dir := t.TempDir()
+	fake := writeFakePi(t, dir)
+	if err := os.Mkdir(filepath.Join(dir, stateFileName), 0o700); err != nil {
+		t.Fatalf("block state path: %v", err)
+	}
+	ctrl := Controller{StateDir: dir, PollMS: 10}
+	inst := instance.Instance{
+		Name:         "pi",
+		SessionID:    "i_start_rollback",
+		TransportDir: dir,
+		CWD:          dir,
+		Env:          map[string]string{},
+	}
+
+	if _, err := ctrl.Start(context.Background(), inst, fake, "", false); err == nil {
+		t.Fatal("expected state persistence failure")
+	}
+	b, err := os.ReadFile(filepath.Join(dir, processFileName))
+	if err != nil {
+		t.Fatalf("read process metadata: %v", err)
+	}
+	var meta processMeta
+	if err := json.Unmarshal(b, &meta); err != nil {
+		t.Fatalf("parse process metadata: %v", err)
+	}
+	waitUntilProcessStops(t, meta.PID)
+}
+
+func TestHaltReturnsCleanupError(t *testing.T) {
+	dir := t.TempDir()
+	blocked := filepath.Join(dir, "not-a-directory")
+	if err := os.WriteFile(blocked, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write blocking path: %v", err)
+	}
+	ctrl := Controller{StateDir: dir}
+	inst := instance.Instance{TransportDir: blocked}
+
+	if err := ctrl.Halt(context.Background(), inst, true, 0); err == nil {
+		t.Fatal("expected halt cleanup error")
+	}
+}
+
 // TestApplyEventsPromptLifecycle drives the state machine through one prompt's
 // full arc: sent -> accepted (response) -> busy (agent_start) -> done+idle
 // (agent_settled).
@@ -194,6 +240,44 @@ func TestApplyEventsTurnEndDoesNotInflateTurns(t *testing.T) {
 	}
 	if st.TotalOutputTokens != 16 {
 		t.Fatalf("usage must still accumulate per turn_end, got %d output tokens", st.TotalOutputTokens)
+	}
+}
+
+func TestApplyEventsDoesNotDoubleCountReplayedUsage(t *testing.T) {
+	st := initialState("s1", nowUTC())
+	event := Event{
+		Type:      "turn_end",
+		EndOffset: 128,
+		Message: AssistantMessage{
+			Role:  "assistant",
+			Usage: mkUsage(3, 5, 0.02),
+		},
+	}
+
+	applyEvents(&st, []Event{event})
+	applyEvents(&st, []Event{event})
+
+	if st.TotalInputTokens != 3 || st.TotalOutputTokens != 5 || st.TotalCostUSD != 0.02 {
+		t.Fatalf("replayed usage must be counted once, got input=%d output=%d cost=%v", st.TotalInputTokens, st.TotalOutputTokens, st.TotalCostUSD)
+	}
+	if st.LastUsageOffset != event.EndOffset {
+		t.Fatalf("expected usage offset %d, got %d", event.EndOffset, st.LastUsageOffset)
+	}
+}
+
+func TestLoadStateMigratesUsageOffsetFromReadOffset(t *testing.T) {
+	path := filepath.Join(t.TempDir(), stateFileName)
+	body := []byte(`{"version":1,"status":"busy","last_read_offset":256,"total_input_tokens":7,"pending_prompts":[]}`)
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatalf("write legacy state: %v", err)
+	}
+
+	st, err := loadState(path)
+	if err != nil {
+		t.Fatalf("load legacy state: %v", err)
+	}
+	if st.LastUsageOffset != 256 {
+		t.Fatalf("expected usage cursor to migrate to 256, got %d", st.LastUsageOffset)
 	}
 }
 
@@ -462,4 +546,15 @@ done
 		t.Fatalf("write fake pi: %v", err)
 	}
 	return path
+}
+
+func waitUntilProcessStops(t *testing.T, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for processAlive(pid) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if processAlive(pid) {
+		t.Fatalf("spawned process %d survived failed startup transaction", pid)
+	}
 }

@@ -667,7 +667,7 @@ templates:
 建议策略：
 
 1. `list` 和 `inspect` 时做轻量 reconcile
-2. 若 session 不存在，则状态标记为 `lost`
+2. 只有 tmux 明确报告 session/server 不存在时，才将状态标记为 `lost`；PATH、权限、协议或 context 错误必须向上传播并保持 registry 不变
 3. 若 pane 进程已退出，则状态标记为 `exited`
 4. `summon` 复用遇到 `lost` 状态时，按“重新创建并覆盖旧 registry”处理
 

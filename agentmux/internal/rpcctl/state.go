@@ -53,6 +53,9 @@ type State struct {
 	InterruptedAt time.Time `json:"interrupted_at,omitempty"`
 
 	LastReadOffset int64 `json:"last_read_offset"`
+	// LastUsageOffset makes usage accounting idempotent when sync rewinds to a
+	// pending prompt's start offset to recover an event/state persistence race.
+	LastUsageOffset int64 `json:"last_usage_offset"`
 
 	// AgentRunActive is true between agent_start and agent_settled: pi is
 	// producing a turn. ResumeAvailable records that at least one run has settled
@@ -126,6 +129,12 @@ func loadState(path string) (State, error) {
 	if st.PendingPrompts == nil {
 		st.PendingPrompts = []PendingPrompt{}
 	}
+	// Version-1 state files written before LastUsageOffset existed already
+	// include usage for every event through LastReadOffset. Seed the new cursor
+	// from that durable boundary to avoid a one-time double count on upgrade.
+	if st.LastUsageOffset == 0 && st.LastReadOffset > 0 {
+		st.LastUsageOffset = st.LastReadOffset
+	}
 	return st, nil
 }
 
@@ -154,6 +163,7 @@ func saveState(path string, st State) error {
 		return apperr.Wrap("rpc_state_error", err, "chmod state temp")
 	}
 	if err := os.Rename(tmpName, path); err != nil {
+		_ = os.Remove(tmpName)
 		return apperr.Wrap("rpc_state_error", err, "replace state")
 	}
 	return nil

@@ -152,6 +152,7 @@ func saveState(path string, st State) error {
 		return apperr.Wrap("execjson_state_error", err, "chmod state temp")
 	}
 	if err := os.Rename(tmpName, path); err != nil {
+		_ = os.Remove(tmpName)
 		return apperr.Wrap("execjson_state_error", err, "replace state")
 	}
 	return nil

@@ -83,6 +83,52 @@ func TestControllerPromptWaitCaptureAndHalt(t *testing.T) {
 	}
 }
 
+func TestStartKillsProcessWhenStatePersistenceFails(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns a local fake process")
+	}
+	dir := t.TempDir()
+	fake := writeFakeClaude(t, dir)
+	if err := os.Mkdir(filepath.Join(dir, stateFileName), 0o700); err != nil {
+		t.Fatalf("block state path: %v", err)
+	}
+	ctrl := Controller{StateDir: dir, PollMS: 10}
+	inst := instance.Instance{
+		Name:         "claude",
+		SessionID:    "i_start_rollback",
+		TransportDir: dir,
+		CWD:          dir,
+		Env:          map[string]string{},
+	}
+
+	if _, err := ctrl.Start(context.Background(), inst, fake, "", false); err == nil {
+		t.Fatal("expected state persistence failure")
+	}
+	b, err := os.ReadFile(filepath.Join(dir, processFileName))
+	if err != nil {
+		t.Fatalf("read process metadata: %v", err)
+	}
+	var meta processMeta
+	if err := json.Unmarshal(b, &meta); err != nil {
+		t.Fatalf("parse process metadata: %v", err)
+	}
+	waitUntilProcessStops(t, meta.PID)
+}
+
+func TestHaltReturnsCleanupError(t *testing.T) {
+	dir := t.TempDir()
+	blocked := filepath.Join(dir, "not-a-directory")
+	if err := os.WriteFile(blocked, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write blocking path: %v", err)
+	}
+	ctrl := Controller{StateDir: dir}
+	inst := instance.Instance{TransportDir: blocked}
+
+	if err := ctrl.Halt(context.Background(), inst, true, 0); err == nil {
+		t.Fatal("expected halt cleanup error")
+	}
+}
+
 func TestWriteFIFOTimeoutDoesNotWaitForReader(t *testing.T) {
 	dir := t.TempDir()
 	fifo := filepath.Join(dir, "input.fifo")
@@ -189,6 +235,17 @@ done
 		t.Fatalf("write fake claude: %v", err)
 	}
 	return path
+}
+
+func waitUntilProcessStops(t *testing.T, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for processAlive(pid) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if processAlive(pid) {
+		t.Fatalf("spawned process %d survived failed startup transaction", pid)
+	}
 }
 
 // TestInterruptIdleInstanceDoesNotWedgeBusy guards the fix for interrupt

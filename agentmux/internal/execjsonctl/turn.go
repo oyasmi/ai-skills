@@ -30,10 +30,15 @@ func processAlive(pid int) bool {
 	return err == nil || err == syscall.EPERM
 }
 
-func signalGroup(pgid int, sig syscall.Signal) {
-	if pgid > 0 {
-		_ = syscall.Kill(-pgid, sig)
+func signalGroup(pgid int, sig syscall.Signal) error {
+	if pgid <= 0 {
+		return nil
 	}
+	err := syscall.Kill(-pgid, sig)
+	if err == syscall.ESRCH {
+		return nil
+	}
+	return err
 }
 
 // spawnTurn launches one detached `codex exec` process. It must outlive the

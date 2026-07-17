@@ -35,6 +35,10 @@ Windows 不是首要目标。
 10. `inspect`、`list`、`capture`、`wait` 的 JSON 输出现在包含 `harness_type` 或 `pane_title` 等状态观测字段
 11. 新增 `claude-code-ndjson` harness type，通过 Claude Code `stream-json` 协议直接读写 NDJSON，`wait` 可等待协议级完成事件，`capture --json` 可返回结构化消息和 usage 信息
 12. 新增 `codex-cli-execjson` harness type，通过 `codex exec --json` 事件流驱动 Codex CLI，`wait` 等待 turn 进程退出与终局事件，`capture --json` 返回结构化消息、`thread_id` 和 usage
+13. tmux session 探测现在区分“目标不存在”和运行时故障，tmux 不可用或权限失败时不会误删仍存活的实例
+14. 结构化 harness 在启动状态落盘失败时会回滚新进程，`halt`/`interrupt` 也会向上返回信号与状态持久化错误
+15. `pi-rpc` usage 按事件 offset 幂等累计，避免流式事件重放导致 token 和费用重复计算
+16. CI 在 Linux/macOS 上运行测试与 vet，并在 Linux 上启用 race detector；发布打包前也必须通过测试
 
 命令职责上建议这样理解：
 

@@ -18,6 +18,17 @@ func processAlive(pid int) bool {
 	return err == nil || err == syscall.EPERM
 }
 
+func signalGroup(pgid int, sig syscall.Signal) error {
+	if pgid <= 0 {
+		return nil
+	}
+	err := syscall.Kill(-pgid, sig)
+	if err == syscall.ESRCH {
+		return nil
+	}
+	return err
+}
+
 func saveProcessMeta(path string, meta processMeta) error {
 	b, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {

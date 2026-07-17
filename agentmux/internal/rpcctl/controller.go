@@ -116,6 +116,7 @@ func (c Controller) Start(ctx context.Context, inst instance.Instance, command, 
 	if pgid <= 0 {
 		pgid = cmd.Process.Pid
 	}
+	rollback := func() { _ = signalGroup(pgid, syscall.SIGKILL) }
 	now := nowUTC()
 	inst.PiSessionID = piID
 	inst.TransportDir = dir
@@ -134,19 +135,24 @@ func (c Controller) Start(ctx context.Context, inst instance.Instance, command, 
 		Argv0:       "/bin/sh",
 		Fingerprint: "agentmux:" + inst.SessionID + ":" + piID,
 	}); err != nil {
+		rollback()
 		return instance.Instance{}, err
 	}
 	if err := saveState(filepath.Join(dir, stateFileName), initialState(piID, now)); err != nil {
+		rollback()
 		return instance.Instance{}, err
 	}
 	if err := c.waitStarted(ctx, inst, 250*time.Millisecond); err != nil {
-		_ = syscall.Kill(-pgid, syscall.SIGTERM)
+		rollback()
 		return instance.Instance{}, err
 	}
-	_ = withStateLocked(filepath.Join(dir, stateFileName), func(st *State) error {
+	if err := withStateLocked(filepath.Join(dir, stateFileName), func(st *State) error {
 		st.Status = "idle"
 		return nil
-	})
+	}); err != nil {
+		rollback()
+		return instance.Instance{}, err
+	}
 	inst.Status = instance.StatusIdle
 	inst.UpdatedAt = nowUTC()
 	return inst, nil
@@ -307,7 +313,9 @@ func (c Controller) Interrupt(ctx context.Context, inst instance.Instance) (inst
 	b, _ := json.Marshal(controlCommand{Type: "abort"})
 	if werr := writeFIFO(ctx, filepath.Join(inst.TransportDir, inputFIFOName), append(b, '\n'), fifoWriteTimeout); werr != nil {
 		if inst.ProcessGroupID > 0 && processAlive(inst.ProcessID) {
-			_ = syscall.Kill(-inst.ProcessGroupID, syscall.SIGINT)
+			if err := signalGroup(inst.ProcessGroupID, syscall.SIGINT); err != nil {
+				return inst, apperr.Wrap("rpc_process_error", err, "interrupt pi rpc process group")
+			}
 		}
 	}
 	now := nowUTC()
@@ -338,7 +346,9 @@ func (c Controller) Halt(ctx context.Context, inst instance.Instance, immediatel
 		if immediately {
 			sig = syscall.SIGKILL
 		}
-		_ = syscall.Kill(-inst.ProcessGroupID, sig)
+		if err := signalGroup(inst.ProcessGroupID, sig); err != nil {
+			return apperr.Wrap("rpc_process_error", err, "signal pi rpc process group")
+		}
 		if !immediately {
 			deadline := time.Now().Add(timeout)
 			for processAlive(inst.ProcessID) && time.Now().Before(deadline) {
@@ -347,12 +357,16 @@ func (c Controller) Halt(ctx context.Context, inst instance.Instance, immediatel
 				}
 			}
 			if processAlive(inst.ProcessID) {
-				_ = syscall.Kill(-inst.ProcessGroupID, syscall.SIGKILL)
+				if err := signalGroup(inst.ProcessGroupID, syscall.SIGKILL); err != nil {
+					return apperr.Wrap("rpc_process_error", err, "kill pi rpc process group")
+				}
 			}
 		}
 	}
-	_ = os.Remove(filepath.Join(inst.TransportDir, inputFIFOName))
-	_ = withStateLocked(statePath(inst), func(st *State) error {
+	if err := os.Remove(filepath.Join(inst.TransportDir, inputFIFOName)); err != nil && !os.IsNotExist(err) {
+		return apperr.Wrap("rpc_process_error", err, "remove pi input fifo")
+	}
+	if err := withStateLocked(statePath(inst), func(st *State) error {
 		st.Status = "exited"
 		st.AgentRunActive = false
 		for i := range st.PendingPrompts {
@@ -361,7 +375,9 @@ func (c Controller) Halt(ctx context.Context, inst instance.Instance, immediatel
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
 	return nil
 }
 

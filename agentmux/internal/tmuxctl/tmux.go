@@ -42,9 +42,28 @@ func (c Client) run(ctx context.Context, args ...string) (string, error) {
 	return strings.TrimRight(stdout.String(), "\n"), nil
 }
 
-func (c Client) HasSession(ctx context.Context, sessionID string) bool {
+func (c Client) HasSession(ctx context.Context, sessionID string) (bool, error) {
 	_, err := c.run(ctx, "has-session", "-t", sessionID)
-	return err == nil
+	if err == nil {
+		return true, nil
+	}
+	if ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+	if isMissingSessionError(err.Error()) {
+		return false, nil
+	}
+	return false, err
+}
+
+// tmux uses exit status 1 both for a missing target and for operational
+// failures. Only the well-known "target/server is absent" diagnostics are a
+// negative existence result; PATH, permission, protocol, and context errors
+// must remain visible to callers so they never prune a live registry entry.
+func isMissingSessionError(message string) bool {
+	return strings.Contains(message, "can't find session:") ||
+		strings.Contains(message, "no server running on") ||
+		(strings.Contains(message, "error connecting to") && strings.Contains(message, "No such file or directory"))
 }
 
 func (c Client) NewSession(ctx context.Context, sessionID, cwd, command string, env map[string]string) error {
