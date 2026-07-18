@@ -1,87 +1,142 @@
 import SwiftUI
 
-/// Main content view – a list of commands with a toolbar and search.
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Header
-            HStack {
-                Text("Command Manager")
-                    .font(.title2)
-                    .fontWeight(.bold)
-                Spacer()
+        NavigationSplitView {
+            sidebar
+                .navigationSplitViewColumnWidth(min: 230, ideal: 290, max: 380)
+        } detail: {
+            VStack(spacing: 0) {
+                if let message = appState.errorMessage {
+                    ErrorBanner(message: message, dismiss: appState.dismissError)
+                }
+
+                if let command = appState.selectedCommand {
+                    CommandDetailView(command: command)
+                        .environmentObject(appState)
+                } else {
+                    EmptySelectionView(hasCommands: !appState.commands.isEmpty) {
+                        appState.openAddSheet()
+                    }
+                }
+            }
+        }
+        .searchable(text: $appState.searchText, placement: .sidebar,
+                    prompt: "Search commands")
+        .toolbar {
+            ToolbarItem {
+                Picker("Filter", selection: $appState.commandFilter) {
+                    ForEach(CommandFilter.allCases) { filter in
+                        Text(filter.displayName).tag(filter)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 125)
+                .help("Filter commands")
+            }
+
+            ToolbarItem(placement: .primaryAction) {
                 Button {
                     appState.openAddSheet()
                 } label: {
-                    Label("Add Command", systemImage: "plus.circle.fill")
+                    Label("New Command", systemImage: "plus")
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
                 .keyboardShortcut("n", modifiers: .command)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 14)
-
-            // Search bar
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundColor(.secondary)
-                TextField("Search commands…", text: $appState.searchText)
-                    .textFieldStyle(.plain)
-                if !appState.searchText.isEmpty {
-                    Button {
-                        appState.searchText = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(Color(nsColor: .controlBackgroundColor))
-            .cornerRadius(8)
-            .padding(.horizontal, 20)
-            .padding(.bottom, 10)
-
-            Divider()
-
-            // Command list or empty state
-            if appState.filteredCommands.isEmpty {
-                Spacer()
-                VStack(spacing: 12) {
-                    Image(systemName: appState.searchText.isEmpty ? "terminal" : "magnifyingglass")
-                        .font(.system(size: 48))
-                        .foregroundColor(.secondary)
-                    Text(appState.searchText.isEmpty ? "No commands yet" : "No results")
-                        .font(.title3)
-                        .foregroundColor(.secondary)
-                    Text(appState.searchText.isEmpty
-                         ? "Click \"Add Command\" to get started."
-                         : "Try a different search term.")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary.opacity(0.7))
-                }
-                Spacer()
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 8) {
-                        ForEach(appState.filteredCommands) { cmd in
-                            CommandRowView(command: cmd)
-                                .environmentObject(appState)
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                }
             }
         }
         .sheet(isPresented: $appState.showAddEditSheet) {
             AddEditCommandSheet(command: appState.editingCommand)
                 .environmentObject(appState)
         }
+    }
+
+    private var sidebar: some View {
+        Group {
+            if appState.filteredCommands.isEmpty {
+                VStack(spacing: 10) {
+                    Spacer()
+                    Image(systemName: appState.commands.isEmpty ? "terminal" : "line.3.horizontal.decrease.circle")
+                        .font(.system(size: 32))
+                        .foregroundStyle(.secondary)
+                    Text(appState.commands.isEmpty ? "No Commands" : "No Matches")
+                        .font(.headline)
+                    Text(appState.commands.isEmpty
+                         ? "Create a command to get started."
+                         : "Change the search or filter.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                    if appState.commands.isEmpty {
+                        Button("New Command") { appState.openAddSheet() }
+                            .buttonStyle(.borderedProminent)
+                    }
+                    Spacer()
+                }
+                .padding()
+            } else {
+                List(appState.filteredCommands, selection: $appState.selectedCommandID) { command in
+                    CommandRowView(command: command)
+                        .environmentObject(appState)
+                        .tag(command.id)
+                }
+                .listStyle(.sidebar)
+                .navigationTitle("Commands")
+            }
+        }
+    }
+}
+
+private struct ErrorBanner: View {
+    let message: String
+    let dismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+            Text(message)
+                .font(.subheadline)
+                .lineLimit(2)
+            Spacer()
+            Button(action: dismiss) {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss error")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(Color.red.opacity(0.1))
+        .overlay(alignment: .bottom) { Divider() }
+    }
+}
+
+private struct EmptySelectionView: View {
+    let hasCommands: Bool
+    let create: () -> Void
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "terminal")
+                .font(.system(size: 44))
+                .foregroundStyle(.secondary)
+            Text(hasCommands ? "Select a Command" : "Create Your First Command")
+                .font(.title2.weight(.semibold))
+            Text(hasCommands
+                 ? "Choose a command from the sidebar to view its output and history."
+                 : "Save frequently used shell commands and run them without leaving the app.")
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 390)
+            if !hasCommands {
+                Button("New Command", action: create)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+            }
+        }
+        .padding(30)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

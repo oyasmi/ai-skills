@@ -46,12 +46,22 @@ struct CmdMgrApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(appState)
-                .frame(minWidth: 600, minHeight: 400)
+                .frame(minWidth: 760, minHeight: 520)
                 .onAppear {
                     appDelegate.appState = appState
                 }
         }
         .windowStyle(.titleBar)
-        .defaultSize(width: 720, height: 520)
+        .windowToolbarStyle(.unified)
+        .defaultSize(width: 1040, height: 680)
+        .commands {
+            CommandGroup(after: .newItem) {
+                Button("Run Selected Command") {
+                    appState.runSelectedCommand()
+                }
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(appState.selectedCommand == nil)
+            }
+        }
     }
 }

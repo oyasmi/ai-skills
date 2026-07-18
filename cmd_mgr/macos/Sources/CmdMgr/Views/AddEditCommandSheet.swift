@@ -1,7 +1,6 @@
 import SwiftUI
 import AppKit
 
-/// Sheet for adding or editing a command.
 struct AddEditCommandSheet: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) private var dismiss
@@ -9,96 +8,173 @@ struct AddEditCommandSheet: View {
     let command: Command?
     private var isEdit: Bool { command != nil }
 
-    @State private var name: String = ""
-    @State private var commandText: String = ""
+    @State private var name = ""
+    @State private var commandText = ""
     @State private var cmdType: CommandType = .oneShot
-    @State private var workingDirectory: String = ""
-    @State private var showValidationError = false
+    @State private var workingDirectory = ""
+    @FocusState private var focusedField: Field?
+
+    private enum Field { case name, command }
 
     init(command: Command?) {
         self.command = command
-        if let cmd = command {
-            _name = State(initialValue: cmd.name)
-            _commandText = State(initialValue: cmd.command)
-            _cmdType = State(initialValue: cmd.cmdType)
-            _workingDirectory = State(initialValue: cmd.workingDirectory ?? "")
+        if let command {
+            _name = State(initialValue: command.name)
+            _commandText = State(initialValue: command.command)
+            _cmdType = State(initialValue: command.cmdType)
+            _workingDirectory = State(initialValue: command.workingDirectory ?? "")
         }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            // Title
-            Text(isEdit ? "Edit Command" : "New Command")
-                .font(.title2)
-                .fontWeight(.bold)
-
-            // Name field
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Name")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                TextField("e.g. Start Dev Server", text: $name)
-                    .textFieldStyle(.roundedBorder)
-            }
-
-            // Command field
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Command")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                TextEditor(text: $commandText)
-                    .font(.system(size: 12, design: .monospaced))
-                    .frame(minHeight: 80, maxHeight: 120)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
-                    )
-            }
-
-            // Working directory field
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Working Directory")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                HStack(spacing: 6) {
-                    TextField("Default (inherit from app)", text: $workingDirectory)
-                        .textFieldStyle(.roundedBorder)
-                    Button("Browse…") { browseDirectory() }
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Image(systemName: isEdit ? "pencil" : "plus")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.tint)
+                    .frame(width: 36, height: 36)
+                    .background(.tint.opacity(0.1), in: RoundedRectangle(cornerRadius: 9))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(isEdit ? "Edit Command" : "New Command")
+                        .font(.title2.weight(.semibold))
+                    Text("Commands run with /bin/sh.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                 }
+                Spacer()
             }
+            .padding(24)
 
-            // Type selection
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Type")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                Picker("Type", selection: $cmdType) {
-                    ForEach(CommandType.allCases) { type in
-                        Text(type.displayName).tag(type)
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    fieldSection("Name") {
+                        TextField("Start development server", text: $name)
+                            .textFieldStyle(.roundedBorder)
+                            .focused($focusedField, equals: .name)
+                    }
+
+                    fieldSection("Type") {
+                        Picker("Type", selection: $cmdType) {
+                            ForEach(CommandType.allCases) { type in
+                                Text(type.displayName).tag(type)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+
+                        Text(cmdType == .longRunning
+                             ? "For servers and background processes. The command keeps running until you stop it."
+                             : "For scripts and tasks that finish on their own.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    fieldSection("Command") {
+                        ZStack(alignment: .topLeading) {
+                            if commandText.isEmpty {
+                                Text("npm run dev")
+                                    .font(.system(.body, design: .monospaced))
+                                    .foregroundStyle(.tertiary)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 8)
+                            }
+                            TextEditor(text: $commandText)
+                                .font(.system(.body, design: .monospaced))
+                                .scrollContentBackground(.hidden)
+                                .padding(2)
+                                .focused($focusedField, equals: .command)
+                        }
+                        .frame(minHeight: 105)
+                        .background(Color(nsColor: .textBackgroundColor),
+                                    in: RoundedRectangle(cornerRadius: 7))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 7)
+                                .stroke(.separator, lineWidth: 1)
+                        }
+                    }
+
+                    fieldSection("Working Directory") {
+                        HStack(spacing: 8) {
+                            TextField("Application default", text: $workingDirectory)
+                                .textFieldStyle(.roundedBorder)
+                            Button("Choose…", action: browseDirectory)
+                        }
+                        if let directoryError {
+                            Label(directoryError, systemImage: "exclamationmark.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        } else {
+                            Text("Leave empty to inherit the app's working directory.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                .padding(24)
             }
 
-            // Buttons
+            Divider()
+
             HStack {
+                if !requiredFieldsComplete {
+                    Text("Name and command are required.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
-
-                Button(isEdit ? "Save" : "Add") { save() }
+                Button(isEdit ? "Save Changes" : "Add Command", action: save)
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
+                    .disabled(!canSave)
             }
+            .padding(16)
         }
-        .padding(24)
-        .frame(width: 480)
-        .alert("Validation Error", isPresented: $showValidationError) {
-            Button("OK") {}
-        } message: {
-            Text("Name and Command fields cannot be empty.")
+        .frame(width: 560)
+        .frame(minHeight: 610)
+        .onAppear { focusedField = .name }
+    }
+
+    private func fieldSection<Content: View>(_ title: String,
+                                             @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(title)
+                .font(.subheadline.weight(.medium))
+            content()
         }
+    }
+
+    private var trimmedName: String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var trimmedCommand: String {
+        commandText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var trimmedDirectory: String {
+        workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var requiredFieldsComplete: Bool {
+        !trimmedName.isEmpty && !trimmedCommand.isEmpty
+    }
+
+    private var directoryError: String? {
+        guard !trimmedDirectory.isEmpty else { return nil }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: trimmedDirectory, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return "Choose an existing directory."
+        }
+        return nil
+    }
+
+    private var canSave: Bool {
+        requiredFieldsComplete && directoryError == nil
     }
 
     private func browseDirectory() {
@@ -106,8 +182,9 @@ struct AddEditCommandSheet: View {
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
-        if !workingDirectory.isEmpty {
-            panel.directoryURL = URL(fileURLWithPath: workingDirectory)
+        panel.prompt = "Choose"
+        if directoryError == nil, !trimmedDirectory.isEmpty {
+            panel.directoryURL = URL(fileURLWithPath: trimmedDirectory)
         }
         if panel.runModal() == .OK, let url = panel.url {
             workingDirectory = url.path
@@ -115,23 +192,15 @@ struct AddEditCommandSheet: View {
     }
 
     private func save() {
-        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedCmd = commandText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedWD = workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        guard !trimmedName.isEmpty, !trimmedCmd.isEmpty else {
-            showValidationError = true
-            return
-        }
-
-        let wd: String? = trimmedWD.isEmpty ? nil : trimmedWD
-
-        if isEdit, let cmd = command {
-            appState.updateCommand(id: cmd.id, name: trimmedName, command: trimmedCmd,
-                                   cmdType: cmdType, workingDirectory: wd)
+        guard canSave else { return }
+        let directory = trimmedDirectory.isEmpty ? nil : trimmedDirectory
+        if let command {
+            appState.updateCommand(id: command.id, name: trimmedName,
+                                   command: trimmedCommand, cmdType: cmdType,
+                                   workingDirectory: directory)
         } else {
-            appState.addCommand(name: trimmedName, command: trimmedCmd,
-                                cmdType: cmdType, workingDirectory: wd)
+            appState.addCommand(name: trimmedName, command: trimmedCommand,
+                                cmdType: cmdType, workingDirectory: directory)
         }
         dismiss()
     }

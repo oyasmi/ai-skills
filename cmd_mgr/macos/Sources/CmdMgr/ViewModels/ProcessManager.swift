@@ -1,5 +1,21 @@
 import Foundation
 
+enum ProcessStatus: String {
+    case running
+    case success
+    case failed
+    case stopped
+
+    var displayName: String {
+        switch self {
+        case .running: return "Running"
+        case .success: return "Succeeded"
+        case .failed: return "Failed"
+        case .stopped: return "Stopped"
+        }
+    }
+}
+
 /// Information about a running (or recently completed) process.
 final class CommandProcess: ObservableObject, Identifiable {
     let commandId: Int
@@ -7,7 +23,9 @@ final class CommandProcess: ObservableObject, Identifiable {
     let historyId: Int
 
     @Published var output: String = ""
-    @Published var isRunning: Bool = true
+    @Published var status: ProcessStatus = .running
+
+    var isRunning: Bool { status == .running }
 
     private static let maxLines = 5000
 
@@ -33,6 +51,7 @@ final class ProcessManager: ObservableObject {
     @Published var runningProcesses: [Int: CommandProcess] = [:]
     // Keeps last completed run per command so output remains viewable after exit.
     @Published var completedProcesses: [Int: CommandProcess] = [:]
+    @Published var lastError: String?
 
     private var requestedStops: Set<Int> = []
 
@@ -99,7 +118,8 @@ final class ProcessManager: ObservableObject {
                 if let s = String(data: remainErr, encoding: .utf8), !s.isEmpty {
                     info.appendOutput("[STDERR] \(s)")
                 }
-                info.isRunning = false
+                info.status = wasRequestedStop ? .stopped
+                    : (proc.terminationStatus == 0 ? .success : .failed)
                 database.updateHistoryEntry(
                     id: info.historyId, endTime: Date(), status: status, output: info.output)
                 self.runningProcesses.removeValue(forKey: info.commandId)
@@ -113,9 +133,14 @@ final class ProcessManager: ObservableObject {
             try proc.run()
         } catch {
             runningProcesses.removeValue(forKey: command.id)
+            info.status = .failed
+            let message = "Could not start \"\(command.name)\": \(error.localizedDescription)"
+            info.appendOutput(message)
+            completedProcesses[command.id] = info
+            lastError = message
             database.updateHistoryEntry(
                 id: historyId, endTime: Date(), status: "failed",
-                output: "Launch error: \(error.localizedDescription)")
+                output: message)
         }
     }
 
