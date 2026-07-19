@@ -1,0 +1,168 @@
+<UserControl x:Class="CmdMgr.Views.CommandDetailView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:CmdMgr.Views">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <Grid Grid.Row="0" Margin="24,18,24,14">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" Width="42" Height="42" CornerRadius="10"
+                    Background="#E6EFFE" Margin="0,0,14,0">
+                <TextBlock FontSize="18" HorizontalAlignment="Center" VerticalAlignment="Center"
+                           Text="{Binding SelectedCommand.IsLongRunning,
+                               Converter={StaticResource BoolToStringConverter},
+                               ConverterParameter='🖥|⚡'}"/>
+            </Border>
+
+            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                <TextBlock Text="{Binding SelectedCommand.Name}" FontSize="17" FontWeight="SemiBold"
+                           TextTrimming="CharacterEllipsis"/>
+                <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                    <TextBlock Text="{Binding SelectedCommand.IsLongRunning,
+                                   Converter={StaticResource BoolToStringConverter},
+                                   ConverterParameter='Long-running|One-shot'}"
+                               FontSize="12" Foreground="{StaticResource MutedBrush}"/>
+                    <TextBlock Text="  ·  " FontSize="12" Foreground="{StaticResource MutedBrush}"/>
+                    <TextBlock Text="{Binding SelectedCommand.Status,
+                                   Converter={StaticResource StatusIconConverter}}"
+                               FontSize="12" Margin="0,0,4,0"
+                               Foreground="{Binding SelectedCommand.Status,
+                                   Converter={StaticResource StatusToBrushConverter}}"/>
+                    <TextBlock Text="{Binding SelectedCommand.Status,
+                                   Converter={StaticResource StatusDisplayNameConverter}}"
+                               FontSize="12"
+                               Foreground="{Binding SelectedCommand.Status,
+                                   Converter={StaticResource StatusToBrushConverter}}"/>
+                </StackPanel>
+            </StackPanel>
+
+            <Button Grid.Column="2" x:Name="RunButtonEl" Padding="16,8" Margin="0,0,8,0"
+                    Click="RunButton_Click" Style="{StaticResource PrimaryButton}">
+                <Button.Content>
+                    <MultiBinding Converter="{StaticResource RunButtonConverter}" ConverterParameter="label">
+                        <Binding Path="SelectedCommand.Status"/>
+                        <Binding Path="SelectedCommand.CmdType"/>
+                    </MultiBinding>
+                </Button.Content>
+                <Button.Background>
+                    <MultiBinding Converter="{StaticResource RunButtonConverter}" ConverterParameter="brush">
+                        <Binding Path="SelectedCommand.Status"/>
+                        <Binding Path="SelectedCommand.CmdType"/>
+                    </MultiBinding>
+                </Button.Background>
+                <Button.BorderBrush>
+                    <MultiBinding Converter="{StaticResource RunButtonConverter}" ConverterParameter="brush">
+                        <Binding Path="SelectedCommand.Status"/>
+                        <Binding Path="SelectedCommand.CmdType"/>
+                    </MultiBinding>
+                </Button.BorderBrush>
+                <Button.IsEnabled>
+                    <MultiBinding Converter="{StaticResource RunButtonConverter}" ConverterParameter="enabled">
+                        <Binding Path="SelectedCommand.Status"/>
+                        <Binding Path="SelectedCommand.CmdType"/>
+                    </MultiBinding>
+                </Button.IsEnabled>
+            </Button>
+
+            <Button Grid.Column="3" Content="⋯" Style="{StaticResource ModernButton}"
+                    Padding="10,6" Click="MoreButton_Click" ToolTip="More actions">
+                <Button.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="Edit…" Click="Edit_Click"/>
+                        <MenuItem Header="Duplicate" Click="Duplicate_Click"/>
+                        <Separator/>
+                        <MenuItem Header="Delete…" Click="Delete_Click"/>
+                    </ContextMenu>
+                </Button.ContextMenu>
+            </Button>
+        </Grid>
+
+        <!-- Tab strip -->
+        <Border Grid.Row="1" Margin="24,0,24,14" Background="#EEF2F7" CornerRadius="6" Padding="3">
+            <StackPanel Orientation="Horizontal">
+                <RadioButton Content="Overview" GroupName="DetailTabs" Style="{StaticResource TabToggleButton}"
+                             IsChecked="{Binding SelectedDetailTab,
+                                 Converter={StaticResource EnumToBooleanConverter},
+                                 ConverterParameter=Overview}"/>
+                <RadioButton Content="Output" GroupName="DetailTabs" Style="{StaticResource TabToggleButton}"
+                             IsChecked="{Binding SelectedDetailTab,
+                                 Converter={StaticResource EnumToBooleanConverter},
+                                 ConverterParameter=Output}"/>
+                <RadioButton Content="History" GroupName="DetailTabs" Style="{StaticResource TabToggleButton}"
+                             IsChecked="{Binding SelectedDetailTab,
+                                 Converter={StaticResource EnumToBooleanConverter},
+                                 ConverterParameter=History}"/>
+            </StackPanel>
+        </Border>
+
+        <Separator Grid.Row="2"/>
+
+        <!-- Content -->
+        <Grid Grid.Row="3">
+            <!-- Overview -->
+            <ScrollViewer Visibility="{Binding SelectedDetailTab,
+                              Converter={StaticResource EnumToVisibilityConverter}, ConverterParameter=Overview}">
+                <StackPanel Margin="24">
+                    <TextBlock Text="Command" FontSize="13" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                    <Border Background="{StaticResource CardBrush}" BorderBrush="{StaticResource BorderBrush}"
+                            BorderThickness="1" CornerRadius="8" Padding="12" Margin="0,0,0,20">
+                        <TextBox Text="{Binding SelectedCommand.CommandText, Mode=OneWay}"
+                                 IsReadOnly="True" BorderThickness="0" Background="Transparent"
+                                 FontFamily="Consolas" FontSize="12" TextWrapping="Wrap"/>
+                    </Border>
+
+                    <TextBlock Text="Configuration" FontSize="13" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                    <Border Background="{StaticResource CardBrush}" BorderBrush="{StaticResource BorderBrush}"
+                            BorderThickness="1" CornerRadius="8" Padding="12">
+                        <StackPanel>
+                            <DockPanel Margin="0,0,0,8">
+                                <TextBlock Text="Type" Foreground="{StaticResource MutedBrush}" FontSize="12"/>
+                                <TextBlock DockPanel.Dock="Right" HorizontalAlignment="Right" FontSize="12"
+                                           Text="{Binding SelectedCommand.IsLongRunning,
+                                               Converter={StaticResource BoolToStringConverter},
+                                               ConverterParameter='Long-running|One-shot'}"/>
+                            </DockPanel>
+                            <Separator Margin="0,0,0,8"/>
+                            <DockPanel Margin="0,0,0,8">
+                                <TextBlock Text="Working directory" Foreground="{StaticResource MutedBrush}" FontSize="12"/>
+                                <TextBlock DockPanel.Dock="Right" HorizontalAlignment="Right" FontSize="12"
+                                           Text="{Binding SelectedCommand.WorkingDirectory,
+                                               TargetNullValue='Application default'}"/>
+                            </DockPanel>
+                            <Separator Margin="0,0,0,8"/>
+                            <DockPanel>
+                                <TextBlock Text="Shell" Foreground="{StaticResource MutedBrush}" FontSize="12"/>
+                                <TextBlock DockPanel.Dock="Right" HorizontalAlignment="Right" FontSize="12"
+                                           Text="cmd.exe"/>
+                            </DockPanel>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- Output -->
+            <views:OutputPanel x:Name="OutputPanelControl"
+                                Visibility="{Binding SelectedDetailTab,
+                                    Converter={StaticResource EnumToVisibilityConverter}, ConverterParameter=Output}"/>
+
+            <!-- History -->
+            <views:HistoryPanel x:Name="HistoryPanelControl"
+                                 Visibility="{Binding SelectedDetailTab,
+                                     Converter={StaticResource EnumToVisibilityConverter}, ConverterParameter=History}"/>
+        </Grid>
+    </Grid>
+</UserControl>

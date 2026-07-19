@@ -4,6 +4,44 @@ using System.Text;
 
 namespace CmdMgr.ViewModels;
 
+public enum ProcessStatus
+{
+    Running,
+    Success,
+    Failed,
+    Stopped
+}
+
+public static class ProcessStatusExtensions
+{
+    public static string DisplayName(this ProcessStatus status) => status switch
+    {
+        ProcessStatus.Running => "Running",
+        ProcessStatus.Success => "Succeeded",
+        ProcessStatus.Failed => "Failed",
+        ProcessStatus.Stopped => "Stopped",
+        _ => status.ToString()
+    };
+
+    public static string Icon(this ProcessStatus status) => status switch
+    {
+        ProcessStatus.Running => "●",
+        ProcessStatus.Success => "✅",
+        ProcessStatus.Failed => "❌",
+        ProcessStatus.Stopped => "⏹",
+        _ => "○"
+    };
+
+    public static string BrushKey(this ProcessStatus status) => status switch
+    {
+        ProcessStatus.Running => "PrimaryBrush",
+        ProcessStatus.Success => "SuccessBrush",
+        ProcessStatus.Failed => "DangerBrush",
+        ProcessStatus.Stopped => "WarningBrush",
+        _ => "MutedBrush"
+    };
+}
+
 /// <summary>
 /// Information about a running (or recently completed) process.
 /// </summary>
@@ -23,12 +61,18 @@ public class ProcessInfo : ViewModelBase
         set => SetField(ref _output, value);
     }
 
-    private bool _isRunning = true;
-    public bool IsRunning
+    private ProcessStatus _status = ProcessStatus.Running;
+    public ProcessStatus Status
     {
-        get => _isRunning;
-        set => SetField(ref _isRunning, value);
+        get => _status;
+        set
+        {
+            if (SetField(ref _status, value))
+                OnPropertyChanged(nameof(IsRunning));
+        }
     }
+
+    public bool IsRunning => Status == ProcessStatus.Running;
 
     public ProcessInfo(Models.Command command, Process process, int historyId)
     {
@@ -52,13 +96,23 @@ public class ProcessInfo : ViewModelBase
 /// <summary>
 /// Manages subprocess lifecycle on Windows.
 /// </summary>
-public class ProcessManager
+public class ProcessManager : ViewModelBase
 {
     public ConcurrentDictionary<int, ProcessInfo> RunningProcesses { get; } = new();
     // Keeps last completed run per command so output remains viewable after exit.
     public ConcurrentDictionary<int, ProcessInfo> CompletedProcesses { get; } = new();
 
     private readonly ConcurrentDictionary<int, bool> _requestedStops = new();
+
+    private string? _lastError;
+    public string? LastError
+    {
+        get => _lastError;
+        set => SetField(ref _lastError, value);
+    }
+
+    /// <summary>Raised whenever a command's running/completed process info changes.</summary>
+    public event Action<int>? ProcessesChanged;
 
     public bool IsRunning(int commandId) =>
         RunningProcesses.TryGetValue(commandId, out var info) && info.IsRunning;
@@ -127,26 +181,33 @@ public class ProcessManager
                 var status = wasRequestedStop ? "terminated" : (proc.ExitCode == 0 ? "success" : "failed");
                 System.Windows.Application.Current?.Dispatcher.Invoke(() =>
                 {
-                    info.IsRunning = false;
-                    command.IsRunning = false;
-                    if (!string.IsNullOrEmpty(info.Output))
-                        command.HasLastOutput = true;
+                    var finalStatus = wasRequestedStop ? ProcessStatus.Stopped
+                        : (proc.ExitCode == 0 ? ProcessStatus.Success : ProcessStatus.Failed);
+                    info.Status = finalStatus;
+                    command.Status = finalStatus;
                     database.UpdateHistoryEntry(info.HistoryId, DateTime.Now, status, info.Output);
                     RunningProcesses.TryRemove(command.Id, out _);
                     CompletedProcesses[command.Id] = info;
+                    ProcessesChanged?.Invoke(command.Id);
                 });
             };
 
-            command.IsRunning = true;
+            command.Status = ProcessStatus.Running;
             CompletedProcesses.TryRemove(command.Id, out _);
             RunningProcesses[command.Id] = info;
+            ProcessesChanged?.Invoke(command.Id);
 
             if (!proc.Start())
             {
-                command.IsRunning = false;
+                command.Status = ProcessStatus.Failed;
                 RunningProcesses.TryRemove(command.Id, out _);
-                database.UpdateHistoryEntry(historyId.Value, DateTime.Now, "failed",
-                    "Launch error: process did not start.");
+                var message = $"Could not start \"{command.Name}\": process did not start.";
+                info.Status = ProcessStatus.Failed;
+                info.AppendOutput(message);
+                CompletedProcesses[command.Id] = info;
+                LastError = message;
+                database.UpdateHistoryEntry(historyId.Value, DateTime.Now, "failed", message);
+                ProcessesChanged?.Invoke(command.Id);
                 return null;
             }
 
@@ -156,15 +217,13 @@ public class ProcessManager
         }
         catch (Exception ex)
         {
-            command.IsRunning = false;
+            command.Status = ProcessStatus.Failed;
             RunningProcesses.TryRemove(command.Id, out _);
+            var message = $"Could not start \"{command.Name}\": {ex.Message}";
+            LastError = message;
             if (historyId.HasValue)
-                database.UpdateHistoryEntry(historyId.Value, DateTime.Now, "failed",
-                    $"Launch error: {ex.Message}");
-            System.Windows.MessageBox.Show(
-                $"Failed to start command '{command.Name}':\n{ex.Message}",
-                "Execution Error", System.Windows.MessageBoxButton.OK,
-                System.Windows.MessageBoxImage.Error);
+                database.UpdateHistoryEntry(historyId.Value, DateTime.Now, "failed", message);
+            ProcessesChanged?.Invoke(command.Id);
             return null;
         }
     }

@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using CmdMgr.ViewModels;
 
 namespace CmdMgr.Models;
 
@@ -17,31 +18,27 @@ public class Command : INotifyPropertyChanged
     public string? WorkingDirectory { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.Now;
 
-    private bool _isRunning;
-    public bool IsRunning
+    // Null until the command has been run at least once; then reflects the
+    // outcome of its most recent run (Running while in flight).
+    private ProcessStatus? _status;
+    public ProcessStatus? Status
     {
-        get => _isRunning;
+        get => _status;
         set
         {
-            if (_isRunning == value) return;
-            _isRunning = value;
+            if (_status == value) return;
+            _status = value;
             OnPropertyChanged();
+            OnPropertyChanged(nameof(IsRunning));
+            OnPropertyChanged(nameof(HasRun));
         }
     }
 
-    // Set to true once the process has completed at least one run with output.
-    // Enables the "View Output" button even after the process has stopped.
-    private bool _hasLastOutput;
-    public bool HasLastOutput
-    {
-        get => _hasLastOutput;
-        set
-        {
-            if (_hasLastOutput == value) return;
-            _hasLastOutput = value;
-            OnPropertyChanged();
-        }
-    }
+    public bool IsRunning => Status == ProcessStatus.Running;
+
+    // True once the process has completed (or started) at least one run.
+    // Enables the "View Output" action even after the process has stopped.
+    public bool HasRun => Status.HasValue;
 
     public bool IsLongRunning => CmdType == "long-running";
     public bool IsOneShot => CmdType == "one-shot";
