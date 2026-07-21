@@ -18,6 +18,27 @@ import path from 'path';
 const ROOT = process.cwd();
 const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
 
+// --- manifest structure validation: fail with a clear message instead of a stack trace ---
+(function validateManifest(){
+  const die = msg => { console.error('✗ manifest.json: ' + msg); process.exit(1); };
+  if(!manifest || typeof manifest !== 'object') die('not a JSON object');
+  if(!Array.isArray(manifest.parts) || manifest.parts.length === 0) die('missing or empty "parts" array');
+  const seenIds = new Set();
+  manifest.parts.forEach((part, pi)=>{
+    if(!part || !Array.isArray(part.chapters) || part.chapters.length === 0)
+      die(`parts[${pi}] has no "chapters" array`);
+    part.chapters.forEach((ch, ci)=>{
+      const where = `parts[${pi}].chapters[${ci}]`;
+      if(!ch || typeof ch !== 'object') die(`${where} is not an object`);
+      if(!ch.id || typeof ch.id !== 'string') die(`${where} missing string "id"`);
+      if(/[\/\s]/.test(ch.id)) die(`${where}: id "${ch.id}" must not contain "/" or whitespace (it becomes the hash route)`);
+      if(seenIds.has(ch.id)) die(`duplicate chapter id "${ch.id}" — ids must be unique`);
+      seenIds.add(ch.id);
+      if(!ch.file || typeof ch.file !== 'string') die(`${where} (id "${ch.id}") missing string "file"`);
+    });
+  });
+})();
+
 function slugify(text, seen){
   let id = String(text).trim().toLowerCase()
     .replace(/[\s_]+/gu,'-')

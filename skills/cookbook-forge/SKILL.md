@@ -2,14 +2,12 @@
 name: cookbook-forge
 description: >-
   Generate a deep, book-quality HTML "cookbook" (in Chinese) that teaches a topic
-  from scratch. Given a subject, it researches and compares sources, plans a
-  custom chapter structure, writes thoroughly, and produces a single-page
-  HTML book (newspaper/editorial theme) whose content AND render libraries are
-  inlined at build time, so it opens directly in a browser via file:// (offline)
-  and also deploys on nginx / GitHub Pages. Use when the user asks to
-  "make/forge/build a cookbook", a guide, handbook, or field guide on some topic,
-  or to turn material into a polished, navigable book. Emphasizes depth,
-  truthfulness, and rich formatting (tables, diagrams, callouts, code).
+  from scratch: research and compare sources, plan a custom chapter structure,
+  write thoroughly, and build a single-page HTML book that opens offline and
+  deploys anywhere. Use when the user asks to "make/forge/build a cookbook",
+  guide, handbook, primer, or field guide on a topic, or to turn a pile of
+  material into a polished, navigable book. Emphasizes depth, truthfulness, and
+  rich formatting (tables, diagrams, callouts, code).
 ---
 
 # cookbook-forge
@@ -128,6 +126,12 @@ user's working directory, e.g. `./<topic-slug>-cookbook/`). Keep `vendor/` and
   drags it. Optional — a clean descriptive title is fine.
 
 ### Phase 4 — Write, deeply
+
+A full book is **many chapters — often 100k+ characters — and it cannot be
+written in a single response.** Write **one chapter per step** (one chapter per
+turn), grounded in `grounding.md`, and tick it off your task list as you go. A
+chapter truncated mid-sentence, or thinned to "fit", is worse than one written
+in its own turn. Never attempt to emit the whole book at once.
 
 Write each chapter (in Chinese) into its `docs/<id>.md`, following
 `references/writing-craft.md`. For every chapter:

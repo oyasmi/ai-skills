@@ -1,0 +1,2 @@
+# Place localized figures here. CSP allows only local images (img-src 'self' data:);
+# a remote ![](https://…) is blocked. check.mjs verifies referenced images exist.
