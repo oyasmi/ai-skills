@@ -208,9 +208,10 @@ cp /path/to/agentmux/examples/config.yaml ~/.config/agentmux/config.yaml
 配套 skill 目录位于：
 
 1. [SKILL.md](skills/agentmux/SKILL.md)
-2. [openai.yaml](skills/agentmux/agents/openai.yaml)
+2. [prompting.md](skills/agentmux/references/prompting.md)
+3. [openai.yaml](skills/agentmux/agents/openai.yaml)
 
-这个 skill 面向上层编排型 Agent，要求优先通过 `agentmux ... --json` 管理外部终端 Agent 实例，而不是直接调用 `tmux`。
+这个 skill 面向上层编排型 Agent，要求优先通过 `agentmux ... --json` 管理外部 Agent 实例，而不是直接调用 `tmux`；同时指导编排 Agent 用明确的目标、上下文、范围边界和完成定义编写首次及追加任务指令，并直接验证最终交付物。
 
 ## 最小配置示例
 

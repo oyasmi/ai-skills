@@ -1,4 +1,4 @@
 interface:
   display_name: "AgentMux"
-  short_description: "Run isolated terminal and headless AI agent instances"
-  default_prompt: "Use $agentmux to summon or reuse an agent instance, read its output, and send the next prompt without calling tmux directly. Check harness_type first: TUI harnesses (claude-code, codex-cli, gemini-cli) run inside tmux and return screen text, while structured harnesses (claude-code-ndjson, codex-cli-execjson) return protocol messages and never need an Enter key. On codex-cli-execjson an idle instance legitimately has no process, and prompting a busy one fails with execjson_instance_busy, so always wait before the next prompt."
+  short_description: "通过 AgentMux 委派并管理外部 CLI coding agent"
+  default_prompt: "使用 $agentmux 选择合适的 harness，创建或复用外部 coding agent 实例，发送包含明确目标、相关上下文、范围边界和可验证完成标准的任务指令，耐心等待并读取输出，最后直接验证实际交付物；全程不要直接调用 tmux。"
