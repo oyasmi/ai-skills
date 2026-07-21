@@ -3,15 +3,6 @@
 .idea/
 .vscode/
 
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-python/build/
-python/dist/
-python/*.spec
-python/cmd_mgr.db
-
 # macOS / Swift
 macos/.build/
 macos/build/

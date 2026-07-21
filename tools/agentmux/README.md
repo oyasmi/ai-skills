@@ -193,7 +193,7 @@ dist/checksums.txt
 
 ```bash
 mkdir -p ~/.config/agentmux
-cp /path/to/agentmux/examples/config.yaml ~/.config/agentmux/config.yaml
+cp /path/to/ai-skills/tools/agentmux/examples/config.yaml ~/.config/agentmux/config.yaml
 ```
 
 示例配置文件见 [config.yaml](examples/config.yaml)。

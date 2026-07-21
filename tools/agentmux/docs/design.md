@@ -41,7 +41,7 @@
 建议目录：
 
 ```text
-agentmux/
+tools/agentmux/
 ├── cmd/agentmux/
 ├── internal/
 │   ├── app/

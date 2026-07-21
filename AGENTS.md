@@ -24,4 +24,4 @@ New features should add table-driven Go tests next to the package they cover, wi
 Recent commits use short, imperative subjects such as `Improve help and packaging workflow`. Keep commit titles concise, sentence case, and focused on one change. PRs should include a clear summary, note affected commands or config files, and paste verification steps or command output. Screenshots are unnecessary unless you are changing rendered documentation or terminal UX in a way text cannot show clearly.
 
 ## Security & Configuration Tips
-Do not commit local cache directories, built artifacts, or secrets; `.gitignore` already excludes `bin/`, `dist/`, and `.cache/`. Treat `agentmux/examples/config.yaml` as the baseline for config changes, and document any new environment variables in `agentmux/README.md`.
+Do not commit local cache directories, built artifacts, or secrets; `.gitignore` already excludes `bin/`, `dist/`, and `.cache/`. Treat `tools/agentmux/examples/config.yaml` as the baseline for config changes, and document any new environment variables in `tools/agentmux/README.md`.

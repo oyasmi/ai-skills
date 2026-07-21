@@ -24,7 +24,7 @@ skill 的目标：
 建议目录：
 
 ```text
-../../skills/agentmux/
+../../../skills/agentmux/
 ├── SKILL.md
 ├── agents/
 │   └── openai.yaml
