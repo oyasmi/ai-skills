@@ -1,4 +1,4 @@
-module github.com/oyasmi/agentmux
+module github.com/oyasmi/ai-skills/tools/agentmux
 
 go 1.24
 

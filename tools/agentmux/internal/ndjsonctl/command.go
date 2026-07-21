@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/oyasmi/agentmux/internal/apperr"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/apperr"
 )
 
 func buildClaudeCommand(command, systemPrompt, sessionID string, resume bool) string {

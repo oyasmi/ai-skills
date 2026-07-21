@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/oyasmi/agentmux/internal/apperr"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/apperr"
 )
 
 type Client struct {

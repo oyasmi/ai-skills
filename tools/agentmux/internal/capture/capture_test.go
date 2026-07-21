@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/oyasmi/agentmux/internal/tmuxctl"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/tmuxctl"
 )
 
 type fakeTmux struct {

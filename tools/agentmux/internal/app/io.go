@@ -6,10 +6,10 @@ import (
 	"io"
 	"os"
 
-	"github.com/oyasmi/agentmux/internal/apperr"
-	"github.com/oyasmi/agentmux/internal/logx"
-	"github.com/oyasmi/agentmux/internal/output"
-	"github.com/oyasmi/agentmux/internal/service"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/apperr"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/logx"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/output"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/service"
 )
 
 func attach(ctx context.Context, svc service.Service, name string, stderr io.Writer) int {

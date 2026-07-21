@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"strings"
 
-	"github.com/oyasmi/agentmux/internal/apperr"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/apperr"
 )
 
 func GenerateName(templateName, cwd string) (string, error) {

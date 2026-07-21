@@ -5,11 +5,11 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/oyasmi/agentmux/internal/capture"
-	"github.com/oyasmi/agentmux/internal/execjsonctl"
-	"github.com/oyasmi/agentmux/internal/instance"
-	"github.com/oyasmi/agentmux/internal/ndjsonctl"
-	"github.com/oyasmi/agentmux/internal/rpcctl"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/capture"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/execjsonctl"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/instance"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/ndjsonctl"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/rpcctl"
 )
 
 // harness is a structured (non-tmux) agent transport.

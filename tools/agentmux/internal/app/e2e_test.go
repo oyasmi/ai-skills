@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/oyasmi/agentmux/internal/config"
-	"github.com/oyasmi/agentmux/internal/instance"
-	"github.com/oyasmi/agentmux/internal/service"
-	"github.com/oyasmi/agentmux/internal/tmuxctl"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/config"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/instance"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/service"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/tmuxctl"
 )
 
 type e2eFakeTmux struct {

@@ -6,8 +6,8 @@ import (
 	"encoding/hex"
 	"time"
 
-	"github.com/oyasmi/agentmux/internal/apperr"
-	"github.com/oyasmi/agentmux/internal/tmuxctl"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/apperr"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/tmuxctl"
 )
 
 type tmuxClient interface {

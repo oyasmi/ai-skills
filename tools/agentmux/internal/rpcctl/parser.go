@@ -7,7 +7,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/oyasmi/agentmux/internal/apperr"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/apperr"
 )
 
 func readEvents(path string, from int64) ([]Event, int64, error) {

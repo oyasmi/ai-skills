@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/oyasmi/agentmux/internal/apperr"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/apperr"
 )
 
 func writeOutput(t *testing.T, lines ...string) string {

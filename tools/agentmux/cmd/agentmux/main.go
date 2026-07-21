@@ -4,7 +4,7 @@ import (
 	"context"
 	"os"
 
-	"github.com/oyasmi/agentmux/internal/app"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/app"
 )
 
 var version = "dev"

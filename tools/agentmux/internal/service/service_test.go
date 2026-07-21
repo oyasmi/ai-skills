@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/oyasmi/agentmux/internal/apperr"
-	"github.com/oyasmi/agentmux/internal/capture"
-	"github.com/oyasmi/agentmux/internal/config"
-	"github.com/oyasmi/agentmux/internal/execjsonctl"
-	"github.com/oyasmi/agentmux/internal/instance"
-	"github.com/oyasmi/agentmux/internal/ndjsonctl"
-	"github.com/oyasmi/agentmux/internal/tmuxctl"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/apperr"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/capture"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/config"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/execjsonctl"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/instance"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/ndjsonctl"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/tmuxctl"
 )
 
 type fakeTmux struct {

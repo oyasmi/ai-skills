@@ -6,7 +6,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/oyasmi/agentmux/internal/apperr"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/apperr"
 )
 
 func ensureFIFO(path string) error {

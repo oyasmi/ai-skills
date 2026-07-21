@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/oyasmi/agentmux/internal/capture"
-	"github.com/oyasmi/agentmux/internal/instance"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/capture"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/instance"
 )
 
 func TestBuildPiCommandAddsRPCFlags(t *testing.T) {

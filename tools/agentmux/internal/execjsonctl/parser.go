@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/oyasmi/agentmux/internal/apperr"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/apperr"
 )
 
 // maxAggregatedOutput caps how much of a command_execution's captured output is
