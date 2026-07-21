@@ -5,7 +5,7 @@ on:
     tags:
       - "v*"
     paths:
-      - "agentmux/**"
+      - "tools/agentmux/**"
       - ".github/workflows/agentmux-package.yml"
   workflow_dispatch:
 
@@ -24,7 +24,7 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: agentmux
+        working-directory: tools/agentmux
 
     outputs:
       version: ${{ steps.version.outputs.value }}
@@ -36,9 +36,9 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: agentmux/go.mod
+          go-version-file: tools/agentmux/go.mod
           cache: true
-          cache-dependency-path: agentmux/go.sum
+          cache-dependency-path: tools/agentmux/go.sum
 
       - name: Resolve version
         id: version
@@ -65,15 +65,15 @@ jobs:
         with:
           name: agentmux-${{ steps.version.outputs.value }}
           path: |
-            agentmux/dist/*.tar.gz
-            agentmux/dist/checksums.txt
+            tools/agentmux/dist/*.tar.gz
+            tools/agentmux/dist/checksums.txt
           if-no-files-found: error
 
       - name: Upload dist README
         uses: actions/upload-artifact@v4
         with:
           name: agentmux-${{ steps.version.outputs.value }}-docs
-          path: agentmux/dist/README.md
+          path: tools/agentmux/dist/README.md
           if-no-files-found: error
 
   release:

@@ -82,7 +82,7 @@ Windows 不是首要目标。
 ## 构建
 
 ```bash
-cd /path/to/agentmux
+cd /path/to/ai-skills/tools/agentmux
 go build -o ./bin/agentmux ./cmd/agentmux
 ```
 
@@ -100,28 +100,24 @@ go build -o ./bin/agentmux ./cmd/agentmux
 最直接的安装方式：
 
 ```bash
-cd /path/to/agentmux
+cd /path/to/ai-skills/tools/agentmux
 ./scripts/install.sh
 ```
 
-这个脚本会做三件事：
+这个脚本会做两件事：
 
 1. 编译并安装二进制到 `~/.local/bin/agentmux`
 2. 在不存在配置时安装默认配置到 `~/.config/agentmux/config.yaml`
-3. 安装配套 skill 到 `$CODEX_HOME/skills/agentmux`，如果 `CODEX_HOME` 未设置则使用 `~/.codex/skills/agentmux`
 
 可选环境变量：
 
 1. `BIN_DIR=/custom/bin`
-2. `INSTALL_SKILL=0`
-3. `OVERWRITE_CONFIG=1`
-4. `SKILL_TARGET_DIR=/custom/skills/agentmux`
+2. `OVERWRITE_CONFIG=1`
 
 示例：
 
 ```bash
 BIN_DIR=$HOME/bin OVERWRITE_CONFIG=1 ./scripts/install.sh
-INSTALL_SKILL=0 ./scripts/install.sh
 ```
 
 安装完成后，建议先确认：
@@ -170,8 +166,7 @@ GitHub Actions 也已经配置为自动打包：
 
 1. `agentmux` 可执行文件
 2. `config.yaml` 示例配置
-3. `skill-agentmux/` skill 目录
-4. `README.md`
+3. `README.md`
 
 可以通过环境变量覆盖版本号和输出目录：
 
@@ -202,16 +197,6 @@ cp /path/to/agentmux/examples/config.yaml ~/.config/agentmux/config.yaml
 ```
 
 示例配置文件见 [config.yaml](examples/config.yaml)。
-
-## Skill
-
-配套 skill 目录位于：
-
-1. [SKILL.md](skills/agentmux/SKILL.md)
-2. [prompting.md](skills/agentmux/references/prompting.md)
-3. [openai.yaml](skills/agentmux/agents/openai.yaml)
-
-这个 skill 面向上层编排型 Agent，要求优先通过 `agentmux ... --json` 管理外部 Agent 实例，而不是直接调用 `tmux`；同时指导编排 Agent 用明确的目标、上下文、范围边界和完成定义编写首次及追加任务指令，并直接验证最终交付物。
 
 ## 最小配置示例
 

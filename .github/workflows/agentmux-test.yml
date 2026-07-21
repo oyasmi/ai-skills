@@ -3,11 +3,11 @@ name: AgentMux Test
 on:
   push:
     paths:
-      - "agentmux/**"
+      - "tools/agentmux/**"
       - ".github/workflows/agentmux-*.yml"
   pull_request:
     paths:
-      - "agentmux/**"
+      - "tools/agentmux/**"
       - ".github/workflows/agentmux-*.yml"
 
 permissions:
@@ -29,7 +29,7 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: agentmux
+        working-directory: tools/agentmux
 
     steps:
       - name: Checkout
@@ -38,9 +38,9 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: agentmux/go.mod
+          go-version-file: tools/agentmux/go.mod
           cache: true
-          cache-dependency-path: agentmux/go.sum
+          cache-dependency-path: tools/agentmux/go.sum
 
       - name: Test
         run: go test ./...

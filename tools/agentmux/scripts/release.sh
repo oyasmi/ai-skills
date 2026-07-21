@@ -34,7 +34,6 @@ for target in "${TARGETS[@]}"; do
     -o "$BUILD_DIR/$APP_NAME" "$ROOT_DIR/cmd/agentmux"
 
   cp "$ROOT_DIR/examples/config.yaml" "$BUILD_DIR/config.yaml"
-  cp -R "$ROOT_DIR/skills/agentmux" "$BUILD_DIR/skill-agentmux"
   cp "$ROOT_DIR/README.md" "$BUILD_DIR/README.md"
 
   tar -C "$DIST_DIR" -czf "$DIST_DIR/${APP_NAME}_${VERSION}_${GOOS}_${GOARCH}.tar.gz" \

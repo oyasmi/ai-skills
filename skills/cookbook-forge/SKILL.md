@@ -14,6 +14,20 @@ description: >-
 
 # cookbook-forge
 
+## 依赖安装
+
+这个 skill 需要 Node.js 来运行随附的 `build.mjs`、`check.mjs` 和
+`quality-check.mjs`；浏览器用于打开生成的 `index.html`。安装 Node.js 18 或更高版本，
+并确认命令可用：
+
+```bash
+node --version
+```
+
+可以从 [nodejs.org](https://nodejs.org/) 安装，或使用系统包管理器（例如
+macOS 的 `brew install node`、Debian/Ubuntu 的 `sudo apt install nodejs`）。
+本 skill 不需要 `npm install`，模板中的渲染库已经随 skill 一起提供。
+
 Turn a topic into a thorough, trustworthy, beautifully-typeset **Chinese**
 cookbook: a single-page HTML book a reader can use to learn a subject **quickly
 and completely**. Two things matter equally — the content must be **true and
