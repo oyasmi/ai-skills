@@ -25,7 +25,7 @@ const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'u
   if(!Array.isArray(manifest.parts) || manifest.parts.length === 0) die('missing or empty "parts" array');
   const seenIds = new Set();
   manifest.parts.forEach((part, pi)=>{
-    if(!part || !Array.isArray(part.chapters) || part.chapters.length === 0)
+    if(!part || !Array.isArray(part.chapters))
       die(`parts[${pi}] has no "chapters" array`);
     part.chapters.forEach((ch, ci)=>{
       const where = `parts[${pi}].chapters[${ci}]`;

@@ -247,6 +247,27 @@ img{max-width:100%}
   html{scroll-behavior:auto}
   *,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
 }
+
+/* ════════ Search ════════ */
+.side-search{padding:12px 18px 14px;border-bottom:1px solid var(--line);background:var(--paper-2)}
+.side-search form{margin:0}
+.search-input{width:100%;font-family:var(--f-ui);font-size:.82rem;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 11px;outline:none;transition:border-color var(--t) var(--ease),box-shadow var(--t) var(--ease)}
+.search-input::placeholder{color:var(--ink-mute)}
+.search-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-tint)}
+.search-input::-webkit-search-cancel-button{cursor:pointer}
+#searchResults{padding:4px 0 10px;max-height:calc(100vh - 220px);overflow-y:auto;scrollbar-width:thin}
+.sr-count{font-family:var(--f-ui);font-size:.62rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-mute);padding:8px 22px 6px}
+.sr-empty{font-family:var(--f-ui);font-size:.78rem;color:var(--ink-mute);padding:10px 22px}
+.sr-item{display:flex;flex-direction:column;gap:2px;padding:7px 22px;border-left:2.5px solid transparent;transition:background var(--t) var(--ease),border-color var(--t) var(--ease);cursor:pointer;text-decoration:none}
+.sr-item:hover,.sr-item[aria-selected="true"]{background:var(--accent-tint);border-left-color:var(--accent)}
+.sr-num{font-family:var(--f-mono);font-size:.66rem;color:var(--ink-faint)}
+.sr-title{font-family:var(--f-ui);font-size:.82rem;font-weight:600;color:var(--ink);line-height:1.3}
+.sr-snippet{font-family:var(--f-body);font-size:.74rem;color:var(--ink-mute);line-height:1.4;overflow-wrap:anywhere}
+.sr-snippet mark{background:var(--accent-tint);color:var(--accent-press);padding:0 .12em;border-radius:3px}
+mark.search-hit{background:var(--accent-tint);color:var(--accent-press);padding:0 .05em;border-radius:3px}
+mark.search-hit.first{background:var(--accent);color:#fff;outline:3px solid var(--accent-tint);border-radius:3px}
+.search-badge{position:fixed;bottom:18px;right:18px;z-index:120;font-family:var(--f-ui);font-size:.74rem;font-weight:600;color:var(--paper);background:var(--ink);border:none;border-radius:999px;padding:8px 14px;cursor:pointer;box-shadow:0 4px 16px rgba(28,28,30,.22);transition:transform var(--t) var(--ease)}
+.search-badge:hover{transform:translateY(-1px)}
 </style>
 </head>
 <body>
@@ -263,6 +284,14 @@ img{max-width:100%}
     </a>
     <div class="side-tag" id="sideTag"></div>
     <div class="side-env" id="sideEnv"></div>
+  </div>
+  <div class="side-search">
+    <form role="search" onsubmit="return false">
+      <input id="searchInput" class="search-input" type="search" autocomplete="off" spellcheck="false"
+             placeholder="搜索全书…" aria-label="搜索全书"
+             aria-controls="searchResults" aria-expanded="false">
+    </form>
+    <div id="searchResults" role="listbox" aria-label="搜索结果" hidden></div>
   </div>
   <nav class="side-nav" id="sideNav" aria-label="章节导航"></nav>
 </aside>
@@ -1532,7 +1561,7 @@ const $$ = (s,r=document)=>[...r.querySelectorAll(s)];
 let routeSeq = 0, mmdSeq = 0, mermaidPromise = null, ticking = false, fadeTick = false;
 let tocLinks = [], headEls = [];
 
-const Z = { loading:'加载中…', onThisPage:'本页目录', prev:'上一章', next:'下一章', front:'封面', cover:'封面', contents:'目录', copy:'复制', copycode:'复制代码', copied:'已复制', copyfail:'复制失败', writing:'本章正在撰写中（文档尚未就绪）。', notfound:'未找到该章节。', loaderr:'内容索引加载失败，请刷新或检查 manifest.json。', rendererr:'Markdown 渲染组件加载失败，请刷新页面。', menu_open:'打开导航菜单', menu_close:'关闭导航菜单', chnav:'章节导航' };
+const Z = { loading:'加载中…', onThisPage:'本页目录', prev:'上一章', next:'下一章', front:'封面', cover:'封面', contents:'目录', copy:'复制', copycode:'复制代码', copied:'已复制', copyfail:'复制失败', writing:'本章正在撰写中（文档尚未就绪）。', notfound:'未找到该章节。', loaderr:'内容索引加载失败，请刷新或检查 manifest.json。', rendererr:'Markdown 渲染组件加载失败，请刷新页面。', menu_open:'打开导航菜单', menu_close:'关闭导航菜单', chnav:'章节导航', search_ph:'搜索全书…', search_label:'搜索全书', search_results:'搜索结果', search_none:'无匹配结果', search_clear:'清除高亮', search_esc:'Esc 清除', search_hits:'处' };
 const t = k => Z[k];
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 /* escape, then allow a tiny safe inline markup: **bold** -> .em span (used in the front-lead) */
@@ -1586,6 +1615,7 @@ async function boot(){
     }
   }
   S.flat = S.manifest.parts.flatMap(p=>p.chapters.map(c=>({...c, part:p})));
+  buildSearchIndex();
   const repo = (S.manifest.site && S.manifest.site.repo) || '';
   if(repo && /^https?:\/\//i.test(repo)){ const g=$('#ghLink'); g.href=repo; g.hidden=false; }
   $('#sideEnv').textContent = (S.manifest.site && S.manifest.site.env) || '';
@@ -1632,6 +1662,22 @@ function bindEvents(){
   window.addEventListener('hashchange', route);
   window.addEventListener('scroll', ()=>{ if(!ticking){ ticking=true; requestAnimationFrame(onScroll); } }, {passive:true});
   window.addEventListener('resize', ()=>{ if(!ticking){ ticking=true; requestAnimationFrame(onScroll); } if(!fadeTick){ fadeTick=true; requestAnimationFrame(()=>{ fadeTick=false; refreshFades(); gateTableRegions(); }); } }, {passive:true});
+  const si = $('#searchInput');
+  si.addEventListener('input', ()=>{ clearTimeout(searchTimer); searchTimer = setTimeout(()=>runSearch(si.value), 80); });
+  si.addEventListener('keydown', e=>{
+    if(e.key==='ArrowDown'){ e.preventDefault(); moveSel(1); }
+    else if(e.key==='ArrowUp'){ e.preventDefault(); moveSel(-1); }
+    else if(e.key==='Enter'){ e.preventDefault(); const items=$$('#searchResults .sr-item'); const a=items[srSel]||items[0]; if(a) openResult(a.dataset.id); }
+    else if(e.key==='Escape'){ si.value=''; runSearch(''); clearHighlights(); si.blur(); }
+  });
+  document.addEventListener('keydown', e=>{
+    const typing = /^(input|textarea|select)$/i.test(e.target.tagName||'') || e.target.isContentEditable;
+    if((e.key==='/' && !typing) || ((e.metaKey||e.ctrlKey) && (e.key==='k'||e.key==='K'))){ e.preventDefault(); si.focus(); si.select(); }
+    else if(e.key==='Escape' && !document.body.classList.contains('nav-open')){
+      if(si.value || $$('#content .search-hit').length){ si.value=''; runSearch(''); clearHighlights(); }
+    }
+  });
+  $('#searchBadge').addEventListener('click', clearHighlights);
 }
 
 function toggleNav(force){
@@ -1650,6 +1696,7 @@ function route(){
   const id = m ? m[1] : 'home';
   S.id = id;
   const my = ++routeSeq;
+  clearHighlights();
   toggleNav(false);
   if(id==='home'){ renderHome(); } else { renderChapter(id, my); }
   $$('#sideNav .np-item').forEach(a=>{ const on=a.dataset.id===id; a.classList.toggle('active', on); if(on){ a.setAttribute('aria-current','true'); } else { a.removeAttribute('aria-current'); } });
@@ -1742,6 +1789,7 @@ async function renderChapter(id, my){
   enhance();
   renderToc();
   renderChapNav(ch);
+  if(S.pendingHighlight){ const terms=S.pendingHighlight; S.pendingHighlight=null; highlightTerms(terms); }
   const h1 = content.querySelector('h1'); setH1Focus(h1);
 }
 
@@ -1876,7 +1924,124 @@ function onScroll(){
   tocLinks.forEach(a=>{ const on=a.dataset.id===cur; a.classList.toggle('active', on); if(on){ a.setAttribute('aria-current','true'); } else { a.removeAttribute('aria-current'); } });
 }
 
+/* ───────────────────────── Search ───────────────────────── */
+let searchTimer = null, srSel = -1;
+function tokenize(q){ return String(q||'').toLowerCase().split(/\s+/).map(s=>s.trim()).filter(Boolean); }
+function escRe(s){ return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
+function buildSearchIndex(){
+  const docs = (S.data && S.data.docs) || {};
+  S.searchIndex = S.flat.map(c => ({
+    id:c.id, num:c.num||'', title:(c.title||''), partLabel:(c.part && c.part.label)||'',
+    text: String(docs[c.id]||'').replace(/```[\s\S]*?```/g,' ').replace(/[#>*_`~|-]/g,' ')
+  }));
+}
+function snippet(text, tokens){
+  const low = text.toLowerCase();
+  let pos = -1;
+  for(const tk of tokens){ const i = low.indexOf(tk); if(i>=0 && (pos<0 || i<pos)) pos = i; }
+  if(pos < 0) return '';
+  const start = Math.max(0, pos-24), end = Math.min(text.length, pos+44);
+  let s = (start>0?'…':'') + text.slice(start,end).replace(/\s+/g,' ').trim() + (end<text.length?'…':'');
+  const re = new RegExp('('+tokens.map(escRe).join('|')+')','gi');
+  return esc(s).replace(re, '<mark>$1</mark>');
+}
+function runSearch(q){
+  if(!S.searchIndex) return;
+  const box = $('#searchResults'), nav = $('#sideNav'), input = $('#searchInput');
+  const tokens = tokenize(q);
+  if(!tokens.length){ box.hidden=true; box.innerHTML=''; input.setAttribute('aria-expanded','false'); nav.style.display=''; srSel=-1; return; }
+  const hits = [];
+  for(const c of S.searchIndex){
+    const titleL = c.title.toLowerCase(), textL = c.text.toLowerCase();
+    let ok = true, first = Infinity, titleHit = false;
+    for(const tk of tokens){
+      const ti = titleL.indexOf(tk), bi = textL.indexOf(tk);
+      if(ti<0 && bi<0){ ok=false; break; }
+      if(ti===0) titleHit = true;
+      if(bi>=0 && bi<first) first = bi;
+    }
+    if(ok) hits.push({c, titleHit, first});
+  }
+  hits.sort((a,b)=> (b.titleHit - a.titleHit) || (a.first - b.first));
+  const top = hits.slice(0,30);
+  nav.style.display = 'none';
+  box.hidden = false;
+  input.setAttribute('aria-expanded','true');
+  if(!top.length){ box.innerHTML = '<div class="sr-empty">'+t('search_none')+'</div>'; srSel=-1; return; }
+  box.innerHTML = '<div class="sr-count">'+top.length+' '+t('search_results')+'</div>' +
+    top.map((h,i)=>{
+      const snip = snippet(h.c.text, tokens);
+      return '<a class="sr-item" role="option" data-i="'+i+'" data-id="'+h.c.id+'" href="#/'+h.c.id+'">' +
+        '<span class="sr-num">'+esc(h.c.num)+'</span>' +
+        '<span class="sr-title">'+esc(h.c.title)+'</span>' +
+        (snip ? '<span class="sr-snippet">'+snip+'</span>' : '') +
+        '</a>';
+    }).join('');
+  srSel = -1;
+  $$('.sr-item', box).forEach(a => a.addEventListener('click', e => { e.preventDefault(); openResult(a.dataset.id); }));
+}
+function moveSel(d){
+  const items = $$('#searchResults .sr-item'); if(!items.length) return;
+  srSel = (srSel + d + items.length) % items.length;
+  items.forEach((a,i)=>a.setAttribute('aria-selected', i===srSel ? 'true' : 'false'));
+  items[srSel].scrollIntoView({block:'nearest'});
+}
+function openResult(id){
+  const tokens = tokenize($('#searchInput').value || '');
+  $('#searchInput').value = ''; runSearch('');
+  S.pendingHighlight = tokens;
+  if(S.id === id){ highlightTerms(tokens); S.pendingHighlight = null; }
+  else location.hash = '#/' + id;
+}
+function highlightTerms(tokens){
+  clearHighlights();
+  tokens = (tokens||[]).filter(x=>x.length);
+  if(!tokens.length) return;
+  const article = $('#content .article') || $('#content'); if(!article) return;
+  const SKIP = {PRE:1,SCRIPT:1,STYLE:1,MARK:1};
+  const skipEl = el => el && el.classList && (el.classList.contains('code-head')||el.classList.contains('code-lang')||el.classList.contains('code-copy')||el.classList.contains('toc')||el.classList.contains('ch-nav')||el.classList.contains('mermaid-fig'));
+  const walker = document.createTreeWalker(article, NodeFilter.SHOW_TEXT, { acceptNode(n){
+    let p = n.parentNode;
+    while(p && p !== article){
+      if(p.nodeType === 1 && (SKIP[p.tagName] || skipEl(p))) return NodeFilter.FILTER_REJECT;
+      p = p.parentNode;
+    }
+    const v = n.nodeValue; if(!v) return NodeFilter.FILTER_REJECT;
+    const lv = v.toLowerCase();
+    for(const tk of tokens) if(lv.indexOf(tk) >= 0) return NodeFilter.FILTER_ACCEPT;
+    return NodeFilter.FILTER_REJECT;
+  }});
+  const re = new RegExp('('+tokens.map(escRe).join('|')+')','gi');
+  const nodes = []; let n;
+  while((n = walker.nextNode())) nodes.push(n);
+  let count = 0;
+  for(const node of nodes){
+    if(count >= 500) break;
+    const txt = node.nodeValue, frag = document.createDocumentFragment(); let last = 0, m, any = false;
+    re.lastIndex = 0;
+    while((m = re.exec(txt))){
+      if(count >= 500) break;
+      any = true;
+      if(m.index > last) frag.appendChild(document.createTextNode(txt.slice(last, m.index)));
+      const mk = document.createElement('mark'); mk.className = 'search-hit'; mk.textContent = m[0];
+      frag.appendChild(mk); last = m.index + m[0].length; count++;
+    }
+    if(any){ if(last < txt.length) frag.appendChild(document.createTextNode(txt.slice(last))); node.parentNode.replaceChild(frag, node); }
+  }
+  if(count){
+    const badge = $('#searchBadge'); if(badge){ badge.hidden = false; badge.textContent = count + ' ' + t('search_hits') + ' · ' + t('search_esc'); }
+    const first = $('#content .search-hit');
+    if(first){ first.classList.add('first'); const rm = matchMedia('(prefers-reduced-motion:reduce)').matches; first.scrollIntoView({behavior: rm?'auto':'smooth', block:'center'}); }
+  }
+}
+function clearHighlights(){
+  const marks = $$('#content .search-hit');
+  for(const m of marks){ const p = m.parentNode; if(!p) continue; while(m.firstChild) p.insertBefore(m.firstChild, m); p.removeChild(m); p.normalize(); }
+  const badge = $('#searchBadge'); if(badge) badge.hidden = true;
+}
+
 window.addEventListener('DOMContentLoaded', boot);
 </script>
+<button id="searchBadge" class="search-badge" hidden aria-live="polite"></button>
 </body>
 </html>
