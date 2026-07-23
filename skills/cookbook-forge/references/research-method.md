@@ -1,118 +1,91 @@
-# Research Method — Gather, Compare, Analyze Deeply
+# 研究方法 —— 深度地搜集、比对、分析
 
-The quality ceiling of the cookbook is set here. A book can't be more accurate,
-more complete, or more insightful than the research under it. This is the step
-where "thorough" is won or lost — **do not skimp.**
+食谱的质量天花板在这里决定。一本书不可能比它脚下的研究更准确、更完整、更深刻。这是"扎实"
+这一仗打赢或打输的一步——**别偷工。**
 
-> The failure mode to avoid: skim three blog posts, paraphrase them, ship. That
-> produces a confident, shallow, partly-wrong book. The whole point of this skill
-> is to go deeper than that.
+> 要避免的失败模式：扫三篇博客，转述一番，交付。那样产出一本自信、浅薄、部分错误的书。
+> 本 skill 的全部意义，就是比这更深。
 
-## Principles
+## 原则
 
-- **Primary over secondary.** Official docs, specs, source code, the thing
-  itself > tutorials and blog posts > forum hearsay. Go upstream until you hit
-  the source of truth.
-- **Intent vs reality — the axis that matters most for a codebase.** Design docs,
-  PRDs, and architecture write-ups state *intent* ("应当如此"); source code and
-  runtime state *reality* ("实际如此"). On a real system they drift apart
-  constantly. When they conflict, the prose follows the **source**, and the
-  conflict itself goes in the book ("设计文档称 X，但 master @abc123 实际是 Y" — often
-  the single most valuable paragraph in a chapter). Grade every codebase L1 claim
-  with a `file:line` or commit; no locator, no L1. (See the two-axis grading —
-  信源强度 × 层面 — in `grounding-template.md`.)
-- **Triangulate.** Don't trust a single source for any non-trivial claim. Find
-  it stated (or contradicted) in 2–3 independent places. Where sources disagree,
-  that disagreement is itself something to surface in the book.
-- **Verify when you can.** If the topic is something you can actually run, test,
-  or reproduce, do it — a verified fact outranks any amount of citation. Real
-  output beats described output.
-- **Read deeply, not just widely.** A handful of sources read closely and
-  cross-checked beats fifty skimmed. Read the whole doc page, not the snippet
-  the search returned.
-- **Capture provenance as you go.** For every fact worth keeping: the claim, the
-  source (URL/title), and your confidence grade. This becomes the grounding
-  file and the Sources appendix.
+- **一手优先于二手。** 官方文档、规范、源码、事物本身 > 教程和博客 > 论坛道听途说。向上游
+  走，直到触到事实之源。
+- **意图 vs 现实——代码库主题里最关键的一条轴。** 设计文档、PRD、架构稿陈述*意图*
+  （「应当如此」）；源码与运行时状态陈述*现实*（「实际如此」）。在一个真实系统上，二者经常
+  背离。冲突时，正文以**源码**为准，而冲突本身要写进书里（「设计文档称 X，但 master @abc123
+  实际是 Y」——往往正是一章里最有价值的一节）。每条代码库 L1 论断都要带上 `file:line` 或
+  commit；给不出定位的，不算 L1。（两轴分级——信源强度 × 层面——见
+  `grounding-template.md`。）
+- **三角验证。** 任何非平凡论断都别只信单一信源。找到它在 2–3 个独立出处被陈述（或反驳）。
+  信源之间分歧时，这分歧本身就是要在书里呈现的东西。
+- **能验证就验证。** 如果主题是能真跑、能测、能复现的，就去做——一条已验证的事实胜过任何
+  数量的引证。真实输出胜过描述性输出。
+- **深读，而不只是广读。** 少数信源被精读并交叉核对，胜过五十篇走马观花。读完整页文档，
+  而不是搜索返回的那个片段。
+- **边走边记出处。** 每一条值得留下的事实：论断、信源（URL/标题）、你的置信等级。这会变成
+  接地文件和「信源索引」附录。
 
-## Process
+## 流程
 
-### 1. Scope the question
+### 1. 圈定问题
 
-Write down what the reader must be able to do at the end. List the sub-topics
-that implies. This is your research checklist and, later, your chapter list.
+写下读者读完必须能做到什么。列出这隐含的子主题。这是你的研究清单，之后也是你的章节清单。
 
-### 2. Map the source landscape
+### 2. 摸清信源地形
 
-Find, for the topic:
-- **Canonical sources** — official documentation, specification, reference
-  implementation, the primary site/repo.
-- **Authoritative secondary** — well-regarded books, talks, maintainer blog
-  posts, standards.
-- **Practitioner sources** — high-signal tutorials, real-world write-ups, issue
-  threads where edge cases surface.
-- **The neighbors** — competing or adjacent tools/approaches, for the
-  comparison and positioning chapters.
+为该主题找出：
+- **权威一手源** —— 官方文档、规范、参考实现、主站/主仓库。
+- **权威二手源** —— 口碑好的书、演讲、维护者博客、标准。
+- **实践者信源** —— 高信噪比的教程、真实世界的实战记录、边界情况浮出水面的 issue 讨论。
+- **邻居** —— 竞品或相邻工具/方案，用于对比和定位章节。
 
-Use web search / fetch / available research tools. Cast wide first, then go
-deep on the canonical few.
+用网页搜索 / 抓取 / 可用的研究工具。先撒网，再在少数权威源上深挖。
 
-### 3. Read deeply and take grounded notes
+### 3. 深读并记接地笔记
 
-For each important source, extract claims into your grounding notes with
-provenance and a confidence grade (verified / reported / inference — see
-`writing-craft.md`). Note exact names, signatures, numbers, defaults, version
-caveats, and **quote** anything you might reproduce verbatim. Record
-contradictions between sources explicitly.
+对每一份重要信源，把论断抽进你的接地笔记，带上出处和置信等级（已核实 / 转述 / 推断——见
+`writing-craft.md`）。记下确切的名称、签名、数字、默认值、版本注意事项，并对你可能逐字
+引用的内容加**引号**。明确记录信源之间的矛盾。
 
-### 4. Comparative analysis — the step that adds insight
+### 4. 比较分析 —— 这一步产出洞察
 
-Reading summarizes; comparing *understands*. Actively build:
-- **Comparison tables** across the dimensions that matter (these often become
-  the positioning/comparison chapters directly).
-- **The "why" behind the "what."** Don't just record that something works a
-  certain way — find or reason out *why* it was designed that way. That's the
-  insight a novice can't get from the docs alone.
-- **Edge cases and failure modes.** Hunt for where it breaks: issue trackers,
-  "gotcha" posts, the caveats buried in docs. These power the pitfalls and
-  troubleshooting chapters.
-- **Trade-offs.** Every real tool trades something. Name the trades. A book that
-  only lists benefits reads like marketing.
-- **The expert/novice gap.** What do practitioners take for granted that trips
-  up beginners? These become your highest-value chapters.
+阅读只是在总结；比较才是在理解。主动构建：
+- **比较表**，沿真正重要的维度展开（这些表往往直接成为定位/对比章节）。
+- **「是什么」背后的「为什么」。** 别只记下某事物以某种方式运作——找出或推理出它*为何*被
+  设计成那样。那是一个新手单凭文档得不到的洞察。
+- **边界情况与失败模式。** 猎取它在哪里崩坏：issue 跟踪器、"踩坑"贴、藏在文档里的告诫。
+  这些撑起陷阱与排错章节。
+- **取舍。** 每个真实工具都拿某样东西换了某样东西。把交易说清楚。一本只列好处的书读起来像
+  营销稿。
+- **专家/新手的鸿沟。** 实践者视作理所当然、却让新手栽跟头的是什么？这些成为你最高价值的
+  章节。
 
-### 5. Identify and close gaps
+### 5. 识别并填补空白
 
-Compare your grounded notes against the chapter checklist from step 1. Where a
-planned chapter has thin or no support, that's a gap: go back and research it,
-or cut the chapter. **A chapter with no grounding is where fabrication creeps
-in** — never paper over a gap with confident prose.
+把接地笔记对照步骤 1 的章节清单。某个计划中的章若支撑薄弱或没有支撑，那就是空白：回去研究
+它，或砍掉该章。**一个没有接地支撑的章，就是臆造钻进来的地方**——绝不用自信的散文去糊弄
+空白。
 
-## Working with user-provided material
+## 处理用户提供的素材
 
-If the user supplies their own material (notes, docs, a corpus):
-- Treat it as a **primary, high-priority source** — it's why they chose it.
-- Still grade it: user-provided ≠ automatically verified. Cross-check
-  non-obvious claims.
-- **Ask whether to supplement with web research.** Some users want a book built
-  strictly from their material; others want it enriched. Confirm before going
-  wide, and respect "use only what I gave you" if that's the answer.
-- Mine it for the topic-specific chapter archetypes the generic plan misses.
+如果用户提供了自己的素材（笔记、文档、语料）：
+- 把它当作**一手、高优先级信源**——这是他选它的原因。
+- 仍然要分级：用户提供的 ≠ 自动已核实。交叉核对非显然的论断。
+- **问是否用网络研究来补充。** 有的用户想要严格只基于他素材的书；有的想要被充实。先确认
+  再撒网；若答案是"只用我给你的"，就尊重它。
+- 从中挖掘通用规划会漏掉的主题专属章原型。
 
-## How much is enough
+## 够了的标准
 
-Enough to write every planned chapter from grounded notes without ever reaching
-for memory or guesswork. If you find yourself about to write a sentence you
-can't trace to a source or a test, stop — that's the signal to research more,
-not to write more. Depth of research, not volume of prose, is the goal.
+够了 = 能从接地笔记写出每一个计划中的章，全程不必动用记忆或猜测。如果你发现自己即将写下一
+句无法追溯到任何信源或测试的话，停下——这是该补研究、而不是继续写的信号。目标是研究深度，
+不是散文篇幅。
 
-**Two book types set two different bars for "enough"** (decide which in Phase 0):
+**两种书型定了两种不同的「够」**（在阶段 0 决定是哪种）：
 
-- **Type A · runnable topic** (a tool, language, API): "enough" means every code
-  example actually ran and you captured its **real output**. Verification =
-  execution; described output doesn't count.
-- **Type B · codebase archaeology** (an existing internal system): you usually
-  can't "just run it." "Enough" means every non-trivial claim is cross-checked at
-  `file:line` and triangulated across ≥2 sources (source + design doc + runtime).
-  Cross-reference *is* the verification here — don't fake Type-A rigor by claiming
-  you ran things you didn't, and don't apologize for a book that's honestly
-  archaeology.
+- **A 型 · 可运行主题**（一个工具、语言、API）：「够」意味着每个代码示例都真跑过，并捕获了
+  它的**真实输出**。验证 = 执行；描述性输出不算数。
+- **B 型 · 代码库考古**（一个既有内部系统）：你通常没法"就这么跑起来"。「够」意味着每条非
+  平凡论断都在 `file:line` 上交叉核对、并跨 ≥2 个信源（源码 + 设计稿 + 运行时）三角验证。
+  交叉引用*本身就是*这里的验证——别用声称跑过实际没跑来伪造 A 型的严谨，也别为一本诚实的
+  考古之书而道歉。

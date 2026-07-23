@@ -1,176 +1,142 @@
-# Chapter Blueprint — Planning the Table of Contents
+# 章节蓝图 —— 规划目录
 
-A cookbook's spine is its structure. The wrong outline produces a glossary; the
-right one produces a path from "never heard of it" to "can do it." This file
-gives you a **preset catalog of chapter archetypes** as a starting palette, and a
-**method** for selecting and ordering them for a specific topic.
+一本食谱的脊柱是它的结构。错误的纲目产出一份术语表；正确的纲目产出一条从"没听过"到"能上手"
+的路。本文件给你一份**预设的章节原型目录**作为起点调色板，以及一套为本主题挑选、排序它们的
+**方法**。
 
-> The preset list is a primer, not a template. Most topics need 60–80% of these
-> plus 1–3 archetypes unique to the domain. Never ship the default order
-> unexamined — a TOC that could front any book fronts none well.
+> 预设清单是入门指引，不是模板。多数主题需要其中的 60–80%，外加 1–3 个该领域独有的原型。
+> 绝不要不经审视就交付默认顺序——一本能放在任何书前面的纲目，哪本都放不好。
 
-## The arc every good cookbook follows
+## 每本好食谱都遵循的弧线
 
-Regardless of topic, strong instructional books move through four pressures:
+无论主题为何，优秀的教学型书籍都在四种推力间推进：
 
 ```mermaid
 flowchart LR
-    A["WHY<br/>motivate · position"] --> B["WHAT<br/>core concepts · mental model"]
-    B --> C["HOW<br/>recipes · worked examples"]
-    C --> D["DEEPER<br/>edge cases · mastery · ecosystem"]
+    A["WHY<br/>动机 · 定位"] --> B["WHAT<br/>核心概念 · 心智模型"]
+    B --> C["HOW<br/>配方 · 完整示例"]
+    C --> D["DEEPER<br/>边界 · 精通 · 生态"]
 ```
 
-- **Why** — Why does this exist? What pain does it kill? Where does it sit among
-  alternatives? (Earns the reader's attention; prevents "so what?")
-- **What** — The mental model and vocabulary. The smallest set of concepts that
-  makes everything else click.
-- **How** — Concrete, runnable, real recipes. The heart of a *cookbook*.
-- **Deeper** — Edge cases, anti-patterns, scaling, tooling, comparisons,
-  authoring your own. Turns competence into mastery.
+- **Why** —— 它为何存在？解决什么痛点？在替代方案中处于什么位置？（赢得读者的注意力；堵住
+  "那又怎样"。）
+- **What** —— 心智模型与词汇表。让其余一切都豁然开朗的最小概念集。
+- **How** —— 具体、可运行、真实的配方。一本*食谱*的心脏。
+- **Deeper** —— 边界情况、反模式、扩展、工具、对比、自创。把胜任变成精通。
 
-Order parts along this arc. Within a part, order chapters by dependency: nothing
-should require a concept the reader hasn't met yet.
+沿这条弧线排列各部。一部之内，按依赖关系排章：任何章都不应要求读者尚未接触过的概念。
 
-## Preset chapter archetypes (the palette)
+## 预设章节原型（调色板）
 
-Pick from these; rename them in the topic's own language. Not all apply.
+从这些里挑；用主题自己的语言为它们重命名。并非全部适用。
 
-### Front matter
-- **Preface / Why this book** — the thesis, who it's for, how to read it, and a
-  **structured credibility statement**: (a) the source base (which docs / which
-  commit), (b) the chapters you know are weak, (c) what stayed explicitly
-  unverified, (d) the freshness window. A preface that claims no limitations is the
-  most suspect kind — `quality-check.mjs` warns when it finds no honesty marker.
-  The cover **stats** carry this honesty too: make them specific and true
-  (『基于 master@8a24f46』『27 个源码模块逐行读过』), never vanity numbers
-  (『40+ 信源』『业界领先』).
-- **The 60-second tour** — one end-to-end example up front, so the reader sees
-  the whole shape before the details.
+### 卷首
+- **前言 / 为什么写这本书** —— 主张、写给谁、怎么读，以及一个**结构化的可信度声明**：
+  (a) 信源基线（哪些文档 / 哪个 commit）、(b) 你知道哪些章是弱的、(c) 哪些明确保持未核实、
+  (d) 时效窗口。一篇声称没有局限的前言是最可疑的那种——`quality-check.mjs` 找不到诚信标记
+  时会警告。封面的 **stats** 也承载这份诚实：让它们具体且真实（『基于 master@8a24f46』『27 个
+  源码模块逐行读过』），绝不用虚荣数字（『40+ 信源』『业界领先』）。
+- **60 秒导览** —— 开头一个端到端示例，让读者在细节之前先看到整体形状。
 
-### Part: Understanding (Why / What)
-- **What it is** — definition, boundaries, what it is *not* (kill the common
-  confusions explicitly).
-- **Why it exists / the problem it solves** — the pain, told through a concrete
-  failure of the old way.
-- **Positioning / landscape** — how it relates to adjacent tools, approaches, or
-  schools of thought. A comparison table or matrix earns its place here.
-- **The mental model** — the one diagram or metaphor the rest of the book leans
-  on. (Choose a metaphor that holds up under pressure, not a decorative one.)
-- **Core concepts / anatomy** — the vocabulary and the parts, each defined once,
-  precisely.
+### 部：理解（Why / What）
+- **它是什么** —— 定义、边界、它*不是*什么（把常见的混淆就地击杀）。
+- **它为何存在 / 解决的问题** —— 痛点，用一个旧方式的失败实例讲出来。
+- **定位 / 全景** —— 它与相邻工具、方案或思想流派如何相关。一张对比表或矩阵在这里配得上它的
+  位置。
+- **心智模型** —— 全书其余部分所倚仗的那张图或那个比喻。（选一个扛得住压力的比喻，而非装饰
+  性的。）
+- **核心概念 / 解剖** —— 词汇表和部件，每个精确地定义一次。
 
-### Part: Foundations (What / How)
-- **Your first &lt;thing&gt;** — the minimal complete example, built step by step.
-- **The building blocks reference** — the core API / primitives / ingredients,
-  each with a tiny example.
-- **Configuration & options** — the knobs that matter, with defaults and when to
-  turn them.
-- **Inputs, outputs & contracts** — data shapes, interfaces, schemas, formats.
+### 部：基础（What / How）
+- **你的第一个 &lt;东西&gt;** —— 最小完整示例，一步步搭起来。
+- **构件参考** —— 核心 API / 原语 / 食材，每个配一个小例子。
+- **配置与选项** —— 真正要紧的那些旋钮，带默认值和何时拧。
+- **输入、输出与契约** —— 数据形状、接口、schema、格式。
 
-### Part: Recipes (How — the core of a cookbook)
-- **Worked recipe** chapters — each solves one realistic problem end to end:
-  problem statement → approach → full example → what the output looks like →
-  variations → when not to use this. **Aim for several of these; they are why
-  the book is called a cookbook.**
-- **Patterns / idioms** — reusable shapes that recur across recipes.
+### 部：配方（How —— 一本食谱的核心）
+- **完整配方**章 —— 每章端到端解决一个现实问题：问题陈述 → 思路 → 完整示例 → 输出长什么样 →
+  变体 → 何时不该用。**多来几章这种；这正是本书叫"食谱"的原因。**
+- **模式 / 惯用法** —— 在各配方间反复出现的可复用形状。
 
-### Part: Advanced / Mastery (Deeper)
-- **Edge cases & failure modes** — what breaks, why, and how you'd know.
-- **Performance / scaling / cost** — behavior under size and load.
-- **Anti-patterns & pitfalls** — the seductive wrong ways, named, with the fix.
-- **Debugging & troubleshooting** — how to diagnose when it goes wrong.
-- **Security / safety / correctness** — the hazards specific to the domain.
+### 部：进阶 / 精通（Deeper）
+- **边界情况与失败模式** —— 什么会崩、为什么、你怎么知道。
+- **性能 / 扩展 / 成本** —— 规模与负载下的行为。
+- **反模式与陷阱** —— 那些诱人的错路，点名，给出修正。
+- **调试与排错** —— 出错时如何诊断。
+- **安全 / 可靠 / 正确性** —— 该领域特有的危害。
 
-### Part: Ecosystem & Beyond (Deeper)
-- **Comparisons / alternatives** — honest head-to-head with neighbors.
-- **Extending it / building your own** — from consumer to author.
-- **Integration** — how it lives alongside the rest of a real stack.
-- **The road ahead** — where the topic is going (clearly marked as forward-looking).
+### 部：生态与延伸（Deeper）
+- **对比 / 替代方案** —— 与邻居坦诚正面对决。
+- **扩展它 / 自建** —— 从消费者到作者。
+- **集成** —— 它如何在一个真实技术栈的其余部分旁共存。
+- **前路** —— 主题的走向（明确标注为前瞻）。
 
-### Appendices (reference, not narrative)
-- **Quick reference / cheat sheet**, **Glossary**, **Sources & further reading**,
-  **FAQ**, **Decision tables / scenario index**.
+### 附录（参考，非叙事）
+- **速查表 / 备忘录**、**术语表**、**信源与延伸阅读**、**FAQ**、**决策表 / 场景索引**。
 
-## The planning method
+## 规划方法
 
-1. **Restate the topic as a learning goal.** "After this book the reader can ___."
-   That sentence decides what's in scope and what's an appendix.
+1. **把主题重述为一个学习目标。** "读完这本书，读者能 ___。"这一句决定了什么在范围内、什么
+   是附录。
 
-2. **Inventory what the sources actually support.** You can only write chapters
-   you have grounded material for (see `research-method.md`). A planned chapter
-   with no sources is a chapter you'll pad or fabricate — cut it or go find the
-   material first.
+2. **盘点信源真正能支撑什么。** 你只能写有接地材料的章（见 `research-method.md`）。一个没有
+   信源支撑的计划中的章，就是你会注水或臆造的章——砍掉它，或先去把材料找来。
 
-3. **Draft the parts along the Why→What→How→Deeper arc.** Assign each candidate
-   chapter to a part. Expect 4–6 parts and roughly 8–24 chapters depending on
-   topic breadth — but let the topic decide, not a quota.
+3. **沿 Why→What→How→Deeper 弧线起草各部。** 把每个候选章归入一部。预期 4–6 部、约 8–24
+   章，视主题广度而定——但让主题来决定，而非配额。
 
-4. **Add the topic-specific archetypes.** Every domain has 1–3 chapters no
-   generic list predicts (e.g. "the determinism rule" for a workflow engine,
-   "color theory" for a design tool, "the type system" for a language). These
-   are often the most valuable chapters. Find them by asking: *what does an
-   expert know that a novice keeps getting wrong?*
+4. **加上主题专属原型。** 每个领域都有 1–3 个通用清单预测不到的章（例如工作流引擎的"确定性
+   规则"、设计工具的"色彩理论"、一门语言的"类型系统"）。这些往往是最有价值的章。靠问来发现
+   它们：*专家知道而新手老搞错的，是什么？*
 
-5. **Order by dependency, then by motivation.** A chapter may only use concepts
-   introduced earlier. Among chapters with no dependency between them, lead with
-   the one that best motivates the next.
+5. **先按依赖排序，再按动机排序。** 一章只能用到更早引入的概念。在没有相互依赖的章之间，把
+   最能为下一章铺垫动机的那个放前面。
 
-6. **Pressure-test the outline before writing a word:**
-   - Could a reader who finishes Part *n* actually attempt Part *n+1*? (gap check)
-   - Does every chapter earn its place, or do two collapse into one? (redundancy)
-   - Is the *How* part the biggest? In a cookbook it should be. (balance)
-   - Remove the title of each chapter — can you still tell them apart by promise?
-     (distinctness)
+6. **写一个字之前先压测纲目：**
+   - 读完第 *n* 部的读者，真能上手第 *n+1* 部吗？（缺口检查）
+   - 每章都配得上它的位置吗，还是有两章该合成一章？（冗余）
+   - *How* 那部是最大的吗？在一本食谱里它应该是。（平衡）
+   - 去掉每章标题——你还能凭承诺把它们区分开吗？（可区分性）
 
-7. **Write a one-line promise for each chapter** ("what you can do after this").
-   If you can't, the chapter isn't ready to be in the plan.
+7. **为每章写一句一句话承诺**（"读完这章你能 ___"）。写不出，这章还没准备好进规划。
 
-8. **Confirm the plan with the user** before deep authoring (one round). Present
-   the parts, chapter titles, and one-line promises. Cheap to reorder now,
-   expensive later.
+8. **在深入写作前把规划与用户确认**（一轮）。呈上各部、章节标题、一句话承诺。现在重排很便宜，
+   以后很贵。
 
-## Sizing guidance
+## 篇幅指引
 
-- A **focused/narrow** topic: 1 part of understanding, 1 of foundations, a
-  strong recipes part, a short mastery part. ~8–12 chapters.
-- A **broad/deep** topic: the full arc, multiple recipe chapters, ecosystem and
-  authoring parts, several appendices. ~20–30 chapters.
-- Chapters should be **substantial but not sprawling** — roughly one sitting to
-  read. If a chapter needs three sittings, it's two chapters. If five chapters
-  read in two minutes each, some should merge.
+- **聚焦/狭窄**的主题：1 部理解、1 部基础、一个强力的配方部、一个短的精通部。约 8–12 章。
+- **宽泛/深**的主题：完整弧线、多个配方章、生态与自建部、若干附录。约 20–30 章。
+- 章应**厚实而不散漫**——大约一个坐下来的时间读完。若一章需要三个坐下来的时间，那是两章。
+  若五章各两分钟读完，有些该合并。
 
 ---
 
-## Inside a chapter — the internal structure template
+## 一章内部 —— 内部结构模板
 
-Knowing which chapters to write is half the job. You also need to know what one
-chapter looks like *inside*. The template below is distilled from a 29-chapter
-production cookbook and is battle-tested.
+知道写哪些章只是一半的活。你还得知道一章*内部*长什么样。下面的模板提炼自一本 29 章的量产
+食谱，是实战检验过的。
 
-### The five parts of one chapter
+### 一章的五部分
 
-**Hook → Body (N numbered sections) → Summary → Bridge → Next-chapter link.**
+**Hook → Body（N 个编号小节）→ Summary → Bridge → Next-chapter link。**
 
-> **This shape is the default, not a cage.** A 30-chapter book where every chapter
-> wears the identical skeleton reads as monotonous even when each is correct. Three
-> archetypes earn the right to break form — deploy them **2–4 times** across a big
-> book (track the count in `style-anchor.md`):
+> **五段式是默认，不是牢笼。** 一本 30 章的书若每章都套同一副骨架，即使每章都对，读起来也
+> 显得单调。有三种原型有资格破形——在一本大书里各部署 **2–4 次**（在 `style-anchor.md` 里
+> 记数）：
 >
-> - **Case study / postmortem** — one real incident as narrative: timeline → what
->   broke → root cause → fix → lesson. The story is the structure; drop the
->   numbered X.1/X.2 sections.
-> - **FAQ chapter** — a run of `### 问：…` + answer pairs. Right for a cluster of
->   independent "how do I …?" questions that don't form one linear argument.
-> - **Decision index / scenario table** — mostly one big decision table (场景 → 推荐
->   做法 → 关键设计 → 章节) that routes into the rest of the book. Prose is minimal by
->   design.
+> - **案例复盘 / 事后剖析** —— 一个真实事件作为叙事：时间线 → 什么崩了 → 根因 → 修复 → 教训。
+>   故事本身就是结构；丢掉 X.1/X.2 那种编号小节。
+> - **FAQ 章** —— 一串 `### 问：…` + 回答对。适合一簇互不相关、形不成一条线性论证的"怎么
+>   做……？"问题。
+> - **决策索引 / 场景表** —— 基本上是一张大决策表（场景 → 推荐做法 → 关键设计 → 章节），把
+>   读者路由进全书其余部分。正文按设计就极少。
 >
-> Everything else stays on the five-part template below.
+> 其余一律沿用下面的五段式模板。
 
-#### 1. Opening hook (required)
+#### 1. 开篇钩子（必需）
 
-Every chapter opens with a blockquote that does two things: state the thesis in
-one bolded sentence, then locate the chapter in the wider book in 1–2 sentences.
+每章以一个引用块开篇，做两件事：一句加粗陈述主张，再用 1–2 句把这一章定位到全书之中。
 
 ```markdown
 # 第 XX 章 · 章标题
@@ -180,7 +146,7 @@ one bolded sentence, then locate the chapter in the wider book in 1–2 sentence
 > [1–2 句话解释本章教什么、为什么在这个位置出现、需要什么前置知识（或指向哪一章）。]
 ```
 
-Worked example:
+完整示例：
 
 ```markdown
 # 第 01 章 · Workflow 是什么
@@ -190,12 +156,11 @@ Worked example:
 > 这一章不急着写复杂脚本。先把三件事讲透：它到底是个什么东西、运行时发生了什么、为什么值得专门花时间学——这是后面所有配方的地基。
 ```
 
-#### 2. Body — numbered sections (X.1, X.2, …)
+#### 2. Body —— 编号小节（X.1、X.2、…）
 
-Number sections as `chapter.section` (chapter 10's third section is `## 10.3
-标题`). Use H3 for sub-sections.
+小节编号为 `章.小节`（第 10 章的第三个小节是 `## 10.3 标题`）。子小节用 H3。
 
-**Section 1 follows a fixed pattern — start from something concrete:**
+**第一节遵循固定模式——从具体的东西开始：**
 
 ```markdown
 ## X.1 从一次真实的 [具体事物] 说起
@@ -205,21 +170,19 @@ Number sections as `chapter.section` (chapter 10's third section is `## 10.3
 [Then take it apart block by block]
 ```
 
-Why: readers build a mental model faster from an example than from a definition.
-Whole first, parts second.
+为什么：读者从一个例子建立心智模型，比从定义更快。先整体，后零件。
 
-**Later sections each add one layer of depth or introduce one new concept.**
-Common section types:
+**后续每节增加一层深度或引入一个新概念。** 常见小节类型：
 
-| Section type | Purpose | Core visual elements |
-|--------------|---------|---------------------|
-| Concept | Introduce one core concept | Table of fields + mermaid of structure + `tip` callout for the key insight |
-| Comparison | Help the reader pick between options | Comparison table + side-by-side mermaid + `info` callout with the decision rule |
-| Anti-pattern | What not to do | Anti-pattern table (name / problem / correct alternative) + `warn` callout |
-| Design notes | Justify the recipe's choices | Numbered bold list: **① 要点.** 1–3 sentence rationale |
-| Variants | Variations on the main recipe | A single `info` callout, each variant a bolded sub-title + 1–2 sentences |
+| 小节类型 | 用途 | 核心视觉元素 |
+|---------|------|-------------|
+| Concept（概念） | 引入一个核心概念 | 字段表 + 结构 mermaid + 点出关键洞察的 `tip` callout |
+| Comparison（对比） | 帮读者在选项间做选择 | 对比表 + 并排 mermaid + 含决策规则的 `info` callout |
+| Anti-pattern（反模式） | 不该做什么 | 反模式表（名称 / 问题 / 正确替代）+ `warn` callout |
+| Design notes（设计要点） | 论证配方的选择 | 加粗编号列表：**① 要点.** 1–3 句理由 |
+| Variants（变体） | 主配方的变奏 | 单个 `info` callout，每个变体一个加粗子标题 + 1–2 句 |
 
-*Comparison-section skeleton:*
+*对比小节骨架：*
 
 ```markdown
 ## X.N [选择 A] vs [选择 B]：核心取舍
@@ -241,7 +204,7 @@ Common section types:
 </div>
 ```
 
-*Variants-section skeleton:*
+*变体小节骨架：*
 
 ```markdown
 ## X.N 变体
@@ -257,7 +220,7 @@ Common section types:
 </div>
 ```
 
-#### 3. Chapter summary (required)
+#### 3. 本章小结（必需）
 
 ```markdown
 ## X.N 本章小结
@@ -269,19 +232,18 @@ Common section types:
 - [要点 5——桥接到下一章的主题]
 ```
 
-Discipline:
-- 4–7 bullets.
-- Each bullet is a **complete sentence**, not a fragment.
-- First bullet restates the chapter's thesis.
-- Last bullet pivots toward the next chapter.
-- Include numbers wherever they exist.
+纪律：
+- 4–7 条。
+- 每条是**完整句子**，不是片段。
+- 第一条重述本章主张。
+- 最后一条转向下一章。
+- 只要有数据，就带上。
 
-#### 4. Bridge paragraph (required, between summary and next-chapter link)
+#### 4. 桥接段落（必需，在小结与下章链接之间）
 
-Not "click here for the next chapter" — 1–2 prose sentences that tell the reader
-**why** to keep going. Engineer the page-turn.
+不是"点这里看下一章"——而是 1–2 句散文，告诉读者**为什么**要继续。把翻页工程化。
 
-Worked example:
+完整示例：
 
 ```markdown
 下一章换个角度：先不聊 API，聊聊**为什么**——Workflow 还没出现的时候，大家是怎么手动编排多 Agent 的、又踩过哪些坑，搞明白「确定性编排」到底解决了什么真问题。
@@ -289,9 +251,9 @@ Worked example:
 > 继续阅读：[第 02 章 · 为什么需要确定性编排](#/p1-02)
 ```
 
-#### 5. Cross-references (throughout the chapter)
+#### 5. 交叉引用（贯穿全章）
 
-Link as you write:
+边写边链：
 
 ```markdown
 （见第 X 章对此概念的基础讲解）        ← backward reference
@@ -299,10 +261,9 @@ Link as you write:
 （完整参考见附录 A）                  ← appendix reference
 ```
 
-Every chapter should reference at least two other chapters. This makes the book
-read as a **network**, not a string of isolated essays.
+每章至少应引用两章。这让全书读起来像一张**网**，而不是一串孤立文章。
 
-### Full chapter skeleton — copy and fill in
+### 完整一章骨架 —— 复制后填入
 
 ```markdown
 # 第 XX 章 · [标题]

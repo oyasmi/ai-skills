@@ -1,111 +1,86 @@
-# Review Rubric — The Reflection & Optimization Rounds
+# 评审准则 —— 反思与优化轮次
 
-A first draft is never the book. After assembling the full cookbook, run **at
-least one and at most three** review rounds. Each round: audit against the
-rubric, fix what you find, stop when a round surfaces only cosmetic nits.
+初稿永远不是成书。组装完整本食谱后，跑**至少一轮、至多三轮**审阅。每轮：按准则审，修掉发现
+的，当某轮只发现表面瑕疵时停。
 
-> Review the book *as a reader who paid for it*, not as the author who is proud
-> of it. Look for what's wrong, thin, or boring — not for reasons it's fine.
+> 以一个*为这本书付了钱的读者*视角评审，而非以自豪的作者视角。找哪里错了、哪里稀薄、哪里无
+> 聊——而不是找它"还行"的理由。
 
-## How to run a round
+## 如何跑一轮
 
-1. **Mechanical pass (always first, it's cheap and automated):**
-   - `node check.mjs` → expect `TOTAL ISSUES: 0` (links, anchors, images).
-   - `node quality-check.mjs` → no placeholders, no zero-structure body chapters,
-     sources appendix present; review any "thin" chapters for depth.
-   - `node build.mjs` → builds strict (no missing chapters) and inlines render libs.
-   - Open the built `index.html` and click through: cover renders, sidebar
-     navigates, code/tables/diagrams display, and it works from `file://` offline.
-2. **Content audit** against the dimensions below — read actual chapters, don't
-   spot-check titles.
-3. **Fix** everything found this round.
-4. **Decide:** if the round found substantive problems, do another (up to 3). If
-   it found only polish, stop.
+1. **机械检查（永远先做，便宜且自动化）：**
+   - `node check.mjs` → 期望 `TOTAL ISSUES: 0`（链接、锚点、图片）。
+   - `node quality-check.mjs` → 无占位符、无零结构正文章、信源附录在场；复核任何"稀薄"章是否
+     够深。
+   - `node build.mjs` → 严格构建（不缺章）并内联渲染库。
+   - 打开构建好的 `index.html` 点一遍：封面渲染、侧栏导航、代码/表格/图示显示，且从 `file://`
+     离线可用。
+2. **内容审计**对照下面的维度——读真实章节，别抽查标题。
+3. **修掉**本轮发现的一切。
+4. **决定：** 若本轮发现实质问题，再来一轮（最多 3 轮）。若只发现打磨问题，停。
 
-## The rubric
+## 准则
 
-### Truthfulness (highest priority — a single confident error costs trust)
-- [ ] Every factual claim traces to the grounding file or a cited source.
-- [ ] Evidence is graded honestly in the prose (verified vs reported vs inferred);
-      no second-hand claim is laundered into fact.
-- [ ] Examples labeled real vs illustrative; "real" outputs are actually real.
-- [ ] No invented APIs, numbers, quotes, dates, or capabilities. Re-verify
-      anything that "sounds right" but you can't point to a source for.
-- [ ] Sources appendix is complete; relative dates converted to absolute.
+### 真实性（最高优先级——一个自信的错误就损失信任）
+- [ ] 每条事实论断都能追溯到接地文件或一条已引证信源。
+- [ ] 证据在散文里被诚实地分级（已核实 vs 转述 vs 推断）；没有二手论断被洗成事实。
+- [ ] 示例标注真实 vs 演示；"真实"输出确实是真实的。
+- [ ] 没有编造的 API、数字、引文、日期或能力。任何"听着对"但你指不出信源的东西，重新核实。
+- [ ] 信源附录完整；相对日期已转成绝对日期。
 
-### Completeness & depth (the "thorough, not shallow" mandate)
-- [ ] Each chapter delivers on its one-line promise — reader can *do* the thing.
-- [ ] No chapter is padding: skims the surface, restates the obvious, or could be
-      cut with nothing lost.
-- [ ] Edge cases, failure modes, and trade-offs are present, not just the happy path.
-- [ ] The recipes/How part is the substantial core, with real worked examples.
-- [ ] No unfilled gaps papered over with vague prose.
+### 完整性与深度（"扎实而非浅薄"的硬要求）
+- [ ] 每章兑现它的一句话承诺——读者能*做到*那件事。
+- [ ] 没有章是注水：浮于表面、重述显然、或删了也不损失任何东西。
+- [ ] 边界情况、失败模式与取舍都在场，而非只有快乐路径。
+- [ ] 配方 / How 那部是厚实的核心，有真实的完整示例。
+- [ ] 没有用空话糊弄的未填空白。
 
-### Structure & flow
-- [ ] The Why→What→How→Deeper arc holds; parts are in a sensible order.
-- [ ] No chapter depends on a concept introduced later.
-- [ ] Chapters are distinct (no two that should merge); none that should split.
-- [ ] Cross-references connect related chapters where it helps the reader.
+### 结构与流转
+- [ ] Why→What→How→Deeper 弧线成立；各部顺序合理。
+- [ ] 没有章依赖一个更晚才引入的概念。
+- [ ] 各章可区分（没有两章该合并）；也没有该拆的。
+- [ ] 交叉引用在能帮读者的地方把相关章连起来。
 
-### Voice & readability
-- [ ] Reads like a person wrote it — AI-tell phrasing and hype removed
-      (see `writing-craft.md`).
-- [ ] Leads with the point; no throat-clearing or hollow summaries.
-- [ ] Has a point of view — recommends, doesn't just enumerate.
-- [ ] Rhythm varies; not every section the same shape.
+### 口吻与可读性
+- [ ] 读起来像人写的——AI 腔与吹嘘已清除（见 `writing-craft.md`）。
+- [ ] 直奔要点；没有清嗓子或空洞总结。
+- [ ] 有立场——推荐，而不只是罗列。
+- [ ] 节奏有变；并非每节同形。
 
-### Visual richness (a book, not a wall of text)
-- [ ] Every chapter alternates prose with tables / lists / callouts / diagrams.
-- [ ] Comparisons are tables, processes are diagrams, copyable things are code
-      cards — each form used where it fits, not decoratively.
-- [ ] Callouts are used with restraint (~1–3/chapter), not as highlighter spam.
-- [ ] Code examples are minimal, real, language-tagged; outputs shown where useful.
+### 视觉丰富度（一本书，而非一堵文字墙）
+- [ ] 每章都在散文与表格 / 列表 / callout / 图之间交替。
+- [ ] 对比用表，流程用图，可复制的东西用代码卡——每种形式用在该用的地方，而非装饰。
+- [ ] Callout 用得克制（每章约 1–3 个），而非高亮刷屏。
+- [ ] 代码示例最小、真实、带语言标签；有用处展示输出。
 
-### Presentation & deployment
-- [ ] Cover page: brand, tagline, kicker, lead, stats, and contents all render and
-      read well.
-- [ ] Built `index.html` opens directly from `file://` **with network disabled** —
-      prose, tables, code highlighting, and navigation all work (render libs are
-      inlined). Mermaid/fonts may degrade; nothing else should.
-- [ ] Folder serves correctly as static files (nginx / Pages); `.nojekyll` present.
-- [ ] **Visual spot-check** (open the built page; no Playwright needed): a couple of
-      content-heavy chapters look right — tables don't overflow ugly, code cards
-      scroll, diagrams render, callouts are styled, the right-hand TOC tracks
-      scrolling.
-- [ ] Responsive: at a narrow viewport the sidebar collapses to the menu button
-      and the body stays readable (resize the window or use device emulation).
+### 呈现与部署
+- [ ] 封面页：brand、tagline、kicker、lead、stats、目录都渲染且读起来顺。
+- [ ] 构建好的 `index.html` 在**断网**下从 `file://` 直接打开——散文、表格、代码高亮、导航都
+      工作（渲染库已内联）。Mermaid/字体可能降级；其余不该出问题。
+- [ ] 文件夹作为静态文件正确托管（nginx / Pages）；`.nojekyll` 在场。
+- [ ] **视觉抽查**（打开构建好的页；无需 Playwright）：挑几章内容密集的看看——表格没有难看地
+      溢出、代码卡能滚动、图渲染、callout 有样式、右侧目录随滚动跟踪。
+- [ ] 响应式：窄视口下侧栏折叠成菜单按钮，正文保持可读（缩窗或用设备模拟）。
 
-## The final round is adversarial (red-team reader)
+## 最后一轮是对抗式（红队读者）
 
-The rounds above audit *against a checklist* — necessary, but author-friendly. A
-polite paying reader finds typos; they don't find the defect that matters most in
-long AI-written prose: a chapter that *promises* to teach X and quietly delivers
-half of X. So make the **last** round adversarial. Drop both the proud author and
-the polite reader; read as a skeptic paid to **discredit the book**, hunting three
-specific kills:
+上面几轮对照*清单*审计——必要，但对作者友好。礼貌的付费读者找到错别字；他们找不到长 AI 散
+文里最重要的那种缺陷：一章*承诺*教 X，却悄悄只交付了 X 的一半。所以把**最后一轮**做成对抗
+式。放下自豪的作者和礼貌的读者；读作一个拿钱来**抹黑这本书**的怀疑者，猎三个具体目标：
 
-1. **Truthfulness kill** — find at least one assertion you cannot trace to
-   `grounding.md` or a cited source. If you find one, assume there are more and
-   re-audit that whole chapter.
-2. **Promise-vs-delivery kill** — find at least one chapter whose opening promise
-   ("读完你能 ___") the body does not actually make good on — it teaches part of the
-   thing and names it the whole thing. A checklist never catches this; only an
-   adversary reading *for* it does.
-3. **Usability kill** — take the reader profile from Phase 0, start from their
-   entry knowledge, read through to a "how-to" chapter, and check they could
-   actually *do the thing* end to end: no unstated prerequisite, no silent leap,
-   no missing step.
+1. **真实性击杀** —— 找出至少一条你无法追溯到 `grounding.md` 或已引证信源的断言。若找到一
+   条，假设还有更多，重审整章。
+2. **承诺 vs 交付击杀** —— 找出至少一章，其开篇承诺（"读完你能 ___"）正文并未真正兑现——它
+   教了那件事的一部分，却把这一部分称作全部。清单永远抓不到这个；只有为之而读的对立者能。
+3. **可用性击杀** —— 拿阶段 0 的读者画像，从他的入口知识出发，读到一个"怎么做"章，核对他能
+   否真正端到端*做成那件事*：没有未声明的前置、没有静默跳跃、没有缺失步骤。
 
-If your environment has subagents / Workflow, spawn the red-team reader as a
-**separate agent with a fresh context** and the explicit instruction to refute —
-an independent skeptic catches what the author's own eyes slide past. (If the book
-itself is about adversarial verification, the irony is the point: use it on the
-book.) Fold whatever survives into a fix pass, then re-run the mechanical checks.
+如果你的环境有 subagent / Workflow，把红队读者派生为一个**带全新上下文的独立 agent**，并明
+确指示去反驳——一个独立的怀疑者能抓到作者自己眼睛滑过去的东西。（若这本书本身讲的就是对抗
+式验证，这层反讽正是重点：用它来审这本书。）把活下来的发现折进一轮修复，再重跑机械检查。
 
-## What "done" looks like
+## "完成"长什么样
 
-A reader new to the topic can open the book, read front to back, and come away
-able to *do* the thing — trusting every claim, never bored, never lost. When a
-review round can only find wording nits, the book is done. If you've done three
-rounds and still find substantive problems, ship with an honest note to the user
-about what remains thin rather than silently leaving it.
+一个对主题陌生的人能打开这本书，从头读到尾，离开时能*做成*那件事——信任每一条论断，从不无
+聊，从不迷失。当一轮审阅只能找到措辞上的挑刺，书就完成了。若你跑了三轮仍发现实质问题，带着
+对剩下什么仍然稀薄的诚实说明交付，而不是悄悄留着它。

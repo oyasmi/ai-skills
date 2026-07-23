@@ -1,16 +1,20 @@
 ---
 name: cookbook-forge
 description: >-
-  Generate a deep, book-quality HTML "cookbook" (in Chinese) that teaches a topic
-  from scratch: research and compare sources, plan a custom chapter structure,
-  write thoroughly, and build a single-page HTML book that opens offline and
-  deploys anywhere. Use when the user asks to "make/forge/build a cookbook",
-  guide, handbook, primer, or field guide on a topic, or to turn a pile of
-  material into a polished, navigable book. Emphasizes depth, truthfulness, and
-  rich formatting (tables, diagrams, callouts, code).
+  生成一本深度、书品质的 HTML「食谱」（中文），从零讲透一个主题：研究并比对信源、
+  规划定制章节结构、深入撰写，并构建一本单页 HTML 书——离线可开、随处可部署。
+  当用户要求「做/生成/打造一本食谱（cookbook）」、指南、手册、入门书或领域实战指南，
+  或要把一堆素材整理成一本精良、可导航的书时使用。强调深度、真实性与丰富排版
+  （表格、图示、提示块、代码）。
 ---
 
 # cookbook-forge
+
+## 语言政策
+
+> 本 skill 的**指令层**（本文与 `references/`）与**产物层**（`assets/`）统一用中文。产物本身就是一本中文书，指令也用中文，便于内外一致与维护。
+>
+> 术语、文件名、路径、命令、代码标识符、CSS 类名、mermaid 语法等一律保持原文（如 `build.mjs`、`file:line`、`callout tip`、L1/L2/L3）。下文「纯中文」护栏只约束**成书产物**，不约束本 skill 的指令文件。
 
 ## 依赖安装
 
@@ -26,197 +30,156 @@ node --version
 macOS 的 `brew install node`、Debian/Ubuntu 的 `sudo apt install nodejs`）。
 本 skill 不需要 `npm install`，模板中的渲染库已经随 skill 一起提供。
 
-Turn a topic into a thorough, trustworthy, beautifully-typeset **Chinese**
-cookbook: a single-page HTML book a reader can use to learn a subject **quickly
-and completely**. Two things matter equally — the content must be **true and
-deep**, and the presentation must be **book-quality** (narrative, structure,
-typography).
+把一个主题锻造成一本扎实、可信、排版精美的**中文食谱**：一本单页 HTML 书，让读者
+**快速而完整**地学会一门知识。两件事同等重要——内容必须**真实且深入**，呈现必须是
+**书品质**（叙事感、结构、排版）。
 
-The output is `index.html` (plus editable `docs/` Markdown sources). After
-`build.mjs`, both the content and the render libraries (marked / DOMPurify /
-highlight.js) are inlined into the file, so it opens directly from the
-filesystem **offline** and also serves over nginx / GitHub Pages. (Mermaid
-diagrams and display fonts still come from a CDN when online and degrade
-gracefully offline.) The book is Chinese-only by design — keep all prose,
-titles, and metadata in Chinese.
+产物是 `index.html`（外加可编辑的 `docs/` Markdown 源文件）。跑完 `build.mjs` 后，
+内容和渲染库（marked / DOMPurify / highlight.js）都被内联进文件，所以能从文件系统
+**离线**直接打开，也能通过 nginx / GitHub Pages 托管。（Mermaid 图示和展示字体在线时
+仍走 CDN，离线时优雅降级。）这本书按设计是纯中文——所有正文、标题、元数据都保持中文。
 
-## When to use
+## 何时使用
 
-User asks to build/forge/generate a cookbook, guide, handbook, primer, or field
-guide on a topic — or to turn a pile of material into a polished, navigable book.
+用户要求构建/锻造/生成一本食谱、指南、手册、入门书或领域实战指南，或要把一堆素材
+整理成一本精良、可导航的书时。
 
-## The bundled assets
+## 随附资产
 
-This skill ships everything needed; paths are relative to this skill's folder:
+本 skill 自带所需的一切；路径相对于本 skill 文件夹：
 
-- `assets/template/` — the complete book scaffold to copy and fill:
-  - `index.html` — the reader app (editorial theme + engine). Don't rewrite it.
-  - `manifest.json` — book structure + cover metadata (heavily commented).
-  - `docs/*.md` — chapter sources (Markdown). Replace the stubs.
-  - `vendor/*.js` — the render libs build.mjs inlines for offline use. Keep them.
-  - `assets/images/` — put localized figures here (CSP blocks remote images).
-  - `build.mjs` — inlines content + render libs into `index.html` (strict: fails
-    on missing chapters; `--allow-missing` for drafts).
-  - `check.mjs` — link / anchor / image audit.
-  - `quality-check.mjs` — structural-density / placeholder / sources audit.
-  - `.nojekyll`, `README.md` — GitHub Pages support + deploy notes.
-- `assets/grounding-template.md` — the single-source-of-truth notes file to copy
-  into the working area and fill during research (reader profile incl. the reader's
-  wrong mental model, two-axis fact ledger — 信源强度 × spec/impl/behavior — sources).
-- `assets/style-anchor-template.md` — copy to `style-anchor.md` at scaffold: a one-
-  page consistency contract (frozen terms + metaphor + voice) re-read each writing
-  turn to stop cross-turn drift.
-- `references/` — read these before the matching phase:
-  - `research-method.md` — gather, compare, analyze sources deeply.
-  - `chapter-blueprint.md` — preset chapter palette + the planning method.
-  - `writing-craft.md` — voice, formatting, and the truthfulness discipline.
-  - `review-rubric.md` — the 1–3 reflection/optimization rounds.
+- `assets/template/` —— 完整的书脚手架，复制后填入：
+  - `index.html` —— 阅读器应用（编辑主题 + 引擎）。不要重写它。
+  - `manifest.json` —— 书的结构 + 封面元数据（注释详尽）。
+  - `docs/*.md` —— 章节源文件（Markdown）。替换掉占位文件。
+  - `vendor/*.js` —— `build.mjs` 为离线而内联的渲染库。保留它们。
+  - `assets/images/` —— 放本地化图片（CSP 拦截远程图片）。
+  - `build.mjs` —— 把内容 + 渲染库内联进 `index.html`（严格模式：缺章节即失败；草稿
+    用 `--allow-missing`）。
+  - `check.mjs` —— 链接 / 锚点 / 图片审计。
+  - `quality-check.mjs` —— 结构密度 / 占位符 / 信源审计。
+  - `.nojekyll`、`README.md` —— GitHub Pages 支持 + 部署说明。
+- `assets/grounding-template.md` —— 唯一事实源的笔记文件，复制到工作区，研究阶段填入
+  （读者画像含读者带进来的错误心智模型、两轴事实台账——信源强度 × spec/impl/behavior——
+  信源）。
+- `assets/style-anchor-template.md` —— 脚手架时复制为 `style-anchor.md`：一页纸的一致性
+  契约（冻结术语 + 贯穿比喻 + 口吻），每个写作 turn 开头重读，防止跨 turn 漂移。
+- `references/` —— 对应阶段开始前先读：
+  - `research-method.md` —— 深度地搜集、比对、分析信源。
+  - `chapter-blueprint.md` —— 预设章节调色板 + 规划方法。
+  - `writing-craft.md` —— 口吻、排版与真实性纪律。
+  - `review-rubric.md` —— 1–3 轮反思/优化。
 
-## The process
+## 流程
 
-Work through these phases in order. Use a task list to track them. **Do not rush
-to HTML** — most of the value is in research and writing; the template handles
-presentation.
+按以下阶段顺序推进。用任务清单跟踪进度。**不要急着上 HTML**——大部分价值在研究和写作
+里；呈现交给模板。
 
-### Phase 0 — Intake & scope
+### 阶段 0 —— 接洽与定范围
 
-Establish, asking the user only what you can't reasonably infer:
-- **The topic** and the **learning goal** ("after this book the reader can ___").
-- **The reader** — don't leave "the reader" a ghost. Pin down their role, their
-  *entry knowledge* (what they already know → how low to start), and above all the
-  **wrong mental model they most likely arrive with** — the misconception several
-  chapters exist to correct. Record this in `grounding.md`'s 读者画像 block; it's
-  the sharpest single lever on depth. Infer from the topic where you can; ask only
-  what you genuinely can't.
-- **Book type** — **A** (runnable topic: a tool/language/API — every example must
-  actually run, output shown) or **B** (codebase archaeology: an existing system —
-  verify by `file:line` cross-check + triangulation, not by running). This sets the
-  "how much is enough" bar (see `research-method.md`), so decide it now.
-- **Material**: did the user provide sources? If yes, treat them as primary and
-  **ask whether to also research the web to fill gaps** (see `research-method.md`).
-  If no material, you'll research from scratch.
-- **Depth/size**: default to a thorough book sized to the topic
-  (see sizing in `chapter-blueprint.md`); confirm if the user implied something
-  smaller or larger.
+只问你无法合理推断的问题，向用户确认：
+- **主题**与**学习目标**（"读完这本书，读者能 ___"）。
+- **读者**——别让"读者"是个空壳。钉住他的角色、*入口知识*（他已经懂什么 → 起点放多低），
+  以及最关键的——**他最可能带进来的错误心智模型**：那种需要用好几个章去纠正的误解。记入
+  `grounding.md` 的读者画像栏；这是决定深度的最强单一杠杆。能从主题推断的就推断；只问你
+  确实推断不了的。
+- **书型**——**A**（可运行主题：一个工具/语言/API——每个示例都必须真能跑、给出输出）或
+  **B**（代码库考古：一个既有系统——靠 `file:line` 交叉印证 + 三角验证，而不是靠跑）。这
+  决定了"够不够"的标准（见 `research-method.md`），所以现在就定。
+- **素材**：用户提供了信源吗？若有，把它们当一手，并**问是否也上网研究以填补空白**（见
+  `research-method.md`）。若无素材，你就从零研究。
+- **深度/篇幅**：默认是一本与主题相称的扎实书（见 `chapter-blueprint.md` 的篇幅指引）；
+  若用户暗示要更小或更大，确认一下。
 
-For genuine forks (e.g. supplement-with-web? scope?): if the host supports a
-structured question UI (such as `AskUserQuestion`), use it; otherwise ask a
-short plain-text question. Otherwise pick sensible defaults and state them.
+遇到真正的岔路（例如 是否上网补充？范围？）：若宿主支持结构化提问 UI（如
+`AskUserQuestion`），用它；否则问一个简短的纯文本问题。否则选合理默认并说明。
 
-### Phase 1 — Research (don't skimp)
+### 阶段 1 —— 研究（别偷工）
 
-Follow `references/research-method.md`. Cast wide, then go deep on canonical
-sources. Triangulate every non-trivial claim. Verify by running/testing whatever
-can be verified. Copy `assets/grounding-template.md` into your working area as
-**`grounding.md`** (kept out of the published book) and fill its fact ledger —
-each fact with source, evidence grade, and target chapter. This becomes the only
-source of factual claims and seeds the Sources appendix.
+按 `references/research-method.md`。先撒网，再在权威信源上深挖。每条非平凡论断都三角
+验证。能验证的尽量验证（跑/测/复现）。把 `assets/grounding-template.md` 复制到工作区，
+命名为 **`grounding.md`**（不随书发布），填入它的事实台账——每条事实带信源、证据等级、
+目标章节。它成为事实论断的唯一来源，并种下"信源索引"附录。
 
-The bar: enough grounded material to write every chapter without ever reaching
-for memory. This is where "thorough vs shallow" is decided.
+标准：有足够的接地材料，写每一章都不必动用记忆。这里决定了"扎实 vs 浅薄"。
 
-### Phase 2 — Plan the chapters
+### 阶段 2 —— 规划章节
 
-Follow `references/chapter-blueprint.md`. Start from the preset archetype palette,
-but **design a structure specific to this topic** — select, rename, reorder, and
-add the 1–3 topic-specific chapters no generic outline predicts. Order along the
-Why → What → How → Deeper arc and by dependency. Write a one-line promise per
-chapter. **Present the plan to the user for one round of confirmation** before
-deep authoring — reordering is cheap now, expensive later.
+按 `references/chapter-blueprint.md`。从预设原型调色板出发，但**为本主题设计专属结构**
+——挑选、重命名、重排，并加上 1–3 个通用大纲预测不到的主题专属章。沿 Why → What →
+How → Deeper 的弧线和依赖关系排序。为每章写一句一句话承诺。**把规划呈给用户确认一轮**
+再深入写作——现在重排很便宜，以后很贵。
 
-### Phase 3 — Scaffold
+### 阶段 3 —— 脚手架
 
-Copy `assets/template/` to the output location (default: a new folder in the
-user's working directory, e.g. `./<topic-slug>-cookbook/`). Keep `vendor/` and
-`assets/images/`. Then:
-- Fill in `manifest.json`: `site` block (brand, tagline, kicker, lead, stats,
-  dateline) and the `parts`/`chapters` from your plan. Give each chapter a stable
-  `id`, a `num`, a `title`, and a `file` path (e.g. `docs/p1-01-foo.md`). Remove
-  the `_comment`/`_help` keys (build.mjs also strips them, but keep it tidy).
-- Delete the template stub `docs/` files you're not using; create the empty
-  chapter files your manifest references.
-- Pick a **brand/metaphor** for the book if one fits the topic (the reference
-  book used weaving). A good through-metaphor lifts the whole book; a forced one
-  drags it. Optional — a clean descriptive title is fine.
-- Create **`style-anchor.md`** (copy `assets/style-anchor-template.md`) — a very
-  short, machine-facing consistency contract you re-read at the top of every
-  writing turn: the **frozen term table** (核心术语 → 选定中文译法 → 一句话定义), the
-  through-metaphor, three lines of voice, and the callout budget. A 100k-character
-  book written across dozens of turns drifts in terminology and tone unless every
-  turn re-anchors to one short sheet. Freeze the core terms here, *before* Chapter 1.
+把 `assets/template/` 复制到输出位置（默认：用户工作目录下的一个新文件夹，如
+`./<主题-slug>-cookbook/`）。保留 `vendor/` 和 `assets/images/`。然后：
+- 填 `manifest.json`：`site` 块（brand、tagline、kicker、lead、stats、dateline）和你的
+  规划里的 `parts`/`chapters`。给每章一个稳定的 `id`、`num`、`title`、`file` 路径（如
+  `docs/p1-01-foo.md`）。删掉 `_comment`/`_help` 键（`build.mjs` 也会剥离它们，但保持
+  整洁）。
+- 删掉不用的模板占位 `docs/` 文件；建好清单引用的空章节文件。
+- 如果主题合适，为书挑一个**品牌/比喻**（参考书用的是编织）。一个好的贯穿比喻能抬升整本
+  书；生硬的则会拖累。可选——一个干净的描述性标题也行。
+- 创建 **`style-anchor.md`**（复制 `assets/style-anchor-template.md`）——一份极短的、面向
+  机器的一致性契约，每个写作 turn 开头重读：**冻结术语表**（核心术语 → 选定中文译法 →
+  一句话定义）、贯穿比喻、三条口吻、以及 callout 配额。一本十几万字、跨几十个 turn 写成的
+  书，术语和语气会漂移，除非每个 turn 都回到这一页对齐。在第一章之前就把核心术语冻结在此。
 
-### Phase 4 — Write, deeply
+### 阶段 4 —— 深入写作
 
-A full book is **many chapters — often 100k+ characters — and it cannot be
-written in a single response.** Write **one chapter per step** (one chapter per
-turn), grounded in `grounding.md`, and tick it off your task list as you go. A
-chapter truncated mid-sentence, or thinned to "fit", is worse than one written
-in its own turn. Never attempt to emit the whole book at once.
+一本完整的书是**许多章——常常十几万字——无法在一次响应里写完。** 一步写一章（一 turn 一
+章），以 `grounding.md` 为依据，写完就在任务清单上勾掉。一个写到一半被截断、或为了"塞得
+下"而被稀释的章，比一个在专属 turn 里写成的章更糟。绝不要试图一次吐出整本书。
 
-**Before writing each chapter, re-read `style-anchor.md` and the `grounding.md`
-entries for that chapter** — this one habit is what keeps chapter 25 consistent
-with chapter 2 in term, metaphor, and voice.
+**每写一章前，重读 `style-anchor.md` 和该章在 `grounding.md` 里的条目**——这一个习惯，
+让第 25 章在术语、比喻、口吻上与第 2 章保持一致。
 
-Write each chapter (in Chinese) into its `docs/<id>.md`, following
-`references/writing-craft.md`. For every chapter:
-- Teach **one idea thoroughly**: problem → concrete example → mechanism → edge
-  cases → when *not* to use it.
-- Pull only from the grounding file; grade evidence in the prose; label examples
-  real vs illustrative.
-- **Alternate prose with structure** — tables for comparisons, mermaid for
-  processes, callouts for warnings/tips, code cards for anything copyable. A wall
-  of paragraphs is a failure even if every word is true.
-- Write in a real human voice; cut AI-tell phrasing and hype.
-- Cross-link related chapters (`#/<id>`). Localize any figure into
-  `assets/images/` and reference it locally (remote images are CSP-blocked).
+把每章（用中文）写进它的 `docs/<id>.md`，遵循 `references/writing-craft.md`。对每一章：
+- 讲透**一个想法**：问题 → 具体例子 → 机制 → 边界情况 → 何时不该用。
+- 只从接地文件取材；在正文里标注证据等级；示例标注真实 vs 演示。
+- **让正文与结构交替**——对比用表，流程用 mermaid，警告/技巧用 callout，可复制的用代码
+  卡。一堆纯段落即使字字属实也是失败。
+- 用真实的人类口吻写；砍掉 AI 腔和吹嘘。
+- 交叉链接相关章节（`#/<id>`）。任何图都本地化进 `assets/images/` 并本地引用（远程图片被
+  CSP 拦截）。
 
-Write the cover metadata, a strong preface, and the appendices (glossary,
-sources, quick reference) too — they're part of the book.
+封面元数据、有力的前言、以及附录（术语表、信源索引、速查表）也都要写——它们是书的一部分。
 
-### Phase 5 — Assemble & verify
+### 阶段 5 —— 组装与验证
 
-From the cookbook root:
-- `node check.mjs` → fix until `TOTAL ISSUES: 0` (links, anchors, images).
-- `node quality-check.mjs` → clear placeholders/no-structure/missing-sources;
-  review any "thin" chapters for depth.
-- `node build.mjs` → builds strict (aborts on missing chapters) and inlines
-  content + render libs.
-- Open the built `index.html` in a browser (or have the user open it), ideally
-  offline, and click through: cover, navigation, code/tables/diagrams.
+在 cookbook 根目录：
+- `node check.mjs` → 改到 `TOTAL ISSUES: 0`（链接、锚点、图片）。
+- `node quality-check.mjs` → 清掉占位符/无结构/缺信源；复核任何"稀薄"的章是否够深。
+- `node build.mjs` → 严格构建（缺章节即中止）并内联内容 + 渲染库。
+- 在浏览器里打开构建好的 `index.html`（或让用户打开），最好离线，点一遍：封面、导航、
+  代码/表格/图示。
 
-### Phase 6 — Reflect & optimize (1–3 rounds)
+### 阶段 6 —— 反思与优化（1–3 轮）
 
-Follow `references/review-rubric.md`. Run **at least one, at most three** review
-rounds. Each round: audit the whole book against the rubric (truthfulness,
-depth, structure, voice, visual richness, presentation), fix what you find,
-re-run `check.mjs`/`build.mjs`. Stop when a round surfaces only cosmetic nits.
-Review as a paying reader hunting for what's wrong — not as the proud author.
-Make the **final** round adversarial: a red-team reader (ideally a separate agent
-with fresh context, told to refute) hunting three kills — a claim not traceable to
-`grounding.md`, a chapter whose promise its body doesn't deliver, and a how-to a
-target reader couldn't actually follow end to end.
+按 `references/review-rubric.md`。跑**至少一轮、至多三轮**审阅。每轮：按 rubric 审全书
+（真实性、深度、结构、口吻、视觉丰富度、呈现），修掉发现的问题，重跑
+`check.mjs`/`build.mjs`。当某轮只发现表面瑕疵时停。以一个付了钱、专挑毛病的读者视角审阅，
+而不是以自豪的作者视角。把**最后一轮**做成对抗式：一个红队读者（理想情况下是带全新上下文
+的独立 agent，被指示去反驳）猎三个目标——一条无法追溯到 `grounding.md` 的论断、一个开篇
+承诺与正文不符的章、一个目标读者无法真正端到端照做的操作指南。
 
-### Phase 7 — Deliver
+### 阶段 7 —— 交付
 
-Hand over the cookbook folder. Tell the user, concisely:
-- How to read it: open `index.html` directly (works offline), or serve the folder
-  (nginx / GitHub Pages — `.nojekyll` is included; it's hash-routed so deep links
-  work).
-- How to edit: `docs/*.md` + `manifest.json`, then `node build.mjs`.
-- An honest note on anything that stayed thin or unverified, if applicable.
+把 cookbook 文件夹交给用户。简明地告诉用户：
+- 怎么读：直接打开 `index.html`（离线可用），或托管该文件夹（nginx / GitHub Pages——自带
+  `.nojekyll`；它是 hash 路由，深链可用）。
+- 怎么编辑：`docs/*.md` + `manifest.json`，然后 `node build.mjs`。
+- 若有任何仍然稀薄或未核实之处，诚实说明（如有）。
 
-## Guardrails
+## 护栏
 
-- **Truthfulness beats everything.** A confident error destroys the book's value.
-  When unsure, verify or mark "(unverified)" — never fabricate APIs, numbers,
-  quotes, or capabilities.
-- **Depth over volume.** More words isn't better; more *understanding per page*
-  is. Cut padding ruthlessly.
-- **Don't rewrite the engine.** `index.html`'s theme and JS are the proven,
-  accessible presentation layer — drive it through `manifest.json` and Markdown.
-  Only touch its CSS variables if the user wants a different accent color.
-- **Keep the build green.** Ship only after `check.mjs` and `quality-check.mjs`
-  pass, `build.mjs` succeeds (strict), and the built file opens from `file://`
-  offline.
-- **Chinese-only.** All prose, titles, and metadata are Chinese; don't reintroduce
-  a second language.
+- **真实性高于一切。** 一个自信的错误会毁掉整本书的价值。不确定时，核实或标注"（待核实）"
+  ——绝不编造 API、数字、引言或能力。
+- **深度优先于篇幅。** 字多不是更好；*每页传递更多理解* 才是。毫不留情地砍水分。
+- **别重写引擎。** `index.html` 的主题和 JS 是经过验证的无障碍呈现层——通过
+  `manifest.json` 和 Markdown 驱动它。只有当用户想要不同的强调色时才动它的 CSS 变量。
+- **保持构建绿色。** 等 `check.mjs` 和 `quality-check.mjs` 通过、`build.mjs` 成功（严格）、
+  构建好的文件能从 `file://` 离线打开，再交付。
+- **纯中文。** 所有正文、标题、元数据都是中文；不要再引入第二种语言。这条只约束**成书产物**
+  （见开头「语言政策」）。

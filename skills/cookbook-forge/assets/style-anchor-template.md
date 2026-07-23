@@ -34,5 +34,5 @@
 ## 4. Callout 配额 & 破形账本（防每章雷同）
 
 - 每章 callout ≤ 3：`tip`=正向指引 / `warn`=坑 / `info`=旁注与交叉引用。
-- **破形章记账**（授权见 `chapter-blueprint.md`「When to break the five-part shape」）：
+- **破形章记账**（授权见 `chapter-blueprint.md`「五段式是默认，不是牢笼」）：
   案例复盘 __ 次 · FAQ __ 次 · 决策索引 __ 次——一本大书各用 2–4 次，别扎堆也别一次不用。

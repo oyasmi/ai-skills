@@ -1,87 +1,64 @@
-# Writing Craft — Voice, Formatting, and Truthfulness
+# 写作工艺 —— 口吻、排版与真实性
 
-This is how a chapter earns the word "book." Three things: it tells the truth,
-it reads like a person wrote it, and it uses the page well.
+这一步决定一章配不配得上"书"这个字。三件事：说真话、读起来像人写的、用好版面。
 
-## 1. Truthfulness — the non-negotiable
+## 1. 真实性 —— 不可妥协
 
-A cookbook that's beautifully written and wrong is worse than useless. The whole
-value is that the reader can trust it.
+一本写得漂亮却错了的食谱，比无用更糟。全部价值在于读者能信任它。
 
-### Keep one grounding file
+### 只保一份接地文件
 
-Before writing chapters, distill your research into a single
-`grounding.md`-style notes file (kept out of the published book) that is **the
-only source of factual claims.** Every assertion in the book must trace to it or
-to a cited source. The discipline the reference project used:
+动笔写章之前，把研究蒸馏成一个 `grounding.md` 式的笔记文件（不随书发布），它是**事实论断的
+唯一来源**。书里每一条断言都必须能追溯到它或一条已引证的信源。参考项目用的纪律：
 
-> Never assert an API detail, number, behavior, or quote from memory. If it isn't
-> in the grounding file or a source, either go verify it or don't write it.
-> When unsure, write "(unverified)" rather than inventing certainty.
+> 绝不凭记忆断言一条 API 细节、数字、行为或引文。若它不在接地文件或某个信源里，要么去核实，
+> 要么别写。不确定时，写"（待核实）"，而不是凭空造出确信。
 
-### Grade your evidence
+### 给证据分级
 
-Not all claims are equal. Mark the strong ones as strong and the weak ones as
-weak, in the prose itself:
+不是所有论断都同等。在散文里就把强的标强、弱的标弱：
 
-- **Verified / first-hand** — you ran it, tested it, or it's in primary
-  documentation. State it plainly.
-- **Reported / second-hand** — a third party claims it and you couldn't confirm.
-  Attribute it: "X reports that…", "according to…". Never launder a claim into
-  fact by dropping the attribution.
-- **Inference / forward-looking** — your reasoning or a prediction. Mark it:
-  "this suggests…", "as of <date>…".
+- **Verified / 一手 ——** 你跑过、测过，或它在一级文档里。平直陈述。
+- **Reported / 二手 ——** 第三方声称、你没能复现。归因它："据 X……"、"根据……"。绝不要靠
+  去掉归因把一条论断洗成事实。
+- **Inference / 前瞻 ——** 你的推理或预测。标记它："这暗示……"、"截至 <日期>……"。
 
-When a worked example was actually run, say so and show the **real** output. When
-it's illustrative only, label it. Readers forgive "illustrative"; they don't
-forgive being misled.
+当一个完整示例是真跑过的，说明这一点，并展示**真实**输出。当它只是演示性的，标注它。读者
+原谅"演示"；他们不原谅被误导。
 
-### Cite, and make sources first-class
+### 引证，并把信源当作一等公民
 
-Keep a Sources appendix. Link claims to it where it matters. Convert relative
-dates ("last month") to absolute ones. Prefer primary sources over blog
-summaries; when you must use a secondary source, say it's secondary.
+保一个「信源索引」附录。在要紧处把论断链向它。把相对日期（"上个月"）转成绝对日期。优先用
+一手源而非博客摘要；当你不得不用二手源时，说明它是二手。
 
-## 2. Voice — write like a person, not a content farm
+## 2. 口吻 —— 像人写，不像内容农场
 
-The reference project spent a whole revision pass *removing* AI-tell phrasing.
-Match that bar.
+参考项目花了一整轮修订*删掉* AI 腔措辞。匹配那个标准。
 
-**Cut these reflexes:**
-- Hollow intensifiers and hype: "powerful", "seamless", "robust", "game-changing",
-  "unleash", "dive in", "delve", "in today's fast-paced world", "the world of".
-- Throat-clearing: "It's important to note that…", "Needless to say…",
-  "As we all know…". Just say the thing.
-- The "not only… but also", "it's not X, it's Y" rhetorical seesaw on repeat.
-- Summary paragraphs that restate what was just said without adding anything.
-- Symmetry for its own sake — every section the same length, every list exactly
-  three items, every chapter ending on an uplifting note.
+**砍掉这些条件反射：**
+- 空洞的强化词和吹嘘："强大的"、"无缝的"、"稳健的"、"改变游戏规则的"、"释放"、"深入"、
+  "探究"、"在如今快节奏的世界里"、"……的世界"。
+- 清嗓子："需要注意的是……"、"不用说……"、"众所周知……"。直接说事。
+- 反复使用的"不仅……而且"、"它不是 X，它是 Y"的修辞跷跷板。
+- 只是重述刚说过的话、不增加任何东西的总结段。
+- 为对称而对称——每节等长、每个清单正好三条、每章都以昂扬收尾。
 
-**Do these instead:**
-- **Lead with the point.** First sentence of a section says what it's about and
-  why it matters. No windup.
-- **Concrete over abstract.** "Returns `null` and skips the rest" beats "handles
-  the error gracefully." Show the number, the name, the line.
-- **Earn transitions.** Connect ideas because they're actually connected, not
-  with "Moreover" / "Furthermore" garnish.
-- **Vary rhythm.** Mix short, punchy sentences with longer ones. A one-line
-  paragraph is allowed and effective.
-- **Have a point of view.** Recommend. Say "prefer X" and why. A cookbook with
-  no opinions is a reference manual.
-- **Address the reader directly** ("you"), in the present tense.
-- **Use the topic's own metaphor consistently** if the book has one, but don't
-  force it into every paragraph.
+**改成这些：**
+- **直奔要点。** 一节的首句就说清它讲什么、为什么重要。不铺垫。
+- **具体胜过抽象。** "返回 `null` 并跳过其余"胜过"优雅地处理错误"。给出数字、名称、行号。
+- **挣来的过渡。** 因为想法真的相连才连接，而不是用"此外"/"而且"做装饰。
+- **变换节奏。** 短促有力的句子与长句交织。一段一行是允许的，且有效。
+- **要有立场。** 推荐。说"偏好 X"以及为什么。一本没有观点的食谱是一本参考手册。
+- **直接称呼读者**（"你"），用现在时。
+- **一致地使用主题自己的比喻**（如果书有一个），但别硬塞进每一段。
 
-A useful test: read a paragraph aloud. If it sounds like a press release or a
-listicle, rewrite it.
+一个有用的测试：大声读一段。如果它听起来像新闻稿或盘点文，重写。
 
 ### 中文行文五条具体技法
 
-The book this skill produces is in Chinese, so add a layer of Chinese-specific
-prose technique on top of the general voice rules above. These five techniques
-are distilled from a 29-chapter, 140k-character Chinese cookbook and are
-battle-tested; they are written in Chinese because they teach Chinese craft and
-the examples must be Chinese to be useful.
+本 skill 产出的书是中文，所以在上面通用口吻规则之上，再加一层中文专属的散文技法。这五条提炼
+自一本 29 章、14 万字的中文食谱，是实战检验过的；它们用中文写，因为它们教的是中文工艺，示
+例必须是中文才有用。
 
 **① 口语化但不随便。** 像跟同事在白板前讲解，不是写政府报告或论文摘要。
 - 好："先把三件事讲透"、"就这二十几行，几乎把关键点都碰到了"
@@ -105,61 +82,57 @@ the examples must be Chinese to be useful.
 - 好："产出 26 条发现 → 综合去重为 16 个问题"
 - 坏："多个 agent 并行运行"、"显著减少了 token 消耗"
 
-## 3. The page — use structure to carry meaning
+## 3. 版面 —— 用结构承载意义
 
-Dense prose is hard to learn from. The reference book alternates constantly
-between prose and visual structure. Every chapter should use several of these.
+密实的散文很难学得进去。参考书在散文与视觉结构之间不断交替。每章都应使用以下若干种。
 
-### Markdown the renderer supports
+### 渲染器支持的 Markdown
 
-Standard GitHub-flavored markdown, plus:
+标准 GitHub-flavored markdown，外加：
 
-**Callouts** — pull a point out of the flow. Write blank-line-separated markdown
-*inside* the div (the blank lines are required for the inner markdown to render):
+**提示块（callout）** —— 把一个要点从行文中拎出来。在 div *内部* 写用空行分隔的 markdown
+（空行是让内部 markdown 渲染所必需的）：
 
 ```html
 <div class="callout tip">
 
-**Tip.** Short, high-value guidance.
+**技巧。** 简短、高价值的指引。
 
 </div>
 ```
 
-Variants: `tip` (green, guidance), `warn` (amber, pitfalls/gotchas), `info`
-(orange, neutral aside). Use them sparingly — ~1–3 per chapter. If everything is
-a callout, nothing is.
+变体：`tip`（绿色，指引）、`warn`（琥珀色，陷阱/坑）、`info`（橙色，中性旁注）。节制使用
+——每章约 1–3 个。如果处处都是 callout，就没有 callout 了。
 
-**Common mistake — missing blank lines (WRONG):**
+**常见错误 —— 漏掉空行（错误）：**
 
 ```html
-<!-- WRONG: no blank lines, Markdown will not render inside the div -->
+<!-- 错误：没有空行，div 内的 Markdown 不会渲染 -->
 <div class="callout tip">
-**This bold will not render.** Neither will `this code`.
+**这个加粗不会渲染。** `这段代码` 也不会。
 </div>
 ```
 
-**Callout discipline:**
-- At most 1–2 callouts per section (a wall of highlights has no highlights).
-- 2–4 sentences of content per callout.
-- Open with a bolded lead phrase as a scannable hook.
-- Never nest callouts.
-- `tip` for positive guidance, `warn` for footguns, `info` for neutral asides
-  and cross-references.
+**Callout 纪律：**
+- 每节至多 1–2 个 callout（一墙高亮等于没有高亮）。
+- 每个 callout 2–4 句内容。
+- 以一个加粗的引导短语开头，作为可扫读的钩子。
+- 绝不嵌套 callout。
+- `tip` 用于正向指引，`warn` 用于脚枪，`info` 用于中性旁注与交叉引用。
 
-**Tables** — the best tool for comparison across shared dimensions. Reach for a
-table whenever you're about to write "A does X, while B does Y, and C does Z."
-Wide tables scroll horizontally inside the column automatically.
+**表格** —— 在共同维度上对比的最佳工具。每当你要写"A 做 X，而 B 做 Y，C 做 Z"时，就用表。
+过宽的表会在列内自动横向滚动。
 
-Four table types that recur across cookbook chapters — copy these templates:
+四种在食谱章节里反复出现的表格类型——复制这些模板：
 
-*Parameter / API reference table:*
+*参数 / API 参考表：*
 
 | 参数 | 必填 | 类型 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | `name` | 是 | string | — | 工作流标识 |
 | `model` | 否 | string | 继承 | 覆盖该 agent 的模型 |
 
-*Cross-comparison matrix:*
+*交叉对比矩阵：*
 
 | 维度 | 方案甲 | 方案乙 | 方案丙 |
 |------|--------|--------|--------|
@@ -167,30 +140,28 @@ Four table types that recur across cookbook chapters — copy these templates:
 | 状态 | 无状态 | 有状态 | 无状态 |
 | 成本 | 低 | 高 | 中 |
 
-*Scenario → recommendation decision table (core shape of an appendix cheat-sheet):*
+*场景 → 推荐决策表（附录速查表的核心形状）：*
 
 | 场景 | 推荐模式 | 关键设计 | 章节 |
 |------|----------|----------|------|
 | 多文件审查 | Pipeline + 对抗验证 | 逐文件流过，不设屏障 | 第 10 章 |
 | 方案探索 | 评委面板 | N 候选 × M 评委 | 第 14 章 |
 
-*Concept quick-reference (for chapter openers or glossaries):*
+*概念速查（用于章首或术语表）：*
 
 | 概念 | 一句话解释 |
 |------|-----------|
 | Pipeline | 各项独立流过各阶段，阶段间无屏障 |
 | Parallel | 所有任务并发执行，屏障等全部完成 |
 
-**Table discipline:**
-- First column short and scannable; bold the key term.
-- Left-align content (do not center).
-- Keep tables to 4–8 rows — split or move to an appendix beyond that.
+**表格纪律：**
+- 第一列短而可扫读；加粗关键术语。
+- 左对齐内容（不要居中）。
+- 表格保持 4–8 行——超过就拆分或移到附录。
 
-**Mermaid diagrams** — a fenced code block tagged `mermaid` renders to SVG. Use
-for pipelines (`flowchart`), sequences, hierarchies, state machines, decisions.
-A diagram should encode a relationship that's genuinely clearer than prose — not
-decorate. Keep node labels short; explain the meaning in the surrounding text
-(the alt text is auto-derived from labels, so labels should be meaningful).
+**Mermaid 图** —— 标 `mermaid` 的围栏代码块渲染成 SVG。用于流程（`flowchart`）、时序、层级、
+状态机、决策。一张图应编码一种确实比散文更清楚的关系——而非装饰。保持节点标签简短；在周围
+正文里解释含义（alt 文本自动从标签派生，所以标签应有意义）。
 
 ```
 ​```mermaid
@@ -201,9 +172,9 @@ flowchart TD
 ​```
 ```
 
-Three additional patterns that come up constantly:
+三种额外的高频模式：
 
-*Side-by-side comparison (for "approach A vs approach B"):*
+*并排对比（"方案 A vs 方案 B"）：*
 
 ```
 ​```mermaid
@@ -219,7 +190,7 @@ flowchart LR
 ​```
 ```
 
-*Sequence diagram (component interactions, protocols):*
+*时序图（组件交互、协议）：*
 
 ```
 ​```mermaid
@@ -235,7 +206,7 @@ sequenceDiagram
 ​```
 ```
 
-*Layered architecture (system hierarchies, mechanism relationships):*
+*分层架构（系统层级、机制关系）：*
 
 ```
 ​```mermaid
@@ -259,69 +230,59 @@ flowchart TD
 ​```
 ```
 
-**Mermaid discipline:**
-- One diagram, one concept. Don't cram everything into one picture.
-- Keep palette consistent: `fill:#eef` (blue), `fill:#efe` (green), `fill:#fee` (red).
-- Node labels must read sensibly out of context.
-- Every diagram needs a sentence of prose before or after to explain it.
-- More than 8–10 nodes? Split into two diagrams.
+**Mermaid 纪律：**
+- 一图一概念。别把所有东西塞进一张图。
+- 保持配色一致：`fill:#eef`（蓝）、`fill:#efe`（绿）、`fill:#fee`（红）。
+- 节点标签脱离上下文也要读得通。
+- 每张图前后都要有一句散文解释它。
+- 超过 8–10 个节点？拆成两张图。
 
-**Code cards** — every fenced code block gets a language label, syntax
-highlighting, and a copy button. Tag the language (` ```python `, ` ```bash `,
-` ```json `). Prefer **minimal, real, runnable** examples over long ones. Show
-the output too, in its own block, when it teaches something.
+**代码卡** —— 每个围栏代码块都会获得一个语言标签、语法高亮、和一个复制按钮。标注语言
+（` ```python `、` ```bash `、` ```json `）。优先**最小、真实、可运行**的示例，而非冗长的。
+能教会东西时，也把输出放进它自己的代码块展示。
 
-**Block quotes** — render with an accent rule. Good for an epigraph opening a
-chapter, or to set off a key principle.
+**引用块** —— 渲染为带强调竖线。适合为一章开一个题词，或单独框出一条关键原则。
 
-**Lists** — for steps (ordered) or parallel items (unordered). Don't use a list
-where a sentence is clearer, and don't bury a real comparison in a bullet list
-that wants to be a table.
+**列表** —— 用于步骤（有序）或并列项（无序）。当一句话更清楚时别用列表，也别把一个本该是表
+的真对比埋进一个项目符号列表。
 
-### Rhythm of a strong chapter
+### 一章强健的节奏
 
-- Open with the point or a vivid framing (a quote, a failure story, a question).
-- Introduce one idea, show it concretely, then complicate it (edge cases).
-- Break every few hundred words with a heading, table, diagram, or callout.
-- A heading roughly every screen — the right-hand TOC is built from `##`/`###`,
-  so headings double as the reader's map.
-- End with something that *advances* the reader: when not to use this, what to
-  read next, a summary table of the decisions — not a hollow recap.
+- 以要点或生动的开场开篇（一句引文、一个失败故事、一个问题）。
+- 引入一个想法，具体展示它，再让它复杂化（边界情况）。
+- 每隔几百字用一个标题、表格、图或 callout 打断。
+- 大约每屏一个标题——右侧目录由 `##`/`###` 构建，所以标题同时是读者的地图。
+- 以某种*推进*读者的东西收尾：何时不该用、接下来读什么、一张决策小结表——而非空洞的复述。
 
-### Headings & anchors
+### 标题与锚点
 
-- Use `#` once (the chapter title). Structure the body with `##` and `###`.
-- The TOC and anchor links come from `##`/`###` only. Keep them short and
-  descriptive; avoid duplicate heading text within a chapter (anchors get
-  de-duplicated with a numeric suffix, which makes for ugly links).
+- `#` 只用一次（章标题）。用 `##` 和 `###` 组织正文。
+- 目录和锚点链接只来自 `##`/`###`。保持它们短且具描述性；避免一章内出现重复的标题文字
+  （锚点会被去重并加数字后缀，造成难看的链接）。
 
-### Cross-references
+### 交叉引用
 
-- Link to another chapter with `#/<chapter-id>` (e.g. `#/p3-10`).
-- Link within the same chapter to a heading with `#<slug-of-heading>`.
-- Run `node check.mjs` — it catches broken anchors, bad cross-page links, raw
-  `.md` links, and remote/missing images before they ship. Then run
-  `node quality-check.mjs` for structural density, leftover placeholders, and the
-  sources appendix.
+- 用 `#/<chapter-id>` 链向另一章（如 `#/p3-10`）。
+- 用 `#<slug-of-heading>` 在同一章内链向某标题。
+- 跑 `node check.mjs`——它在交付前抓出断锚、坏跨页链接、原始 `.md` 链接、远程/缺失图片。
+  然后跑 `node quality-check.mjs` 查结构密度、残留占位符、以及信源附录。
 
-### Per-chapter visual density checklist
+### 每章视觉密度清单
 
-- [ ] At least one mermaid diagram.
-- [ ] At least one table (reference-style chapters should have several).
-- [ ] 1–3 callouts — no more.
-- [ ] Code blocks present whenever the topic touches code or configuration.
-- [ ] No run of plain prose longer than ~500 characters without a visual break.
-- [ ] Every diagram and table has a short prose explanation beside it.
+- [ ] 至少一张 mermaid 图。
+- [ ] 至少一张表（参考型章节应有数张）。
+- [ ] 1–3 个 callout——不超过。
+- [ ] 凡主题触及代码或配置处，都有代码块。
+- [ ] 没有连续超过约 500 字的纯散文而不加视觉断点。
+- [ ] 每张图、每张表旁边都有一句简短散文解释。
 
-## 4. Images
+## 4. 图片
 
-The page's CSP allows only **local** images (`img-src 'self' data:`) — a remote
-`![](https://…)` will silently fail to load. So:
+页面 CSP 只允许**本地**图片（`img-src 'self' data:`）——一个远程 `![](https://…)` 会静默
+加载失败。所以：
 
-- Download every figure into `assets/images/` and reference it locally:
-  `![alt](assets/images/foo.png)`. `check.mjs` flags remote and missing images.
-- Record each image's **source and license** in the grounding notes / Sources
-  appendix. Don't ship an image you don't have the right to use.
-- Always write meaningful alt text — it's both accessibility and a caption.
-- Prefer a diagram you author (mermaid, which needs no asset and themes itself)
-  over a borrowed screenshot when the content allows it.
+- 把每张图下载进 `assets/images/` 并本地引用：`![alt](assets/images/foo.png)`。`check.mjs`
+  会标记远程和缺失图片。
+- 在接地笔记 / 「信源索引」附录里记录每张图的**来源与许可**。别发布你没有权使用的图。
+- 永远写有意义的 alt 文本——它既是无障碍，也是说明。
+- 当内容允许时，优先用你自制的图（mermaid，无需资产且自动配主题），而非借来的截图。
