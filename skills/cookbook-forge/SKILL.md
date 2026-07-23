@@ -61,7 +61,11 @@ This skill ships everything needed; paths are relative to this skill's folder:
   - `quality-check.mjs` — structural-density / placeholder / sources audit.
   - `.nojekyll`, `README.md` — GitHub Pages support + deploy notes.
 - `assets/grounding-template.md` — the single-source-of-truth notes file to copy
-  into the working area and fill during research (fact ledger + sources).
+  into the working area and fill during research (reader profile incl. the reader's
+  wrong mental model, two-axis fact ledger — 信源强度 × spec/impl/behavior — sources).
+- `assets/style-anchor-template.md` — copy to `style-anchor.md` at scaffold: a one-
+  page consistency contract (frozen terms + metaphor + voice) re-read each writing
+  turn to stop cross-turn drift.
 - `references/` — read these before the matching phase:
   - `research-method.md` — gather, compare, analyze sources deeply.
   - `chapter-blueprint.md` — preset chapter palette + the planning method.
@@ -78,6 +82,16 @@ presentation.
 
 Establish, asking the user only what you can't reasonably infer:
 - **The topic** and the **learning goal** ("after this book the reader can ___").
+- **The reader** — don't leave "the reader" a ghost. Pin down their role, their
+  *entry knowledge* (what they already know → how low to start), and above all the
+  **wrong mental model they most likely arrive with** — the misconception several
+  chapters exist to correct. Record this in `grounding.md`'s 读者画像 block; it's
+  the sharpest single lever on depth. Infer from the topic where you can; ask only
+  what you genuinely can't.
+- **Book type** — **A** (runnable topic: a tool/language/API — every example must
+  actually run, output shown) or **B** (codebase archaeology: an existing system —
+  verify by `file:line` cross-check + triangulation, not by running). This sets the
+  "how much is enough" bar (see `research-method.md`), so decide it now.
 - **Material**: did the user provide sources? If yes, treat them as primary and
   **ask whether to also research the web to fill gaps** (see `research-method.md`).
   If no material, you'll research from scratch.
@@ -124,6 +138,12 @@ user's working directory, e.g. `./<topic-slug>-cookbook/`). Keep `vendor/` and
 - Pick a **brand/metaphor** for the book if one fits the topic (the reference
   book used weaving). A good through-metaphor lifts the whole book; a forced one
   drags it. Optional — a clean descriptive title is fine.
+- Create **`style-anchor.md`** (copy `assets/style-anchor-template.md`) — a very
+  short, machine-facing consistency contract you re-read at the top of every
+  writing turn: the **frozen term table** (核心术语 → 选定中文译法 → 一句话定义), the
+  through-metaphor, three lines of voice, and the callout budget. A 100k-character
+  book written across dozens of turns drifts in terminology and tone unless every
+  turn re-anchors to one short sheet. Freeze the core terms here, *before* Chapter 1.
 
 ### Phase 4 — Write, deeply
 
@@ -132,6 +152,10 @@ written in a single response.** Write **one chapter per step** (one chapter per
 turn), grounded in `grounding.md`, and tick it off your task list as you go. A
 chapter truncated mid-sentence, or thinned to "fit", is worse than one written
 in its own turn. Never attempt to emit the whole book at once.
+
+**Before writing each chapter, re-read `style-anchor.md` and the `grounding.md`
+entries for that chapter** — this one habit is what keeps chapter 25 consistent
+with chapter 2 in term, metaphor, and voice.
 
 Write each chapter (in Chinese) into its `docs/<id>.md`, following
 `references/writing-craft.md`. For every chapter:
@@ -167,6 +191,10 @@ rounds. Each round: audit the whole book against the rubric (truthfulness,
 depth, structure, voice, visual richness, presentation), fix what you find,
 re-run `check.mjs`/`build.mjs`. Stop when a round surfaces only cosmetic nits.
 Review as a paying reader hunting for what's wrong — not as the proud author.
+Make the **final** round adversarial: a red-team reader (ideally a separate agent
+with fresh context, told to refute) hunting three kills — a claim not traceable to
+`grounding.md`, a chapter whose promise its body doesn't deliver, and a how-to a
+target reader couldn't actually follow end to end.
 
 ### Phase 7 — Deliver
 

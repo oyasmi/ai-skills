@@ -36,8 +36,14 @@ should require a concept the reader hasn't met yet.
 Pick from these; rename them in the topic's own language. Not all apply.
 
 ### Front matter
-- **Preface / Why this book** — the thesis, who it's for, how to read it, an
-  honest statement of scope and sourcing.
+- **Preface / Why this book** — the thesis, who it's for, how to read it, and a
+  **structured credibility statement**: (a) the source base (which docs / which
+  commit), (b) the chapters you know are weak, (c) what stayed explicitly
+  unverified, (d) the freshness window. A preface that claims no limitations is the
+  most suspect kind — `quality-check.mjs` warns when it finds no honesty marker.
+  The cover **stats** carry this honesty too: make them specific and true
+  (『基于 master@8a24f46』『27 个源码模块逐行读过』), never vanity numbers
+  (『40+ 信源』『业界领先』).
 - **The 60-second tour** — one end-to-end example up front, so the reader sees
   the whole shape before the details.
 
@@ -144,6 +150,22 @@ production cookbook and is battle-tested.
 ### The five parts of one chapter
 
 **Hook → Body (N numbered sections) → Summary → Bridge → Next-chapter link.**
+
+> **This shape is the default, not a cage.** A 30-chapter book where every chapter
+> wears the identical skeleton reads as monotonous even when each is correct. Three
+> archetypes earn the right to break form — deploy them **2–4 times** across a big
+> book (track the count in `style-anchor.md`):
+>
+> - **Case study / postmortem** — one real incident as narrative: timeline → what
+>   broke → root cause → fix → lesson. The story is the structure; drop the
+>   numbered X.1/X.2 sections.
+> - **FAQ chapter** — a run of `### 问：…` + answer pairs. Right for a cluster of
+>   independent "how do I …?" questions that don't form one linear argument.
+> - **Decision index / scenario table** — mostly one big decision table (场景 → 推荐
+>   做法 → 关键设计 → 章节) that routes into the rest of the book. Prose is minimal by
+>   design.
+>
+> Everything else stays on the five-part template below.
 
 #### 1. Opening hook (required)
 

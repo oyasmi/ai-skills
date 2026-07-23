@@ -75,6 +75,33 @@ rubric, fix what you find, stop when a round surfaces only cosmetic nits.
 - [ ] Responsive: at a narrow viewport the sidebar collapses to the menu button
       and the body stays readable (resize the window or use device emulation).
 
+## The final round is adversarial (red-team reader)
+
+The rounds above audit *against a checklist* — necessary, but author-friendly. A
+polite paying reader finds typos; they don't find the defect that matters most in
+long AI-written prose: a chapter that *promises* to teach X and quietly delivers
+half of X. So make the **last** round adversarial. Drop both the proud author and
+the polite reader; read as a skeptic paid to **discredit the book**, hunting three
+specific kills:
+
+1. **Truthfulness kill** — find at least one assertion you cannot trace to
+   `grounding.md` or a cited source. If you find one, assume there are more and
+   re-audit that whole chapter.
+2. **Promise-vs-delivery kill** — find at least one chapter whose opening promise
+   ("读完你能 ___") the body does not actually make good on — it teaches part of the
+   thing and names it the whole thing. A checklist never catches this; only an
+   adversary reading *for* it does.
+3. **Usability kill** — take the reader profile from Phase 0, start from their
+   entry knowledge, read through to a "how-to" chapter, and check they could
+   actually *do the thing* end to end: no unstated prerequisite, no silent leap,
+   no missing step.
+
+If your environment has subagents / Workflow, spawn the red-team reader as a
+**separate agent with a fresh context** and the explicit instruction to refute —
+an independent skeptic catches what the author's own eyes slide past. (If the book
+itself is about adversarial verification, the irony is the point: use it on the
+book.) Fold whatever survives into a fix pass, then re-run the mechanical checks.
+
 ## What "done" looks like
 
 A reader new to the topic can open the book, read front to back, and come away

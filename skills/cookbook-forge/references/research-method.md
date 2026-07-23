@@ -13,6 +13,14 @@ where "thorough" is won or lost — **do not skimp.**
 - **Primary over secondary.** Official docs, specs, source code, the thing
   itself > tutorials and blog posts > forum hearsay. Go upstream until you hit
   the source of truth.
+- **Intent vs reality — the axis that matters most for a codebase.** Design docs,
+  PRDs, and architecture write-ups state *intent* ("应当如此"); source code and
+  runtime state *reality* ("实际如此"). On a real system they drift apart
+  constantly. When they conflict, the prose follows the **source**, and the
+  conflict itself goes in the book ("设计文档称 X，但 master @abc123 实际是 Y" — often
+  the single most valuable paragraph in a chapter). Grade every codebase L1 claim
+  with a `file:line` or commit; no locator, no L1. (See the two-axis grading —
+  信源强度 × 层面 — in `grounding-template.md`.)
 - **Triangulate.** Don't trust a single source for any non-trivial claim. Find
   it stated (or contradicted) in 2–3 independent places. Where sources disagree,
   that disagreement is itself something to surface in the book.
@@ -96,3 +104,15 @@ Enough to write every planned chapter from grounded notes without ever reaching
 for memory or guesswork. If you find yourself about to write a sentence you
 can't trace to a source or a test, stop — that's the signal to research more,
 not to write more. Depth of research, not volume of prose, is the goal.
+
+**Two book types set two different bars for "enough"** (decide which in Phase 0):
+
+- **Type A · runnable topic** (a tool, language, API): "enough" means every code
+  example actually ran and you captured its **real output**. Verification =
+  execution; described output doesn't count.
+- **Type B · codebase archaeology** (an existing internal system): you usually
+  can't "just run it." "Enough" means every non-trivial claim is cross-checked at
+  `file:line` and triangulated across ≥2 sources (source + design doc + runtime).
+  Cross-reference *is* the verification here — don't fake Type-A rigor by claiming
+  you ran things you didn't, and don't apologize for a book that's honestly
+  archaeology.
