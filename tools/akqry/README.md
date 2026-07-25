@@ -25,9 +25,20 @@ akqry describe stock_zh_a_hist --json
 akqry describe stock_zh_a_hist --probe --arg symbol=000001 --arg start_date=20250101 --arg end_date=20250110 --json
 ```
 
-`search` matches Chinese queries through character bigrams and a synonym table, because AkShare's own wording rarely matches the wording of a question — 每日行情 versus 历史行情. Results are ranked by how many query terms a record covers, then by weight, and each result carries the description, data source and URL parsed from the docstring, so no documentation checkout is required. `--full` returns complete records; `match_reasons` explains every hit.
+`search` matches Chinese queries through a synonym table, character bigrams, and single characters for two-character words, because AkShare's own wording rarely matches the wording of a question — 每日行情 versus 历史行情, 停复牌 versus 停牌. Every hit is then weighted by how rare its wording is among the candidates: 个股 expands to `stock`, which is in the name of nearly half the catalog and must not drown out 资金流向. Each result carries the description, data source and URL parsed from the docstring, so no documentation checkout is required. `--full` returns complete records; `match_reasons` explains every hit.
 
-`describe` reports the runtime signature plus, per parameter, whether it is required, its default, and the values the docstring documents. `--probe` calls the interface once and reports the real columns, dtypes, row count and date range — use it to learn column names before committing to `--require-columns`.
+The envelope answers "did this cover my question?" as well as "what matched":
+
+```jsonc
+{"result": {"total_matched": 505, "candidates": 1096,
+            "unmatched_terms": ["停牌"],          // nothing in the catalog matched this
+            "hints": ["..."],                     // what to try next
+            "results": [{"name": "...", "coverage": 0.61, "score": 34.2, "match_reasons": []}]}}
+```
+
+`unmatched_terms` is the important one: results that silently ignore the most specific word of a query are worse than no results. Records are ranked by `coverage` — the share of the query's specificity they account for — and then by `score`.
+
+`describe` reports the runtime signature plus, per parameter, whether it is required, its default, and the values the docstring documents. `--probe` calls the interface once and reports the real columns, dtypes, row count and date range — use it to learn column names before committing to `--require-columns`. Probes accept `--cache-dir`, since the same schema question gets asked before every analysis.
 
 ## Retrieval
 
@@ -47,10 +58,10 @@ Several symbols in one process, which pays the AkShare import once:
 akqry fetch stock_zh_a_hist \
   --for-each symbol=000001,600519,300750 \
   --arg start_date=20250101 --arg end_date=20250630 --arg adjust=qfq \
-  --output '/tmp/a/{}.parquet' --json
+  --delay 0.5 --output '/tmp/a/{}.parquet' --json
 ```
 
-`{}` is required in a batch `--output` and is replaced by the value. Each artifact gets its own sidecar. One failing value does not discard the others: the envelope reports `partial_failure` and lists what succeeded.
+`{}` is required in a batch `--output` and is replaced by the value. Each artifact gets its own sidecar, stamped with when *its own* call finished. One failing value does not discard the others: the envelope reports `partial_failure` and lists what succeeded. `--delay` spaces the calls out, because upstream sites throttle a burst far more readily than a trickle.
 
 Reuse identical queries while iterating on an analysis, instead of hitting a throttled endpoint again:
 
@@ -68,7 +79,7 @@ A served entry keeps the timestamp of the *original* retrieval and is marked `ca
 - Parquet is preferred for typed artifacts; JSONL preserves leading-zero codes without optional dependencies. CSV is for interoperability and must be read with the sidecar schema in mind. A missing parquet engine fails before the query, not after it.
 - `--require-columns` is the caller's schema-drift guard; `schema_fingerprint` in the sidecar detects drift after the fact.
 - `fetch` refuses an empty result, and refuses to overwrite an existing artifact or sidecar, unless told otherwise. `--no-sidecar` deletes a sidecar that would otherwise misdescribe overwritten data.
-- Data calls run in a worker process. `--timeout` is the per-call budget (a batch multiplies it by the number of calls) and retryable transport failures are retried up to `--retries` times. The worker reports incrementally, so a batch that times out keeps what already completed.
+- Data calls run in a worker process. `--timeout` is one call's budget, retries included, and it is enforced per call: one unresponsive symbol fails on its own instead of spending the budget of everything queued behind it. Retryable transport failures are retried up to `--retries` times. The worker reports incrementally, so a batch that dies keeps what already completed.
 
 ## Error codes
 

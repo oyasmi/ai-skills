@@ -18,7 +18,7 @@ index_zh_a_hist_min_em
 stock_zh_index_spot_em
 stock_zh_index_daily
 stock_zh_index_daily_em
-index_hist_csindex
+stock_zh_index_hist_csindex
 index_stock_cons
 index_stock_info
 ```

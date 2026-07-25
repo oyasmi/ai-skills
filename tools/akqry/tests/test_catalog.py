@@ -66,31 +66,75 @@ def akshare_catalog() -> dict[str, dict]:
     return discover(load_akshare(None))
 
 
+def _names(catalog: dict[str, dict], query: str, domain: str | None, limit: int = 5) -> list[str]:
+    return [record["name"] for record in search(catalog, query, domain, limit)["results"]]
+
+
 @pytest.mark.parametrize(
     ("query", "domain", "expected"),
     [
         # The wording an analyst types ("历史行情") differs from AkShare's ("每日行情").
-        ("历史行情", "a-share", "stock_zh_a_hist"),
-        ("A股 历史行情", None, "stock_zh_a_hist"),
-        ("股票 日线", None, "stock_zh_a_hist"),
-        ("港股 行情", "hk-share", "stock_hk_hist"),
-        ("ETF 历史行情", "etf", "fund_etf_hist_em"),
-        ("ETF 实时行情", "etf", "fund_etf_spot_em"),
-        ("行业板块 成份股", "board", "stock_board_industry_cons_em"),
-        ("基金 持仓", "fund", "fund_portfolio_hold_em"),
-        ("指数 历史行情", "index", "index_zh_a_hist"),
-        ("港股通 成份", None, "stock_hk_ggt_components_em"),
+        ("历史行情", "a-share", {"stock_zh_a_hist"}),
+        ("A股 历史行情", None, {"stock_zh_a_hist"}),
+        # Either vendor's daily bars answers this; the point is that one of them wins.
+        ("股票 日线", None, {"stock_zh_a_hist", "stock_zh_a_daily"}),
+        ("港股 行情", "hk-share", {"stock_hk_hist"}),
+        ("ETF 历史行情", "etf", {"fund_etf_hist_em"}),
+        ("ETF 实时行情", "etf", {"fund_etf_spot_em"}),
+        ("行业板块 成份股", "board", {"stock_board_industry_cons_em"}),
+        ("基金 持仓", "fund", {"fund_portfolio_hold_em"}),
+        ("指数 历史行情", "index", {"index_zh_a_hist"}),
+        ("港股通 成份", None, {"stock_hk_ggt_components_em"}),
+        ("融资融券", None, {"stock_margin_sse"}),
+        ("资产负债表", None, {"stock_zcfz_em"}),
     ],
 )
 def test_search_finds_the_canonical_interface(
-    akshare_catalog: dict[str, dict], query: str, domain: str | None, expected: str
+    akshare_catalog: dict[str, dict], query: str, domain: str | None, expected: set[str]
 ) -> None:
-    names = [record["name"] for record in search(akshare_catalog, query, domain, 5)]
-    assert expected in names, f"{expected} missing from {names}"
+    names = _names(akshare_catalog, query, domain)
+    assert expected.intersection(names), f"none of {sorted(expected)} in {names}"
+
+
+def test_a_two_character_word_falls_back_to_its_characters(akshare_catalog: dict[str, dict]) -> None:
+    # 停牌 appears nowhere verbatim; AkShare writes 停复牌, and a two-character
+    # word is too short for the bigram fallback to say anything.
+    assert _names(akshare_catalog, "停牌", None)[0] == "stock_tfp_em"
+    assert _names(akshare_catalog, "A股 停牌", None)[0] == "stock_tfp_em"
+
+
+def test_a_ubiquitous_synonym_does_not_outrank_the_specific_term(akshare_catalog: dict[str, dict]) -> None:
+    # 个股 expands to `stock`, which is in the name of roughly half the catalog,
+    # so it must not drown out 资金流向.
+    names = _names(akshare_catalog, "个股 资金流向", None, 3)
+    assert "stock_individual_fund_flow" in names, names
+
+
+def test_repeating_the_query_word_breaks_a_tie_of_equals(akshare_catalog: dict[str, dict]) -> None:
+    # Sixteen interfaces contain 龙虎榜; the one whose subject it is says it twice.
+    assert _names(akshare_catalog, "龙虎榜", None)[0] == "stock_lhb_detail_em"
+
+
+def test_search_reports_the_terms_it_could_not_match(akshare_catalog: dict[str, dict]) -> None:
+    payload = search(akshare_catalog, "A股 阿斯顿发", None, 5)
+
+    assert payload["unmatched_terms"] == ["阿斯顿发"]
+    assert payload["results"], "the matchable term should still return candidates"
+    assert any("阿斯顿发" in hint for hint in payload["hints"])
+    assert payload["total_matched"] > len(payload["results"])
+    assert any("narrow" in hint for hint in payload["hints"])
+
+
+def test_search_that_matches_nothing_says_what_to_try_next(akshare_catalog: dict[str, dict]) -> None:
+    payload = search(akshare_catalog, "阿斯顿发", "etf", 5)
+
+    assert payload["results"] == [] and payload["total_matched"] == 0
+    assert payload["candidates"] > 0
+    assert "--domain" in payload["hints"][0]
 
 
 def test_search_results_carry_a_description_without_a_docs_checkout(akshare_catalog: dict[str, dict]) -> None:
-    top = search(akshare_catalog, "ETF 历史行情", "etf", 1)[0]
+    top = search(akshare_catalog, "ETF 历史行情", "etf", 1)["results"][0]
     assert top["name"] == "fund_etf_hist_em"
     assert top["description"] and top["source_site"] and top["source_url"]
     assert top["match_reasons"] and top["matched_terms"] == 2

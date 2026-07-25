@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -158,6 +159,46 @@ def test_batch_that_times_out_keeps_what_already_completed(fake_akshare: str, tm
     assert not list(tmp_path.glob(".*akqry.tmp")), "temporary artifacts must not be left behind"
 
 
+def test_one_hanging_call_does_not_consume_the_whole_batch(fake_akshare: str, tmp_path: Path) -> None:
+    # SLOW comes first: without a per-call deadline it would spend the entire
+    # budget and 000001 would be reported as timed out without ever being tried.
+    payload = _run(
+        _fetch(
+            fake_akshare,
+            "--for-each",
+            "symbol=SLOW,000001",
+            "--output",
+            str(tmp_path / "{}.jsonl"),
+            "--timeout",
+            "2",
+            "--retries",
+            "0",
+        )
+    )
+
+    items = {item["label"]: item for item in payload["result"]["items"]}
+    assert items["SLOW"]["error"]["code"] == "query_timeout"
+    assert items["000001"]["ok"] is True and items["000001"]["rows"] == 3
+    assert (tmp_path / "000001.jsonl").is_file()
+
+
+def test_a_delayed_batch_stamps_each_artifact_with_its_own_call(fake_akshare: str, tmp_path: Path) -> None:
+    output = str(tmp_path / "{}.jsonl")
+    payload = _run(_fetch(fake_akshare, "--for-each", "symbol=000001,600519", "--delay", "1", "--output", output))
+
+    assert payload["provenance"]["options"]["delay_seconds"] == 1.0
+    first, second = (
+        json.loads((tmp_path / f"{symbol}.jsonl.meta.json").read_text(encoding="utf-8"))["provenance"]
+        for symbol in ("000001", "600519")
+    )
+    gap = datetime.fromisoformat(second["started_at_utc"]) - datetime.fromisoformat(first["retrieved_at_utc"])
+    assert gap >= timedelta(seconds=1), "--delay must separate the calls"
+    # Every artifact once carried the assembly timestamp, which claimed a batch
+    # spanning minutes had been retrieved all at once.
+    assert first["retrieved_at_utc"] < second["retrieved_at_utc"]
+    assert all(stamp["duration_seconds"] < 1.0 for stamp in (first, second)), "the delay is not part of a call"
+
+
 def test_batch_output_requires_a_placeholder(fake_akshare: str, tmp_path: Path) -> None:
     with pytest.raises(AkqryError) as raised:
         _run(_fetch(fake_akshare, "--for-each", "symbol=1,2", "--output", str(tmp_path / "fixed.jsonl")))
@@ -214,6 +255,31 @@ def test_describe_probe_reports_the_real_schema(fake_akshare: str) -> None:
     assert probe["rows"] == 2
     assert [column["name"] for column in probe["columns"]] == ["日期", "代码", "收盘"]
     assert probe["temporal_bounds"][0]["column"] == "日期"
+
+
+def test_probe_is_served_from_the_cache_on_the_second_ask(fake_akshare: str, tmp_path: Path, monkeypatch) -> None:
+    log = tmp_path / "calls.log"
+    monkeypatch.setenv("AKQRY_TEST_CALL_LOG", str(log))
+    argv = ["describe", "stock_demo", "--akshare-path", fake_akshare, "--probe", "--cache-dir", str(tmp_path / "cache")]
+    first = _run(argv)["result"]["probe"]
+    second = _run(argv)["result"]["probe"]
+
+    assert log.read_text(encoding="utf-8").split() == ["000001"], "a cached probe must not call upstream again"
+    assert first["cache"]["hit"] is False and second["cache"]["hit"] is True
+    assert second["columns"] == first["columns"]
+    assert second["retrieved_at_utc"] == first["retrieved_at_utc"]
+
+
+def test_a_failed_probe_is_not_cached(fake_akshare: str, tmp_path: Path, monkeypatch) -> None:
+    log = tmp_path / "calls.log"
+    monkeypatch.setenv("AKQRY_TEST_CALL_LOG", str(log))
+    argv = [
+        "describe", "stock_demo", "--akshare-path", fake_akshare, "--probe",
+        "--arg", "symbol=BOOM", "--retries", "0", "--cache-dir", str(tmp_path / "cache"),
+    ]  # fmt: skip
+    assert _run(argv)["result"]["probe"]["ok"] is False
+    assert _run(argv)["result"]["probe"]["cache"]["hit"] is False
+    assert log.read_text(encoding="utf-8").split() == ["BOOM", "BOOM"]
 
 
 def test_describe_probe_reports_upstream_failure_without_hiding_metadata(fake_akshare: str) -> None:

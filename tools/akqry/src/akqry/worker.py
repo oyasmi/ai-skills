@@ -3,17 +3,24 @@
 One worker run handles a list of calls so that a multi-symbol query pays the
 AkShare import once. The response file is rewritten after every call, which lets
 the parent keep whatever finished before an overall timeout.
+
+Each call also carries its own deadline. Without one, a single unresponsive
+symbol would spend the whole batch's budget and every symbol queued behind it
+would be reported as timed out despite never having been attempted.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import inspect
 import json
+import signal
 import time
 import traceback
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from akqry.catalog import discover
 from akqry.errors import AkqryError
@@ -51,6 +58,30 @@ RETRYABLE_EXCEPTIONS = frozenset(
 )
 MESSAGE_LIMIT = 400
 SENSITIVE_MARKERS = ("token", "secret", "password", "cookie", "api_key", "apikey", "authorization")
+DEADLINES_SUPPORTED = hasattr(signal, "SIGALRM") and hasattr(signal, "setitimer")
+
+
+class CallTimeout(Exception):
+    """One call exceeded its own share of the batch budget."""
+
+
+@contextlib.contextmanager
+def deadline(seconds: float) -> Iterator[None]:
+    """Interrupt the wrapped call once its budget is spent, where the OS allows it."""
+    if not DEADLINES_SUPPORTED or seconds <= 0:
+        yield
+        return
+
+    def expire(signum: int, frame: Any) -> None:
+        raise CallTimeout(f"Call exceeded its {seconds:g}s budget.")
+
+    previous = signal.signal(signal.SIGALRM, expire)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 def _safe_message(error: Exception) -> str | None:
@@ -64,7 +95,15 @@ def _safe_message(error: Exception) -> str | None:
 
 
 def _error_payload(error: Exception, debug: bool) -> dict[str, Any]:
-    if isinstance(error, AkqryError):
+    if isinstance(error, CallTimeout):
+        payload = {
+            "code": "query_timeout",
+            "message": "AkShare call exceeded its per-call timeout.",
+            "details": {"hint": "Narrow the date range, or raise --timeout for this interface."},
+            # Retrying inside the batch would spend another call's budget.
+            "retryable": False,
+        }
+    elif isinstance(error, AkqryError):
         payload = error.as_dict()
     else:
         name = type(error).__name__
@@ -133,6 +172,36 @@ def _run_call(function: Callable[..., Any], call: dict[str, Any], spec: dict[str
     }
 
 
+def _attempt_call(
+    function: Callable[..., Any],
+    call: dict[str, Any],
+    spec: dict[str, Any],
+    retries: int,
+    call_timeout: float,
+    debug: bool,
+) -> dict[str, Any]:
+    """Run one call with its retries, all of them inside a single budget."""
+    attempts = 0
+    try:
+        # The budget covers the retries too, so a batch of n calls can never
+        # outlive n budgets however many times a flaky endpoint is retried.
+        with deadline(call_timeout):
+            for attempt in range(retries + 1):
+                attempts = attempt + 1
+                try:
+                    return {"ok": True, "attempts": attempts, "result": _run_call(function, call, spec)}
+                except CallTimeout:
+                    raise
+                except Exception as exc:  # Isolate one call's failure from the rest of the batch.
+                    error = _error_payload(exc, debug)
+                    if not error.get("retryable") or attempt >= retries:
+                        return {"ok": False, "attempts": attempts, "error": error}
+                    time.sleep(0.5 * (2**attempt))
+    except CallTimeout as exc:
+        return {"ok": False, "attempts": attempts, "error": _error_payload(exc, debug)}
+    raise AssertionError("unreachable: the retry loop always returns or raises")
+
+
 def execute(spec: dict[str, Any], progress: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
     module = load_akshare(spec.get("akshare_path"))
     catalog = discover(module, spec.get("docs_root"), include_unsafe=True)
@@ -152,20 +221,23 @@ def execute(spec: dict[str, Any], progress: Callable[[dict[str, Any]], None] | N
         )
     function = getattr(module, name)
     retries = max(int(spec.get("retries", 0)), 0)
+    call_timeout = float(spec.get("call_timeout") or 0.0)
+    delay = max(float(spec.get("delay") or 0.0), 0.0)
     debug = bool(spec.get("debug"))
     payload: dict[str, Any] = {"ok": True, "provenance": runtime_provenance(module), "items": []}
-    for call in spec["calls"]:
-        item: dict[str, Any] = {"index": call["index"], "label": call.get("label")}
-        for attempt in range(retries + 1):
-            try:
-                item.update({"ok": True, "attempts": attempt + 1, "result": _run_call(function, call, spec)})
-            except Exception as exc:  # Isolate one call's failure from the rest of the batch.
-                error = _error_payload(exc, debug)
-                item.update({"ok": False, "attempts": attempt + 1, "error": error})
-                if error.get("retryable") and attempt < retries:
-                    time.sleep(0.5 * (2**attempt))
-                    continue
-            break
+    for position, call in enumerate(spec["calls"]):
+        if position and delay:
+            # Upstream sites throttle a burst far more readily than a trickle.
+            time.sleep(delay)
+        started = time.monotonic()
+        item: dict[str, Any] = {
+            "index": call["index"],
+            "label": call.get("label"),
+            "started_at_utc": datetime.now(timezone.utc).isoformat(),
+        }
+        item.update(_attempt_call(function, call, spec, retries, call_timeout, debug))
+        item["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
+        item["duration_seconds"] = round(time.monotonic() - started, 3)
         payload["items"].append(item)
         if progress is not None:
             progress(payload)

@@ -22,7 +22,7 @@ akqry doctor --json
 ## 标准工作流
 
 1. 从问题明确市场、证券类型、代码、时间区间、频率、复权口径、币种和所需指标；不明确时在结论中标出假设。
-2. 用 `akqry search` 找候选接口，尽量带 `--domain` 收窄；再用 `akqry describe` 确认签名、参数枚举和数据源。运行时签名优先于文档记忆。
+2. 用 `akqry search` 找候选接口，尽量带 `--domain` 收窄；**先看 `unmatched_terms` 和 `hints`**，确认这次检索真的覆盖了问题，再用 `akqry describe` 确认签名、参数枚举和数据源。运行时签名优先于文档记忆。
 3. 用 `akqry describe <function> --probe` 拿到真实列名、dtype 和日期区间，再据此决定 `--require-columns`。不要凭记忆猜中文列名。
 4. 用 `--output` 写入完整原始结果；默认保留 `.meta.json` sidecar。不要只依赖终端预览做分析。
 5. 在独立 Python 脚本中读取落盘数据、显式进行日期对齐和计算；保留脚本或关键公式。
@@ -44,22 +44,35 @@ akqry fetch fund_etf_hist_em \
   --json
 ```
 
-`search` 结果自带 `description`、`source_site`、`source_url` 和 `match_reasons`；先读这些再决定用哪个接口，不要只看函数名。
+## 读懂 search 的输出
+
+结果在 `result.results`，每条自带 `description`、`source_site`、`source_url` 和 `match_reasons`；先读这些再决定用哪个接口，不要只看函数名。信封本身还回答"这次检索覆盖了我的问题吗":
+
+| 字段 | 怎么用 |
+| --- | --- |
+| `unmatched_terms` | **最重要**。列在这里的词一个接口都没匹配上,结果与它无关。必须换词重搜或告诉用户库里没有,**不要**拿只匹配了其余词的结果顶上。 |
+| `hints` | 下一步建议（放宽 `--domain`、加词收窄等），照做。 |
+| `total_matched` / `candidates` | 命中数远大于 `--limit` 说明查询太宽，加词或加 `--domain`。 |
+| `coverage` / `score` | 排序依据：`coverage` 是该结果覆盖了多少查询特异度，先按它排、再按 `score`。所以 `score` 在列表里**不是**单调下降的。 |
+
+查询写成中文词组、词间留空格效果最好（`个股 资金流向` 好于 `个股资金流向`）。常见词（股票、基金、指数）会被自动降权，真正决定排序的是罕见词。
 
 ## 多标的与重复查询
 
-多个标的用 `--for-each` 在一个进程内顺序取，`--output` 必须含 `{}` 占位符；每个产物各自带 sidecar。
+多个标的用 `--for-each` 在一个进程内顺序取，`--output` 必须含 `{}` 占位符；每个产物各自带 sidecar，按**它自己那次调用**的完成时间打时间戳。
 
 ```bash
 akqry fetch stock_zh_a_hist \
   --for-each symbol=000001,600519,300750 \
   --arg start_date=20250101 --arg end_date=20250630 --arg adjust=qfq \
-  --output '/tmp/a/{}.parquet' --json
+  --delay 0.5 --output '/tmp/a/{}.parquet' --json
 ```
 
-批量中个别标的失败不会丢弃其他结果：信封返回 `partial_failure`，`details.failed_labels` 列出失败项，成功的产物已落盘。
+`--timeout` 是**单次调用**的预算（含重试），逐次强制：卡住一个标的只会让它自己失败，排在后面的照常取。批量中个别标的失败也不会丢弃其他结果：信封返回 `partial_failure`，`details.failed_labels` 列出失败项，成功的产物已落盘。
 
-反复调试同一个分析时加 `--cache-dir ~/.cache/akqry` 复用相同查询，避免重复打上游、触发限流。缓存命中时 `provenance.cache.hit` 为 `true`，`retrieved_at_utc` 仍是**原始获取时间**——报告时按它表述，不要说成刚取的数。
+标的多于 5 个时加 `--delay 0.5`：上游对连续突发请求的限流远比对稳定节奏严格，`upstream_error` 大多是这么来的。
+
+反复调试同一个分析时加 `--cache-dir ~/.cache/akqry` 复用相同查询，避免重复打上游、触发限流；`describe --probe` 同样支持，同一接口的列名不必反复取。缓存命中时 `provenance.cache.hit` 为 `true`，`retrieved_at_utc` 仍是**原始获取时间**——报告时按它表述，不要说成刚取的数。
 
 ## 错误码与下一步
 
@@ -74,8 +87,8 @@ akqry fetch stock_zh_a_hist \
 | `usage_error` | 命令行用法错，`details` 指出具体参数；批量 `--output` 必须含 `{}`。 |
 | `function_not_found` | 用 `akqry search` 找当前接口名；跨版本会改名。 |
 | `unsafe_callable` | 该 callable 被排除，换数据接口。 |
-| `upstream_error` | 读 `details.exception_message` 判断是网络、限流还是参数问题；退避重试一次，仍失败则换数据源（`_em` → `_sina` / `_ths`）并在报告中注明换源。 |
-| `query_timeout` | 缩小日期区间或降低频率，必要时提高 `--timeout`。 |
+| `upstream_error` | 读 `details.exception_message` 判断是网络、限流还是参数问题；批量里连续失败多半是限流，加 `--delay` 重试。退避重试一次仍失败则换数据源（`_em` → `_sina` / `_ths`）并在报告中注明换源。 |
+| `query_timeout` | 该次调用超了自己的预算（批量里其余标的不受影响）。缩小日期区间或降低频率，必要时提高 `--timeout`。 |
 | `dependency_missing` | 按 `details.remedy` 处理，或改用 `.jsonl` 输出。 |
 | `akshare_import_failed` | 用 `akqry doctor --json` 定位；向用户报告缺什么，不要自行升级或改动环境依赖。 |
 | `output_exists` | 换路径，或确认要覆盖再加 `--overwrite`。 |

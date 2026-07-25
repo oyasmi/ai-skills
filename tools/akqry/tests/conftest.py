@@ -78,8 +78,15 @@ def fake_akshare(tmp_path: Path) -> str:
 
 @pytest.fixture(autouse=True)
 def clear_akshare_modules():
-    """Keep a fake AkShare from leaking into the next test's import."""
+    """Keep a fake AkShare from leaking into the next test's import.
+
+    ``load_akshare`` prepends the selected root to ``sys.path`` for the life of
+    the process, so the path has to be restored too: otherwise a later test that
+    imports the real AkShare would silently get the three-function stand-in.
+    """
+    original_path = list(sys.path)
     yield
+    sys.path[:] = original_path
     for key in list(sys.modules):
         if key == "akshare" or key.startswith("akshare."):
             sys.modules.pop(key)

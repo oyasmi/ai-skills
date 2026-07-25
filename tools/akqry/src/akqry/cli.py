@@ -24,6 +24,9 @@ from akqry.runtime import load_akshare, runtime_provenance
 from akqry.serializers import ensure_format_available, infer_format, sha256
 
 _UNSAFE_LABEL = re.compile(r"[^0-9A-Za-z._一-鿿-]+")
+# Head-room for the worker's own start-up and AkShare import, on top of the
+# per-call budgets it enforces internally.
+WORKER_GRACE_SECONDS = 30.0
 
 
 @dataclass
@@ -64,8 +67,11 @@ def _human(payload: dict[str, Any]) -> None:
         if "result" not in payload:
             return
     result = payload.get("result", payload)
-    if isinstance(result, list):
-        _print_records(result)
+    if isinstance(result, dict) and "results" in result:
+        _print_records(result["results"])
+        print(f"matched={result['total_matched']} of {result['candidates']} candidates")
+        for hint in result["hints"]:
+            print(f"note: {hint}", file=sys.stderr)
     elif isinstance(result, dict) and result.get("kind") == "batch":
         for item in result["items"]:
             status = f"rows={item['rows']} {item.get('output') or ''}" if item["ok"] else item["error"]["code"]
@@ -137,6 +143,8 @@ def build_parser() -> argparse.ArgumentParser:
     describe_parser.add_argument("--preview-rows", type=int, default=3)
     describe_parser.add_argument("--timeout", type=float, default=120.0)
     describe_parser.add_argument("--retries", type=int, default=1)
+    describe_parser.add_argument("--cache-dir", help="Reuse an identical probe from this directory (or AKQRY_CACHE_DIR)")
+    describe_parser.add_argument("--cache-ttl", type=float, default=cache.DEFAULT_TTL_SECONDS)
 
     fetch = subparsers.add_parser("fetch", help="Execute a safe AkShare data interface")
     _add_runtime_options(fetch)
@@ -164,8 +172,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fetch.add_argument("--cache-dir", help="Reuse identical queries from this directory (or AKQRY_CACHE_DIR)")
     fetch.add_argument("--cache-ttl", type=float, default=cache.DEFAULT_TTL_SECONDS)
-    fetch.add_argument("--timeout", type=float, default=120.0, help="Per-call budget; a batch multiplies it")
+    fetch.add_argument("--timeout", type=float, default=120.0, help="Per-call budget, retries included")
     fetch.add_argument("--retries", type=int, default=2)
+    fetch.add_argument(
+        "--delay",
+        type=float,
+        default=0.0,
+        metavar="SECONDS",
+        help="Pause between the calls of a batch; upstream sites throttle bursts",
+    )
     return parser
 
 
@@ -422,7 +437,13 @@ def _fetch_options(args: argparse.Namespace, output_format: str | None) -> dict[
         "output_format": output_format,
         "timeout_seconds": args.timeout,
         "retries": args.retries,
+        "delay_seconds": args.delay,
     }
+
+
+def _batch_budget(args: argparse.Namespace, calls: int) -> float:
+    """Backstop for the worker as a whole; each call polices its own budget."""
+    return args.timeout * calls + args.delay * max(calls - 1, 0) + WORKER_GRACE_SECONDS
 
 
 def _cache_material(function: str, call: PlannedCall, options: dict[str, Any], akshare_version: str | None) -> dict[str, Any]:
@@ -473,8 +494,11 @@ def _write_sidecar(call: PlannedCall, payload: dict[str, Any], no_sidecar: bool)
 
 
 def _handle_fetch(args: argparse.Namespace) -> dict[str, Any]:
-    if args.timeout <= 0 or args.preview_rows < 0 or args.retries < 0:
-        raise AkqryError("usage_error", "--timeout must be positive; --preview-rows and --retries cannot be negative.")
+    if args.timeout <= 0 or args.preview_rows < 0 or args.retries < 0 or args.delay < 0:
+        raise AkqryError(
+            "usage_error",
+            "--timeout must be positive; --preview-rows, --retries and --delay cannot be negative.",
+        )
     module = load_akshare(args.akshare_path)
     # Include excluded callables so that asking for one reports why it is excluded
     # rather than claiming the name does not exist.
@@ -530,6 +554,8 @@ def _handle_fetch(args: argparse.Namespace) -> dict[str, Any]:
                     "allow_empty": options["allow_empty"],
                     "output_format": output_format,
                     "retries": args.retries,
+                    "call_timeout": args.timeout,
+                    "delay": args.delay,
                     "debug": args.debug,
                     "calls": [
                         {
@@ -541,7 +567,7 @@ def _handle_fetch(args: argparse.Namespace) -> dict[str, Any]:
                         for call in pending
                     ],
                 },
-                args.timeout * len(pending),
+                _batch_budget(args, len(pending)),
             )
             if not worker_payload["ok"]:
                 error = worker_payload["error"]
@@ -594,6 +620,7 @@ def _item_provenance(
             {
                 "retrieved_at_utc": call.cached.get("retrieved_at_utc"),
                 "retrieved_at_local": call.cached.get("retrieved_at_local"),
+                "started_at_utc": call.cached.get("started_at_utc"),
                 "duration_seconds": call.cached.get("duration_seconds"),
                 "attempts": call.cached.get("attempts"),
                 "served_at_utc": now.isoformat(),
@@ -606,11 +633,16 @@ def _item_provenance(
             }
         )
         return provenance
+    # A batch spans minutes, so each artifact is stamped with when its own call
+    # finished rather than with when the batch was assembled.
+    retrieved = call.outcome.get("finished_at_utc")
+    stamp = datetime.fromisoformat(retrieved) if retrieved else now
     provenance.update(
         {
-            "retrieved_at_utc": now.isoformat(),
-            "retrieved_at_local": datetime.now().astimezone().isoformat(),
-            "duration_seconds": duration,
+            "retrieved_at_utc": stamp.isoformat(),
+            "retrieved_at_local": stamp.astimezone().isoformat(),
+            "started_at_utc": call.outcome.get("started_at_utc"),
+            "duration_seconds": call.outcome.get("duration_seconds", duration),
             "attempts": call.outcome.get("attempts"),
             "cache": {"hit": False, "key": call.cache_key, "enabled": call.cache_key is not None},
         }
@@ -661,6 +693,7 @@ def _assemble(
                     "result": {key: value for key, value in result.items() if key not in {"output", "output_format", "sha256", "metadata"}},
                     "retrieved_at_utc": provenance["retrieved_at_utc"],
                     "retrieved_at_local": provenance["retrieved_at_local"],
+                    "started_at_utc": provenance.get("started_at_utc"),
                     "duration_seconds": provenance["duration_seconds"],
                     "attempts": provenance["attempts"],
                 },
@@ -744,6 +777,35 @@ def _handle_describe(args: argparse.Namespace, module: Any, catalog: dict[str, d
         )
     function = getattr(module, args.function)
     parameters = _parse_parameters(args, function)
+    probe: dict[str, Any] = {"parameters": _redacted_parameters(parameters)}
+
+    # The workflow asks for a probe before every analysis, so the same schema
+    # question is asked over and over; serve it from the cache when there is one.
+    cache_root = cache.resolve_root(args.cache_dir)
+    key = (
+        cache.cache_key(
+            {
+                "kind": "probe",
+                "akqry_version": __version__,
+                "akshare_version": runtime_provenance(module)["akshare_version"],
+                "function": args.function,
+                "parameters": parameters,
+                "preview_rows": max(args.preview_rows, 0),
+            }
+        )
+        if cache_root is not None
+        else None
+    )
+    if cache_root is not None and key is not None:
+        entry = cache.load(cache_root, key, args.cache_ttl)
+        if entry is not None:
+            record["probe"] = {
+                **probe,
+                **entry["probe"],
+                "cache": {"hit": True, "key": key, "age_seconds": entry.get("age_seconds")},
+            }
+            return payload
+
     worker_payload = _worker_run(
         {
             "function": args.function,
@@ -755,12 +817,12 @@ def _handle_describe(args: argparse.Namespace, module: Any, catalog: dict[str, d
             "allow_empty": True,
             "output_format": None,
             "retries": max(args.retries, 0),
+            "call_timeout": args.timeout,
             "debug": args.debug,
             "calls": [{"index": 0, "label": None, "parameters": parameters, "temporary_output": None}],
         },
-        args.timeout,
+        args.timeout + WORKER_GRACE_SECONDS,
     )
-    probe: dict[str, Any] = {"parameters": _redacted_parameters(parameters)}
     if not worker_payload["ok"]:
         probe.update({"ok": False, "error": worker_payload["error"]})
     else:
@@ -780,7 +842,11 @@ def _handle_describe(args: argparse.Namespace, module: Any, catalog: dict[str, d
             )
         else:
             probe.update({"ok": False, "error": item["error"], "attempts": item["attempts"]})
-    record["probe"] = probe
+    probe["retrieved_at_utc"] = datetime.now(timezone.utc).isoformat()
+    if cache_root is not None and key is not None and probe.get("ok"):
+        # Only a schema that was actually observed is worth replaying.
+        cache.store(cache_root, key, {"probe": {key_: probe[key_] for key_ in probe if key_ != "parameters"}}, None)
+    record["probe"] = {**probe, "cache": {"hit": False, "key": key, "enabled": cache_root is not None}}
     return payload
 
 

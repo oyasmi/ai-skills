@@ -216,32 +216,70 @@ def _summary(record: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
+def _search_hints(
+    domain: str | None, terms: list[str], unmatched: list[str], total: int, limit: int
+) -> list[str]:
+    hints: list[str] = []
+    if not total:
+        hints.append(
+            "Nothing matched. Try fewer or broader terms"
+            + (", or drop --domain to search the whole catalog." if domain else ".")
+        )
+    elif unmatched:
+        hints.append(
+            "These terms matched no interface at all, so the results do not cover them: "
+            + ", ".join(unmatched)
+            + ". Treat the results as answering only "
+            + ", ".join(term for term in terms if term not in unmatched)
+            + "."
+        )
+    if total > limit:
+        hints.append(f"{total} interfaces matched and {limit} are shown; add a term or --domain to narrow.")
+    return hints
+
+
 def search(
     catalog: dict[str, dict[str, Any]],
     query: str,
     domain: str | None,
     limit: int,
     full: bool = False,
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
+    """Rank interfaces for a query, reporting what the ranking does not cover."""
     terms = matching.query_terms(query)
     if not terms:
         raise AkqryError("usage_error", "Search query must contain at least one searchable term.")
-    scored: list[tuple[int, float, int, str, dict[str, Any], list[dict[str, Any]]]] = []
-    for record in catalog.values():
-        if domain and domain not in record["domains"]:
-            continue
-        matched, score, reasons = matching.score_record(terms, record["search_fields"])
-        if not matched:
-            continue
-        scored.append((matched, score, len(record["name"]), record["name"], record, reasons))
-    # Cover as many query terms as possible first, then weight, then prefer the
-    # shorter (usually more general) interface name.
-    scored.sort(key=lambda item: (-item[0], -item[1], item[2], item[3]))
+    candidates = [record for record in catalog.values() if not domain or domain in record["domains"]]
+    # Rarity is measured over the candidates, so ``stock`` counts for even less
+    # once a domain filter has already selected for it.
+    corpus = matching.Corpus([record["search_fields"] for record in candidates])
+    ranked, unmatched = corpus.rank(terms)
+    # Account for as much of the query's specificity as possible first, then
+    # weight, then prefer the shorter (usually more general) interface name.
+    ranked.sort(key=lambda item: (-item.coverage, -item.score, len(candidates[item.index]["name"])))
     results: list[dict[str, Any]] = []
-    for matched, score, _, _, record, reasons in scored[:limit]:
+    for item in ranked[:limit]:
+        record = candidates[item.index]
         payload = describe(catalog, record["name"]) if full else _summary(record)
-        results.append({**payload, "score": score, "matched_terms": matched, "match_reasons": reasons})
-    return results
+        results.append(
+            {
+                **payload,
+                "score": item.score,
+                "matched_terms": item.matched_terms,
+                "coverage": item.coverage,
+                "match_reasons": item.reasons,
+            }
+        )
+    return {
+        "query": query,
+        "domain": domain,
+        "terms": terms,
+        "unmatched_terms": unmatched,
+        "candidates": len(candidates),
+        "total_matched": len(ranked),
+        "results": results,
+        "hints": _search_hints(domain, terms, unmatched, len(ranked), limit),
+    }
 
 
 def describe(catalog: dict[str, dict[str, Any]], name: str) -> dict[str, Any]:
