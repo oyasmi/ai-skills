@@ -18,7 +18,9 @@ fund_etf_fund_daily_em
 fund_etf_fund_info_em
 ```
 
-不同来源的 ETF 代码格式可能不同，例如纯六位代码与 `sh510050`。按 `describe` 的参数说明传入，不要自行猜测交易所前缀。
+不同来源的 ETF 代码格式可能不同，例如纯六位代码与 `sh510050`。按 `describe` 的参数说明传入，不要自行猜测交易所前缀；不确定就先 `--probe` 试一个代码。
+
+"涨幅前 N 的 ETF"这类横截面筛选必须落盘全表后用 pandas 排序，见 [analysis.md](analysis.md)；比较 ETF 与其跟踪指数时读取 [indices.md](indices.md)。
 
 ## 公募基金链路
 

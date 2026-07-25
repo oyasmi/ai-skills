@@ -43,3 +43,5 @@ stock_board_concept_hist_em
 ## 历史研究限制
 
 当前成份股会产生幸存者偏差。历史板块指数可用于板块表现，但不能据当前成份解释历史贡献，除非另有点时成份数据。
+
+一次分析只用一个体系：`akqry search` 结果里的 `source_site`（东方财富/同花顺）就是判断依据，不要把两个体系的板块名混在同一张表里。多个板块用 `--for-each symbol=...` 一次取完，宽市场基准见 [indices.md](indices.md)。

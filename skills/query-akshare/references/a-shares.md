@@ -5,9 +5,10 @@
 ### 个股历史收益或走势
 
 1. 用 `stock_zh_a_spot_em` 确认代码和当前名称；全市场表只作代码发现或当期筛选。
-2. 用 `stock_zh_a_hist` 获取日/周/月行情。显式传 `period`、日期和 `adjust`。
-3. 要求至少有 `日期,股票代码,收盘,成交量,成交额`；以返回的最后日期确认数据截止点。
-4. 多标的比较时分别下载并内连接日期，不按行号拼接。
+2. 用 `stock_zh_a_hist` 获取日/周/月行情。显式传 `period`、日期和 `adjust`（枚举见 `describe`：`daily/weekly/monthly` 与 `qfq/hfq/""`）。
+3. 用 `--probe` 确认实际列名后再设 `--require-columns`；以返回的最后日期确认数据截止点。
+4. 多标的用 `--for-each symbol=...` 分别落盘，再内连接日期，不按行号拼接。
+5. 需要与沪深300 等基准对比时读取 [indices.md](indices.md)，不要用另一只股票代替基准。
 
 ### 基本资料与财务
 
@@ -31,4 +32,4 @@ stock_financial_analysis_indicator_em
 stock_zh_ah_spot_em
 ```
 
-调用前始终 `akqry describe`，因为参数和字段可能随 AkShare 版本改变。
+调用前始终 `akqry describe`（必要时 `--probe`），因为参数和字段可能随 AkShare 版本改变。上面的接口名同样以 `akqry search --domain a-share` 的实际结果为准。

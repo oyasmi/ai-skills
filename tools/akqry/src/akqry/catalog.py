@@ -7,20 +7,41 @@ import re
 from pathlib import Path
 from typing import Any
 
+from akqry import docstrings, matching
 from akqry.errors import AkqryError
 from akqry.runtime import is_safe_callable
 
-DOMAIN_RULES = {
-    "a-share": ("stock_zh_a", "stock_individual", "stock_financial", "stock_zh_ah"),
-    "hk-share": ("stock_hk", "stock_zh_ah"),
-    "board": ("stock_board", "industry", "concept"),
-    "fund": ("fund_",),
-    "etf": ("etf",),
+# Domains are matched on name segments rather than raw substrings so that, for
+# example, ``fund_portfolio_industry_allocation_em`` stays a fund interface.
+DOMAIN_RULES: dict[str, dict[str, tuple[str, ...]]] = {
+    "a-share": {
+        "prefixes": (
+            "stock_zh_a",
+            "stock_a_",
+            "stock_individual",
+            "stock_financial",
+            "stock_zh_ah",
+            "stock_profit",
+            "stock_balance",
+            "stock_cash",
+        ),
+    },
+    "hk-share": {"prefixes": ("stock_hk", "stock_zh_ah")},
+    "board": {
+        "prefixes": ("stock_board",),
+        "segments_with_prefix": ("industry", "concept", "sector"),
+    },
+    "fund": {"prefixes": ("fund_",)},
+    "etf": {"segments": ("etf",)},
+    "index": {
+        "prefixes": ("index_", "stock_zh_index"),
+        "segments": ("index",),
+    },
 }
 
-
-def _normalise(value: str) -> str:
-    return re.sub(r"[\s_\-]+", " ", value.lower()).strip()
+# ``segments_with_prefix`` only applies to these name roots, keeping fund and
+# futures interfaces out of the board domain.
+_SEGMENT_ROOTS = ("stock_",)
 
 
 def _documentation_root(module_path: str | None, supplied: str | None) -> Path | None:
@@ -70,8 +91,8 @@ def load_documentation(module_path: str | None, supplied_root: str | None) -> di
             )
             records[match.group(1)] = {
                 "heading": heading,
-                "description": description.group(1).strip() if description else None,
-                "source_url": url.group(1) if url else None,
+                "document_description": description.group(1).strip() if description else None,
+                "document_url": url.group(1) if url else None,
                 "document_path": str(path),
                 "document_columns": [column.strip() for column in columns if column.strip() not in {"名称", "名称 "}],
             }
@@ -80,7 +101,64 @@ def load_documentation(module_path: str | None, supplied_root: str | None) -> di
 
 def domain_for(name: str) -> list[str]:
     lowered = name.lower()
-    return [domain for domain, fragments in DOMAIN_RULES.items() if any(item in lowered for item in fragments)]
+    segments = set(lowered.split("_"))
+    domains: list[str] = []
+    for domain, rules in DOMAIN_RULES.items():
+        if lowered.startswith(rules.get("prefixes", ())):
+            domains.append(domain)
+            continue
+        if segments.intersection(rules.get("segments", ())):
+            domains.append(domain)
+            continue
+        extra = rules.get("segments_with_prefix", ())
+        if extra and lowered.startswith(_SEGMENT_ROOTS) and segments.intersection(extra):
+            domains.append(domain)
+    return domains
+
+
+def _parameters(signature: inspect.Signature, parameter_docs: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for parameter in signature.parameters.values():
+        documented = parameter_docs.get(parameter.name, {})
+        entries.append(
+            {
+                "name": parameter.name,
+                "required": parameter.default is inspect.Parameter.empty,
+                "default": None if parameter.default is inspect.Parameter.empty else parameter.default,
+                "annotation": (
+                    None
+                    if parameter.annotation is inspect.Parameter.empty
+                    else getattr(parameter.annotation, "__name__", str(parameter.annotation))
+                ),
+                "documented_type": documented.get("type"),
+                "description": documented.get("description"),
+                "enum": documented.get("enum"),
+            }
+        )
+    return entries
+
+
+def _search_fields(record: dict[str, Any]) -> dict[str, tuple[str, str]]:
+    parameter_text = " ".join(
+        f"{item['name']} {item.get('description') or ''} {' '.join(item.get('enum') or [])}"
+        for item in record.get("parameters", [])
+    )
+    return {
+        "name": matching.field_text(record["name"]),
+        "description": matching.field_text(
+            record.get("description"),
+            record.get("heading"),
+            record.get("document_description"),
+        ),
+        "text": matching.field_text(
+            " ".join(record.get("description_extra") or []),
+            record.get("returns"),
+            parameter_text,
+            record.get("module"),
+            " ".join(record.get("document_columns") or []),
+            record.get("source_url"),
+        ),
+    }
 
 
 def discover(module: object, docs_root: str | None = None, include_unsafe: bool = False) -> dict[str, dict[str, Any]]:
@@ -94,54 +172,84 @@ def discover(module: object, docs_root: str | None = None, include_unsafe: bool 
         if not callable(value) or name.startswith("_"):
             continue
         try:
-            signature = str(inspect.signature(value))
+            signature: inspect.Signature | None = inspect.signature(value)
         except (TypeError, ValueError):
-            signature = "(...)"
+            signature = None
         doc = inspect.getdoc(value) or ""
+        parsed = docstrings.parse(doc)
         try:
             source = inspect.getsourcefile(value)
         except TypeError:
             source = None
-        catalog[name] = {
+        documented = docs.get(name, {})
+        record: dict[str, Any] = {
             "name": name,
-            "signature": signature,
+            "signature": str(signature) if signature else "(...)",
+            "description": parsed["description"] or documented.get("document_description"),
+            "description_extra": parsed["description_extra"],
+            "source_site": parsed["source_site"],
+            "source_url": parsed["source_url"] or documented.get("document_url"),
+            "source_urls": parsed["source_urls"],
+            "returns": parsed["returns"],
+            "returns_type": parsed["returns_type"],
+            "parameters": _parameters(signature, parsed["parameter_docs"]) if signature else [],
             "docstring": doc,
             "module": getattr(value, "__module__", None),
             "source_file": source,
             "domains": domain_for(name),
             "safe_to_fetch": safe,
             "excluded_reason": excluded_reason,
-            **docs.get(name, {}),
+            **documented,
         }
+        record["search_fields"] = _search_fields(record)
+        catalog[name] = record
     return catalog
 
 
-def search(catalog: dict[str, dict[str, Any]], query: str, domain: str | None, limit: int) -> list[dict[str, Any]]:
-    terms = [term for term in _normalise(query).split() if term]
+SUMMARY_FIELDS = ("name", "signature", "description", "source_site", "source_url", "domains", "safe_to_fetch")
+INTERNAL_FIELDS = ("search_fields",)
+
+
+def _summary(record: dict[str, Any]) -> dict[str, Any]:
+    summary = {key: record.get(key) for key in SUMMARY_FIELDS}
+    summary["required_parameters"] = [item["name"] for item in record.get("parameters", []) if item["required"]]
+    return summary
+
+
+def search(
+    catalog: dict[str, dict[str, Any]],
+    query: str,
+    domain: str | None,
+    limit: int,
+    full: bool = False,
+) -> list[dict[str, Any]]:
+    terms = matching.query_terms(query)
     if not terms:
-        raise AkqryError("usage_error", "Search query must contain at least one non-space character.")
-    results: list[tuple[int, dict[str, Any]]] = []
+        raise AkqryError("usage_error", "Search query must contain at least one searchable term.")
+    scored: list[tuple[int, float, int, str, dict[str, Any], list[dict[str, Any]]]] = []
     for record in catalog.values():
         if domain and domain not in record["domains"]:
             continue
-        name = _normalise(record["name"])
-        title = _normalise(" ".join(str(record.get(key) or "") for key in ("heading", "description", "docstring")))
-        score = 0
-        for term in terms:
-            if term == name:
-                score += 100
-            elif term in name:
-                score += 40
-            if term in title:
-                score += 15
-        if score:
-            results.append((score, record))
-    results.sort(key=lambda item: (-item[0], item[1]["name"]))
-    return [{key: value for key, value in record.items() if key != "docstring"} | {"score": score} for score, record in results[:limit]]
+        matched, score, reasons = matching.score_record(terms, record["search_fields"])
+        if not matched:
+            continue
+        scored.append((matched, score, len(record["name"]), record["name"], record, reasons))
+    # Cover as many query terms as possible first, then weight, then prefer the
+    # shorter (usually more general) interface name.
+    scored.sort(key=lambda item: (-item[0], -item[1], item[2], item[3]))
+    results: list[dict[str, Any]] = []
+    for matched, score, _, _, record, reasons in scored[:limit]:
+        payload = describe(catalog, record["name"]) if full else _summary(record)
+        results.append({**payload, "score": score, "matched_terms": matched, "match_reasons": reasons})
+    return results
 
 
 def describe(catalog: dict[str, dict[str, Any]], name: str) -> dict[str, Any]:
     record = catalog.get(name)
     if record is None:
-        raise AkqryError("function_not_found", "No public AkShare callable with that name was found.", {"function": name})
-    return record
+        raise AkqryError(
+            "function_not_found",
+            "No public AkShare callable with that name was found.",
+            {"function": name, "hint": "Use `akqry search` to find the current interface name."},
+        )
+    return {key: value for key, value in record.items() if key not in INTERNAL_FIELDS}

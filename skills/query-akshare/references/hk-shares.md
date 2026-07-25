@@ -31,4 +31,6 @@ stock_hk_dividend_payout_em
 stock_hk_ggt_components_em
 ```
 
-港股交易日不同于 A 股；横向时间序列比较默认取共同交易日。
+港股交易日不同于 A 股；横向时间序列比较默认取共同交易日，并报告 `alignment_report` 给出的丢弃数。多标的用 `--for-each symbol=...` 一次取完。
+
+接口名与字段以 `akqry search --domain hk-share`、`akqry describe --probe` 的实际结果为准。

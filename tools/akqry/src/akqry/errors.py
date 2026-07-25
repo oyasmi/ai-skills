@@ -21,6 +21,7 @@ EXIT_CODES = {
     "missing_required_columns": 6,
     "duplicate_columns": 6,
     "unsupported_result_type": 6,
+    "partial_failure": 6,
     "output_exists": 7,
     "serialization_failed": 7,
     "write_failed": 7,

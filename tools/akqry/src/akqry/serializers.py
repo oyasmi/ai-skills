@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import importlib.util
 import json
 import math
 from datetime import date, datetime
@@ -112,6 +113,26 @@ def sha256(path: Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+FORMAT_ENGINES: dict[str, tuple[tuple[str, ...], str]] = {
+    "parquet": (("pyarrow", "fastparquet"), "Install the extra with `uv tool install --editable 'tools/akqry[parquet]'`, or write .jsonl instead.")
+}
+
+
+def ensure_format_available(output_format: str | None) -> None:
+    """Fail before the network call when the requested artifact cannot be written."""
+    requirement = FORMAT_ENGINES.get(output_format or "")
+    if requirement is None:
+        return
+    engines, remedy = requirement
+    if any(importlib.util.find_spec(engine) is not None for engine in engines):
+        return
+    raise AkqryError(
+        "dependency_missing",
+        "The requested output format needs an engine that is not installed.",
+        {"format": output_format, "missing_any_of": list(engines), "remedy": remedy},
+    )
 
 
 def infer_format(path: str | None, supplied: str | None) -> str | None:

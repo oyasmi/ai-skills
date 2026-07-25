@@ -4,8 +4,9 @@
 
 - 写清楚 `as of` 的含义：执行时间、行情更新时间和最后交易日期不是同一件事。
 - 确认代码格式；不同接口可能使用 `000001`、`00700` 或 `sh510050`。
-- 先 `akqry describe <function> --json`，再据实际签名传参数。
-- 为后续分析列出必要字段，使用 `--require-columns` 防止上游 schema 漂移。
+- 先 `akqry describe <function> --json`，再据实际签名和 `parameters[].enum` 传参数。
+- 列名以 `akqry describe <function> --probe` 的实际返回为准，再用 `--require-columns` 防止上游 schema 漂移。不要凭记忆写中文列名。
+- 跨次查询比对 sidecar 里的 `schema_fingerprint`：指纹变了说明上游 schema 漂移，之前的分析脚本可能已经不适用。
 
 ## 时间序列
 
@@ -23,3 +24,5 @@
 ## 报告最小证据
 
 每个结论至少说明：数据函数、完整参数、获取时间、返回数据区间、复权/净值口径、币种、样本数、关键缺失或限制。读取落盘的 `.meta.json`，不要手工复述可能出错的版本或参数。
+
+sidecar 里 `provenance.cache.hit` 为 `true` 时，`retrieved_at_utc` 是原始获取时间而不是本次执行时间——按它表述数据新鲜度。`provenance.options` 记录了本次生效的 `require_columns`、`select`、`allow_empty` 等，报告口径时以它为准。
