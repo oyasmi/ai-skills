@@ -8,6 +8,7 @@
 |---|---|
 | [`skills/agentmux`](skills/agentmux) | 通过 `agentmux` 委派和管理外部 coding agent。使用前请按 [`SKILL.md`](skills/agentmux/SKILL.md) 安装 `agentmux` CLI。 |
 | [`skills/cookbook-forge`](skills/cookbook-forge) | 研究、写作并构建可离线阅读的中文 HTML cookbook。需要 Node.js 来运行模板脚本。 |
+| [`skills/query-akshare`](skills/query-akshare) | 使用 akqry 查询并分析 A 股、港股、行业板块、基金与 ETF 的可追溯数据。 |
 
 ## 安装 skill
 
@@ -17,6 +18,7 @@
 ```bash
 cp -R skills/agentmux "${CODEX_HOME:-$HOME/.codex}/skills/agentmux"
 cp -R skills/cookbook-forge "${CODEX_HOME:-$HOME/.codex}/skills/cookbook-forge"
+cp -R skills/query-akshare "${CODEX_HOME:-$HOME/.codex}/skills/query-akshare"
 ```
 
 其他 Agent 通常也遵循相同的约定：将目标 skill 目录直接放入它的 `skills/`
@@ -28,6 +30,7 @@ cp -R skills/cookbook-forge "${CODEX_HOME:-$HOME/.codex}/skills/cookbook-forge"
 
 - [`tools/agentmux`](tools/agentmux)：`agentmux` CLI 的 Go 源码、配置示例和发布脚本。它的安装脚本只安装 CLI 和默认配置，不安装 skill。
 - [`tools/cmd_mgr`](tools/cmd_mgr)：跨平台命令管理 GUI。
+- [`tools/akqry`](tools/akqry)：AkShare 数据接口发现、参数检查、查询与可追溯落盘 CLI；供 `query-akshare` skill 使用。
 
 构建 agentmux：
 
@@ -42,6 +45,14 @@ go build -o ./bin/agentmux ./cmd/agentmux
 ```bash
 cd tools/agentmux
 VERSION=v0.1.0 ./scripts/release.sh
+```
+
+安装 akqry：
+
+```bash
+cd tools/akqry
+uv tool install --editable '.[parquet]'
+akqry doctor --json
 ```
 
 发布包只包含 `agentmux` CLI、示例配置和工具 README；skill 始终从根目录的

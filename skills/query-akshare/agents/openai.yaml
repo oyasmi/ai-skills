@@ -1,0 +1,4 @@
+interface:
+  display_name: "Query AkShare"
+  short_description: "查询并分析 A 股、港股、板块、基金与 ETF 数据"
+  default_prompt: "使用 $query-akshare 通过 akqry 获取可追溯的金融数据，检查数据时间、字段、单位和复权语义，再完成分析并报告接口、参数与风险。"
