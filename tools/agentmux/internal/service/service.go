@@ -33,6 +33,10 @@ const (
 	// harness to visibly start working. Overridable via defaults.status.prompt_ack_ms.
 	defaultPromptAckMS = 5000
 
+	// defaultTombstoneTTLMS is how long a dead instance stays queryable before
+	// it is swept. Overridable via defaults.status.tombstone_ttl_ms.
+	defaultTombstoneTTLMS = 24 * 60 * 60 * 1000
+
 	// defaultStructuredMessages bounds `capture` on structured harnesses when
 	// the caller gave no --history. Their message streams are one entry per
 	// protocol event, so an unbounded default would flood the orchestrator.
@@ -135,10 +139,16 @@ func (s Service) withRegistryReconcileOne(ctx context.Context, name string, fn f
 	})
 }
 
-func (s Service) List(ctx context.Context) ([]instance.Instance, error) {
+// List returns live instances. Tombstones are included only on request: they
+// exist for diagnosis and must not clutter the common "what is running" read.
+func (s Service) List(ctx context.Context, includeEnded bool) ([]instance.Instance, error) {
 	var items []instance.Instance
 	err := s.withRegistryReconcileAll(ctx, func(reg *instance.Registry) error {
-		items = reg.Sorted()
+		if includeEnded {
+			items = reg.Sorted()
+			return nil
+		}
+		items = reg.Active()
 		return nil
 	})
 	return items, err
@@ -147,9 +157,11 @@ func (s Service) List(ctx context.Context) ([]instance.Instance, error) {
 func (s Service) Inspect(ctx context.Context, name string) (instance.Instance, error) {
 	var out instance.Instance
 	err := s.withRegistryReconcileOne(ctx, name, func(reg *instance.Registry) error {
-		inst, err := s.requireActiveInstance(reg, name)
-		if err != nil {
-			return err
+		// inspect deliberately accepts tombstones: "it exited, here is when and
+		// why" is exactly what the caller came to find out.
+		inst, ok := reg.Get(name)
+		if !ok {
+			return apperr.New("instance_not_found", fmt.Sprintf("instance %q not found", name))
 		}
 		out = inst
 		return nil
@@ -228,6 +240,7 @@ func (s Service) Summon(ctx context.Context, in SummonInput) (SummonResult, erro
 					res = SummonResult{Instance: resumed, Reused: false}
 					return nil
 				}
+				// The name is free again; the tombstone is replaced below.
 				reg.Delete(name)
 			} else {
 				inst = next
@@ -244,7 +257,7 @@ func (s Service) Summon(ctx context.Context, in SummonInput) (SummonResult, erro
 				return err
 			}
 		}
-		if s.Config.Defaults.MaxInstances > 0 && len(reg.Instances) >= s.Config.Defaults.MaxInstances {
+		if s.Config.Defaults.MaxInstances > 0 && reg.CountActive() >= s.Config.Defaults.MaxInstances {
 			return apperr.New("config_invalid", "max_instances exceeded")
 		}
 		sessionID, err := naming.GenerateSessionID()
@@ -317,9 +330,8 @@ func (s Service) Prompt(ctx context.Context, name string, text string, key strin
 		if !ok {
 			return apperr.New("instance_not_found", fmt.Sprintf("instance %q not found", name))
 		}
-		if current.Status == instance.StatusLost || current.Status == instance.StatusExited {
-			reg.Delete(name)
-			return apperr.New("process_not_running", fmt.Sprintf("instance %q is not running", name))
+		if current.Ended() {
+			return endedError(current)
 		}
 		inst = current
 		return nil
@@ -389,7 +401,9 @@ func (s Service) Capture(ctx context.Context, name string, opts capture.Options)
 		// An unset history must stay bounded here: a structured capture returns
 		// one message per protocol event, so "everything" can be megabytes of
 		// JSON for a single turn. Callers opt into that with --history 0.
-		if opts.History < 0 {
+		// An incremental read is already bounded by how much is new, so capping
+		// it would silently drop output the caller will never see again.
+		if opts.History < 0 && strings.TrimSpace(opts.Since) == "" {
 			opts.History = defaultStructuredMessages
 		}
 		snap, err := hs.Capture(ctx, inst, opts)
@@ -411,6 +425,10 @@ func (s Service) Capture(ctx context.Context, name string, opts capture.Options)
 		}
 		return inst, snap, nil
 	}
+	if strings.TrimSpace(opts.Since) != "" {
+		return instance.Instance{}, capture.Snapshot{}, apperr.New("invalid_arguments",
+			fmt.Sprintf("--since needs a recorded event stream, which harness %q does not have; use --history to bound the screen instead", inst.HarnessType))
+	}
 	h := opts.History
 	if h < 0 {
 		h = s.Config.Defaults.Capture.History
@@ -426,10 +444,10 @@ func (s Service) Capture(ctx context.Context, name string, opts capture.Options)
 		}
 		inst = current
 		if snap.Dead {
-			reg.Delete(name)
 			inst.Status = instance.StatusExited
 			inst.PaneTitle = snap.PaneTitle
-			inst.UpdatedAt = time.Now()
+			inst = markEnded(inst, "process_exited")
+			reg.Put(inst)
 			return nil
 		}
 		inst.PaneTitle = snap.PaneTitle
@@ -509,10 +527,10 @@ func (s Service) Wait(ctx context.Context, name string, stableMS, timeoutMS int)
 		}
 		inst = current
 		if snap.Dead {
-			reg.Delete(name)
 			inst.Status = instance.StatusExited
 			inst.PaneTitle = snap.PaneTitle
-			inst.UpdatedAt = time.Now()
+			inst = markEnded(inst, "process_exited")
+			reg.Put(inst)
 			return nil
 		}
 		// A timed-out wait observed no completion, so it must not report idle.
@@ -598,6 +616,12 @@ func (s Service) HaltWithOptions(ctx context.Context, name string, immediately b
 		if !ok {
 			return apperr.New("instance_not_found", fmt.Sprintf("instance %q not found", name))
 		}
+		if inst.Ended() {
+			// Halting an instance that already stopped is a no-op, not an error:
+			// the caller wanted it stopped and it is.
+			out = inst
+			return nil
+		}
 		if h, structured := s.harnessFor(inst); structured {
 			if err := h.Halt(ctx, inst, immediately, timeout); err != nil {
 				return err
@@ -609,8 +633,8 @@ func (s Service) HaltWithOptions(ctx context.Context, name string, immediately b
 			}
 			if !exists {
 				inst.Status = instance.StatusExited
-				inst.UpdatedAt = time.Now()
-				reg.Delete(name)
+				inst = markEnded(inst, "process_exited")
+				reg.Put(inst)
 				out = inst
 				return nil
 			}
@@ -625,8 +649,8 @@ func (s Service) HaltWithOptions(ctx context.Context, name string, immediately b
 			}
 		}
 		inst.Status = instance.StatusExited
-		inst.UpdatedAt = time.Now()
-		reg.Delete(name)
+		inst = markEnded(inst, "halted")
+		reg.Put(inst)
 		out = inst
 		return nil
 	})
@@ -725,17 +749,51 @@ func (s Service) haltGracefully(ctx context.Context, sessionID string, timeout t
 
 func (s Service) reconcileRegistry(ctx context.Context, reg *instance.Registry) error {
 	for name, inst := range reg.Instances {
+		if inst.Ended() {
+			if s.tombstoneExpired(inst) {
+				reg.Delete(name)
+			}
+			continue
+		}
 		next, err := s.reconcile(ctx, inst)
 		if err != nil {
 			return err
 		}
-		if next.Status == instance.StatusLost || next.Status == instance.StatusExited {
-			reg.Delete(name)
-			continue
-		}
-		reg.Put(next)
+		reg.Put(s.tombstoneIfEnded(next))
 	}
 	return nil
+}
+
+// tombstoneIfEnded stamps an instance that reconcile just found dead.
+func (s Service) tombstoneIfEnded(inst instance.Instance) instance.Instance {
+	if !inst.Ended() {
+		return inst
+	}
+	reason := "process_exited"
+	if inst.Status == instance.StatusLost {
+		reason = "session_lost"
+	}
+	return markEnded(inst, reason)
+}
+
+// tombstoneExpired keeps the registry from growing without bound. Until the TTL
+// passes, a dead instance stays queryable; 0 keeps tombstones forever.
+func (s Service) tombstoneExpired(inst instance.Instance) bool {
+	ttl := defaultTombstoneTTLMS
+	if s.Config.Defaults.Status.TombstoneTTLMS != nil {
+		ttl = *s.Config.Defaults.Status.TombstoneTTLMS
+	}
+	if ttl <= 0 {
+		return false
+	}
+	ended := inst.EndedAt
+	if ended.IsZero() {
+		ended = inst.UpdatedAt
+	}
+	if ended.IsZero() {
+		return false
+	}
+	return time.Since(ended) >= time.Duration(ttl)*time.Millisecond
 }
 
 func (s Service) reconcileOne(ctx context.Context, reg *instance.Registry, name string) error {
@@ -743,15 +801,14 @@ func (s Service) reconcileOne(ctx context.Context, reg *instance.Registry, name 
 	if !ok {
 		return nil
 	}
+	if inst.Ended() {
+		return nil
+	}
 	next, err := s.reconcile(ctx, inst)
 	if err != nil {
 		return err
 	}
-	if next.Status == instance.StatusLost || next.Status == instance.StatusExited {
-		reg.Delete(name)
-		return nil
-	}
-	reg.Put(next)
+	reg.Put(s.tombstoneIfEnded(next))
 	return nil
 }
 
@@ -760,11 +817,43 @@ func (s Service) requireActiveInstance(reg *instance.Registry, name string) (ins
 	if !ok {
 		return instance.Instance{}, apperr.New("instance_not_found", fmt.Sprintf("instance %q not found", name))
 	}
-	if inst.Status == instance.StatusLost || inst.Status == instance.StatusExited {
-		reg.Delete(name)
-		return instance.Instance{}, apperr.New("process_not_running", fmt.Sprintf("instance %q is not running", name))
+	if inst.Ended() {
+		return instance.Instance{}, endedError(inst)
 	}
 	return inst, nil
+}
+
+// endedError explains a dead instance with everything the tombstone recorded,
+// so the caller can decide between resummoning and reporting a real failure.
+func endedError(inst instance.Instance) error {
+	msg := fmt.Sprintf("instance %q is not running", inst.Name)
+	if inst.EndReason != "" {
+		msg += " (" + inst.EndReason + ")"
+	}
+	if inst.LastError != "" {
+		msg += ": " + firstLine(inst.LastError)
+	}
+	return apperr.New("process_not_running", msg)
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return strings.TrimSpace(s[:i])
+	}
+	return strings.TrimSpace(s)
+}
+
+// markEnded records why an instance stopped. The first reason observed wins:
+// a later sweep must not overwrite "halted" with a generic "session_lost".
+func markEnded(inst instance.Instance, reason string) instance.Instance {
+	if inst.EndedAt.IsZero() {
+		inst.EndedAt = time.Now()
+	}
+	if inst.EndReason == "" {
+		inst.EndReason = reason
+	}
+	inst.UpdatedAt = time.Now()
+	return inst
 }
 
 func (s Service) sendPrompt(ctx context.Context, inst *instance.Instance, text string, allowSystem bool) error {

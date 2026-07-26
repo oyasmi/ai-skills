@@ -17,6 +17,10 @@ func attach(ctx context.Context, svc service.Service, name string, stderr io.Wri
 	if err != nil {
 		return writeErr(io.Discard, stderr, false, "attach", name, err)
 	}
+	if inst.Ended() {
+		return writeErr(io.Discard, stderr, false, "attach", name,
+			apperr.New("process_not_running", fmt.Sprintf("instance %q has stopped (%s); nothing to attach to", inst.Name, inst.EndReason)))
+	}
 	cmd := svc.AttachCommand(inst)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -32,7 +36,7 @@ func attachSelect(ctx context.Context, svc service.Service, stderr io.Writer) in
 	if fi, _ := os.Stdin.Stat(); (fi.Mode() & os.ModeCharDevice) == 0 {
 		return writeErr(io.Discard, stderr, false, "attach", "", apperr.New("invalid_arguments", "attach without instance requires a tty"))
 	}
-	items, err := svc.List(ctx)
+	items, err := svc.List(ctx, false)
 	if err != nil {
 		return writeErr(io.Discard, stderr, false, "attach", "", err)
 	}

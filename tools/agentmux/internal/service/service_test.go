@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,10 +29,12 @@ type fakeTmux struct {
 	paneInfoCalls        []string
 	paneInfo             tmuxctl.PaneInfo
 	paneTitles           []string
+	paneTitleFor         map[string]string
 	loads                []string
 	sendKeys             []string
 	killed               []string
 	sendKeysHook         func(*fakeTmux, string, []string)
+	mu                   sync.Mutex
 }
 
 func (f *fakeTmux) HasSession(_ context.Context, sessionID string) (bool, error) {
@@ -101,8 +104,15 @@ func (f *fakeTmux) Attach(string) *exec.Cmd {
 	return nil
 }
 
-func (f *fakeTmux) PaneInfo(context.Context, string) (tmuxctl.PaneInfo, error) {
-	f.paneInfoCalls = append(f.paneInfoCalls, "pane")
+func (f *fakeTmux) PaneInfo(_ context.Context, target string) (tmuxctl.PaneInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.paneInfoCalls = append(f.paneInfoCalls, target)
+	if title, ok := f.paneTitleFor[target]; ok {
+		info := f.paneInfo
+		info.PaneTitle = title
+		return info, nil
+	}
 	return f.nextPaneInfo(), nil
 }
 
@@ -134,7 +144,7 @@ func TestListPrunesMissingSessions(t *testing.T) {
 		t.Fatalf("save registry: %v", err)
 	}
 
-	items, err := svc.List(ctx)
+	items, err := svc.List(ctx, false)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -149,8 +159,25 @@ func TestListPrunesMissingSessions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload registry: %v", err)
 	}
-	if _, ok := saved.Get("stale"); ok {
-		t.Fatalf("stale instance should have been removed from registry")
+	// The record survives as a tombstone: an orchestrator that comes back to a
+	// worker must be able to tell a dead instance from a mistyped name.
+	stale, ok := saved.Get("stale")
+	if !ok {
+		t.Fatal("a lost instance must be kept as a tombstone")
+	}
+	if stale.Status != instance.StatusLost || stale.EndReason != "session_lost" {
+		t.Fatalf("unexpected tombstone: status=%s reason=%q", stale.Status, stale.EndReason)
+	}
+	if stale.EndedAt.IsZero() {
+		t.Fatal("expected the tombstone to record when the instance ended")
+	}
+
+	withEnded, err := svc.List(ctx, true)
+	if err != nil {
+		t.Fatalf("list --all: %v", err)
+	}
+	if len(withEnded) != 2 {
+		t.Fatalf("list --all must show tombstones, got %d instances", len(withEnded))
 	}
 }
 
@@ -174,7 +201,7 @@ func TestListPreservesRegistryWhenTmuxProbeFails(t *testing.T) {
 		t.Fatalf("save registry: %v", err)
 	}
 
-	if _, err := svc.List(context.Background()); err == nil || apperr.Code(err) != "tmux_unavailable" {
+	if _, err := svc.List(context.Background(), false); err == nil || apperr.Code(err) != "tmux_unavailable" {
 		t.Fatalf("expected tmux_unavailable, got %v", err)
 	}
 	saved, err := instance.Load(registryPath)
@@ -218,11 +245,15 @@ func TestSummonIgnoresStaleInstancesForLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload registry: %v", err)
 	}
-	if len(saved.Instances) != 1 {
-		t.Fatalf("expected only the fresh instance in registry, got %d", len(saved.Instances))
+	if saved.CountActive() != 1 {
+		t.Fatalf("expected only the fresh instance to be active, got %d", saved.CountActive())
 	}
-	if _, ok := saved.Get("stale"); ok {
-		t.Fatalf("stale instance should have been removed before summon")
+	stale, ok := saved.Get("stale")
+	if !ok {
+		t.Fatal("the stale instance must survive as a tombstone")
+	}
+	if !stale.Ended() {
+		t.Fatalf("expected the stale instance to be marked ended, got %s", stale.Status)
 	}
 }
 
@@ -1343,8 +1374,19 @@ func TestHaltGracefullySendsDoubleInterruptBeforeKilling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload registry: %v", err)
 	}
-	if _, ok := saved.Get("worker"); ok {
-		t.Fatalf("expected worker to be deleted from registry")
+	tomb, ok := saved.Get("worker")
+	if !ok {
+		t.Fatal("expected a tombstone for the halted instance")
+	}
+	if tomb.Status != instance.StatusExited || tomb.EndReason != "halted" {
+		t.Fatalf("unexpected tombstone: status=%s reason=%q", tomb.Status, tomb.EndReason)
+	}
+	live, err := svc.List(context.Background(), false)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(live) != 0 {
+		t.Fatalf("a halted instance must not show up in list, got %v", live)
 	}
 }
 
@@ -1379,10 +1421,12 @@ func TestHaltGracefullyStopsWithoutKillWhenSecondInterruptEndsSession(t *testing
 	if _, ok := tmux.sessions["live-session"]; ok {
 		t.Fatalf("expected session to be gone")
 	}
-	if saved, err := instance.Load(registryPath); err != nil {
+	saved, err := instance.Load(registryPath)
+	if err != nil {
 		t.Fatalf("reload registry: %v", err)
-	} else if _, ok := saved.Get("worker"); ok {
-		t.Fatalf("expected worker to be deleted from registry")
+	}
+	if tomb, ok := saved.Get("worker"); !ok || tomb.EndReason != "halted" {
+		t.Fatalf("expected a halted tombstone, got %+v (present=%v)", tomb, ok)
 	}
 }
 
@@ -1462,8 +1506,12 @@ func TestNDJSONHarnessDoesNotUseTmuxForPromptWaitCaptureHalt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load registry: %v", err)
 	}
-	if _, ok := saved.Get("agent"); ok {
-		t.Fatalf("expected ndjson instance to be removed after halt")
+	halted, ok := saved.Get("agent")
+	if !ok {
+		t.Fatal("expected a tombstone for the halted ndjson instance")
+	}
+	if halted.Status != instance.StatusExited || halted.EndReason != "halted" {
+		t.Fatalf("unexpected tombstone: status=%s reason=%q", halted.Status, halted.EndReason)
 	}
 }
 

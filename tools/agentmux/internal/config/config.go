@@ -24,6 +24,7 @@ defaults:
   status:
     busy_ttl_ms: 30000
     prompt_ack_ms: 5000
+    tombstone_ttl_ms: 86400000
   shell: /bin/bash -lc
   cwd: .
   env:
@@ -138,6 +139,9 @@ type StatusDefaults struct {
 	// start working before giving up on observing the transition. 0 disables
 	// the confirmation.
 	PromptAckMS *int `yaml:"prompt_ack_ms"`
+	// TombstoneTTLMS is how long a stopped instance stays queryable before it
+	// is swept from the registry. 0 keeps tombstones forever.
+	TombstoneTTLMS *int `yaml:"tombstone_ttl_ms"`
 }
 
 type CaptureDefaults struct {
@@ -227,6 +231,9 @@ func (c *Config) ApplyDefaults() {
 	if c.Defaults.Status.PromptAckMS == nil {
 		c.Defaults.Status.PromptAckMS = intPtr(5000)
 	}
+	if c.Defaults.Status.TombstoneTTLMS == nil {
+		c.Defaults.Status.TombstoneTTLMS = intPtr(24 * 60 * 60 * 1000)
+	}
 	if c.Defaults.CWD == "" {
 		c.Defaults.CWD = "."
 	}
@@ -262,6 +269,9 @@ func (c Config) Validate() error {
 	}
 	if c.Defaults.Status.PromptAckMS != nil && *c.Defaults.Status.PromptAckMS < 0 {
 		return apperr.New("config_invalid", "status.prompt_ack_ms must be non-negative")
+	}
+	if c.Defaults.Status.TombstoneTTLMS != nil && *c.Defaults.Status.TombstoneTTLMS < 0 {
+		return apperr.New("config_invalid", "status.tombstone_ttl_ms must be non-negative")
 	}
 	if strings.TrimSpace(c.Defaults.Tmux.Socket) == "" {
 		return apperr.New("config_invalid", "tmux socket must not be empty")

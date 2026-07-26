@@ -46,6 +46,14 @@ type Instance struct {
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 	LastActivityAt time.Time `json:"last_activity_at"`
+	// EndedAt and EndReason turn a dead instance into a tombstone instead of a
+	// hole in the registry: an orchestrator that comes back to a worker needs to
+	// tell "I mistyped the name" apart from "my worker died, and here is why".
+	EndedAt   time.Time `json:"ended_at,omitempty"`
+	EndReason string    `json:"end_reason,omitempty"`
+	// LastError carries the harness's own explanation when it has one, such as
+	// the stderr summary of a turn process that crashed.
+	LastError string `json:"last_error,omitempty"`
 	// BusyConfirmedAt is when the harness was last observed actually starting
 	// work on a prompt. Zero means the transition was never seen, so status
 	// signals from this instance may still describe the previous turn.
@@ -176,4 +184,34 @@ func (r Registry) Sorted() []Instance {
 		return items[i].UpdatedAt.After(items[j].UpdatedAt)
 	})
 	return items
+}
+
+// Ended reports whether the instance is a tombstone: a record kept for
+// diagnosis after the agent it described stopped running.
+func (i Instance) Ended() bool {
+	return i.Status == StatusExited || i.Status == StatusLost
+}
+
+// Active lists only instances that can still take work.
+func (r Registry) Active() []Instance {
+	items := make([]Instance, 0, len(r.Instances))
+	for _, inst := range r.Sorted() {
+		if inst.Ended() {
+			continue
+		}
+		items = append(items, inst)
+	}
+	return items
+}
+
+// CountActive is what max_instances limits; tombstones cost nothing to keep
+// and must never block a new summon.
+func (r Registry) CountActive() int {
+	n := 0
+	for _, inst := range r.Instances {
+		if !inst.Ended() {
+			n++
+		}
+	}
+	return n
 }

@@ -186,3 +186,63 @@ func TestRunE2ELifecycleJSON(t *testing.T) {
 		t.Fatalf("expected default config to be created: %v", err)
 	}
 }
+
+// run has to work as one call from argv to payload: summon, prompt, wait, and
+// read back, with a single exit code.
+func TestRunE2EDelegatesInOneCall(t *testing.T) {
+	stateHome, configHome := setupXDGHome(t)
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+
+	tmux := &e2eFakeTmux{
+		sessions:       map[string]bool{},
+		captureContent: "task finished\n> ",
+		paneInfo:       tmuxctl.PaneInfo{Width: 80, Height: 24, PaneTitle: "✳ Ready"},
+		busyTitle:      "⠋ Working",
+	}
+	prevFactory := newService
+	newService = func(paths config.Paths, cfg config.Config) service.Service {
+		cfg.Defaults.Capture.PollMS = 1
+		svc := service.New(paths, cfg)
+		svc.Tmux = tmux
+		return svc
+	}
+	t.Cleanup(func() { newService = prevFactory })
+
+	ctx := context.Background()
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, []string{"run", "--template", "claude-code", "--name", "one-shot", "--prompt", "do the task", "--timeout", "5s", "--json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run failed: code=%d stderr=%q", code, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{`"command": "run"`, `"instance": "one-shot"`, `"reused": false`, `"timed_out": false`, `"content": "task finished`} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("run output missing %s: %q", want, out)
+		}
+	}
+	if len(tmux.loads) != 1 || !strings.Contains(tmux.loads[0], "do the task") {
+		t.Fatalf("expected the task to reach the harness, got %v", tmux.loads)
+	}
+
+	// The instance survives the call, and halting it leaves a tombstone that
+	// list hides but list --all still reports.
+	stdout.Reset()
+	if code := Run(ctx, []string{"halt", "one-shot", "--timeout", "20ms", "--json"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("halt failed: %s", stderr.String())
+	}
+	stdout.Reset()
+	if code := Run(ctx, []string{"list", "--json"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("list failed: %s", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"instances": []`) {
+		t.Fatalf("list must hide tombstones: %q", stdout.String())
+	}
+	stdout.Reset()
+	if code := Run(ctx, []string{"list", "--all", "--json"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("list --all failed: %s", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"end_reason": "halted"`) {
+		t.Fatalf("list --all must report the tombstone: %q", stdout.String())
+	}
+}

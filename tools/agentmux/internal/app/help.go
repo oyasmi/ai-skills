@@ -6,12 +6,13 @@ func usage() string {
 	return strings.TrimSpace(`
 usage:
   agentmux template list [--json]
-  agentmux list [--json]
+  agentmux list [--all] [--json]
   agentmux summon --template <template-name> [--name <instance-name>] [--cwd <path>] [--model <model>] [--command <shell-command>] [--system-prompt <text>] [--prompt <text>] [--json]
   agentmux inspect <instance-name> [--json]
   agentmux prompt <instance-name> [--text <text> | --stdin] [--key <key>] [--json]
-  agentmux capture <instance-name> [--scope current|session] [--history <limit>] [--raw] [--json]
-  agentmux wait <instance-name> [--stable <duration-or-ms>] [--timeout <duration-or-ms>] [--json]
+  agentmux run --template <template-name> [--name <instance-name>] [--cwd <path>] (--prompt <text> | --prompt-file <path> | --stdin) [--timeout <duration-or-ms>] [--history <limit>] [--raw] [--json]
+  agentmux capture <instance-name> [--scope current|session] [--history <limit>] [--since <cursor>] [--raw] [--json]
+  agentmux wait <instance-name>... [--mode all|any] [--stable <duration-or-ms>] [--timeout <duration-or-ms>] [--json]
   agentmux attach [<instance-name>]
   agentmux halt <instance-name> [--json]
   agentmux version [--json]
@@ -46,6 +47,8 @@ func helpForArgs(args []string) (string, bool) {
 			return listHelp(), true
 		case "summon":
 			return summonHelp(), true
+		case "run":
+			return runHelp(), true
 		case "inspect":
 			return inspectHelp(), true
 		case "prompt":
@@ -82,12 +85,13 @@ Usage:
 
 Core commands:
   template list   List configured role templates
-  list            List known instances and their current statuses
+  list            List live instances and their current statuses
   summon          Create or reuse an instance
+  run             Delegate one task end to end: summon, prompt, wait, and read the answer
   inspect         Query one instance's current status and metadata
   prompt          Send text or a special key to an instance
   capture         Read the latest observable output from an instance
-  wait            Wait until an agent appears done with/without a timeout
+  wait            Wait until one or several agents appear done
   attach          Attach a human terminal to an instance
   halt            Stop an instance
   version         Print the CLI version
@@ -98,6 +102,7 @@ Global flags:
 
 Examples:
   agentmux template list --json
+  agentmux run --template codex-cli-execjson --cwd ~/work/project --prompt "..." --json
   agentmux summon --template claude-code --name 编码助手-A --cwd ~/work/project
   agentmux summon --template claude-code --name 编码助手-A --prompt "先阅读项目并总结结构" --json
   agentmux capture 编码助手-A --history 120 --json
@@ -153,18 +158,62 @@ func listHelp() string {
 list prints the known agent instances from the local registry and reconciles their tmux state.
 
 Usage:
-  agentmux list [--json]
+  agentmux list [--all] [--json]
+
+Flags:
+  --all                     Also show tombstones: instances that have stopped
+  --json                    Return JSON output
 
 Output:
-  Text mode prints a table with name, template, status, model, cwd, and update time.
+  Text mode prints a table with name, template, status, model, cwd, update time, and end reason.
   JSON mode returns {"ok", "command", "data.instances"}.
 
 Notes:
   Use list for multi-instance status overview.
+  A stopped instance is kept as a tombstone so it can still be diagnosed: status exited or lost, plus end_reason, ended_at, and any last_error the harness reported.
+  Tombstones are hidden by default, never count against max_instances, and are swept after defaults.status.tombstone_ttl_ms.
+  inspect keeps answering for a tombstone; prompt, capture, and wait fail with process_not_running and name the reason.
 
 Examples:
   agentmux list
-  agentmux list --json
+  agentmux list --all --json
+`)
+}
+
+func runHelp() string {
+	return strings.TrimSpace(`
+run delegates one task from start to finish and returns what the agent produced.
+
+Usage:
+  agentmux run --template <template-name> [flags]
+
+Flags:
+  --template <name>         Template to summon or reuse (required)
+  --name <instance-name>    Instance name; generated when omitted
+  --cwd <path>              Working directory for the agent
+  --model <model>           Override the template model
+  --command <shell-command> Override the template command
+  --system-prompt <text>    Override the template system prompt
+  --prompt <text>           The task to send
+  --prompt-file <path>      Read the task from a file, which is the reliable way to send a long contract
+  --stdin                   Read the task from stdin
+  --timeout <duration-or-ms> How long to wait for the answer, default 5m
+  --history <limit>         Message limit for the returned output
+  --raw                     Include raw protocol events in the returned output
+  --json                    Return JSON output
+  -h, --help                Show this help
+
+Behavior:
+  run is summon + prompt + wait + capture in one call, with one exit code and one payload.
+  Exactly one of --prompt, --prompt-file, or --stdin is required.
+  An existing instance with the same name is reused, so repeated runs continue the same session.
+  Reaching --timeout is not a failure: the agent keeps working, data.timed_out is set, and whatever it produced so far is returned. Wait on the instance again to pick it up.
+  The instance is left running so its work can be inspected; stop it with halt.
+
+Examples:
+  agentmux run --template codex-cli-execjson --cwd ~/work/project --prompt "修复登录重试" --json
+  agentmux run --template claude-code-ndjson --name 审查-A --prompt-file ./task.md --timeout 10m --json
+  cat task.md | agentmux run --template pi-rpc --stdin --json
 `)
 }
 
@@ -278,6 +327,7 @@ Arguments:
 Flags:
   --scope <scope>           Output scope: current or session, default current
   --history <limit>         TUI: history lines; structured: message limit (default 20, 0 means no limit)
+  --since <cursor>          Return only what is new since a cursor from an earlier capture
   --raw                     Include raw protocol events and untruncated bodies
   --json                    Return JSON output
   -h, --help                Show this help
@@ -292,6 +342,8 @@ Notes:
   For structured harnesses, current means the active or most recent turn; session spans the whole recorded conversation.
   Structured harnesses emit one message per protocol event, so JSON output is capped at 20 messages and strips raw payloads by default.
   Use --raw (optionally with --history 0) for debugging; the untouched event stream is always kept in the instance output.jsonl.
+  Every structured capture returns data.next_cursor; pass it back as --since to read only what arrived after it, which is how a long run is watched cheaply.
+  --since overrides --scope, is not capped by the default message limit, and needs a recorded event stream, so terminal harnesses reject it.
   capture is for reading output, not for waiting or querying status by itself.
   Use inspect --json when you only need current status or pane title.
   Use wait if you need to block until the agent appears done.
@@ -301,6 +353,7 @@ Examples:
   agentmux capture 编码助手-A --history 120
   agentmux capture 编码助手-A --json
   agentmux capture 编码助手-A --scope session --history 40 --json
+  agentmux capture 编码助手-A --since 4096 --json
 `)
 }
 
@@ -309,12 +362,13 @@ func waitHelp() string {
 wait blocks until the agent appears to have finished its current work without returning captured content.
 
 Usage:
-  agentmux wait <instance-name> [flags]
+  agentmux wait <instance-name>... [flags]
 
 Arguments:
-  <instance-name>           Target instance name
+  <instance-name>...        One or more instance names, listed before any flag
 
 Flags:
+  --mode all|any            With several instances: return when all finish, or as soon as one does. Default all
   --stable <duration-or-ms> Settle window before an idle signal is trusted, and stability window for generic detection, default 1500
   --timeout <duration-or-ms> Maximum wait time, default 30s
   --json                    Return JSON output
@@ -330,6 +384,8 @@ Notes:
   Only a broken, lost, or exited instance makes wait fail.
   A prompt confirms that a title-signaling harness started working; until that is observed, an idle title inside the --stable window is treated as stale and ignored.
   data.saw_busy reports whether this wait actually observed the harness working.
+  With several instances, data.instances reports each one, plus data.done, data.pending, and data.failed. mode=any is what makes a fan-out usable: handle whichever shard lands first instead of blocking on the slowest.
+  With several instances a failure on one is reported against that instance instead of discarding the other results.
   Use inspect or list when you want to query status without blocking.
   For title-signaling harnesses such as claude-code, codex-cli, and gemini-cli, completion is inferred from pane_title idle markers.
   For claude-code-ndjson, completion is inferred from protocol events.
@@ -341,6 +397,7 @@ Notes:
 Examples:
   agentmux wait 编码助手-A --stable 1500 --timeout 30s --json
   agentmux wait 编码助手-A --timeout 3m --json
+  agentmux wait 分片-A 分片-B 分片-C --mode any --timeout 5m --json
   agentmux wait 编码助手-A --stable 2s
 `)
 }
@@ -391,10 +448,14 @@ Examples:
 
 func versionHelp() string {
 	return strings.TrimSpace(`
-version prints the current agentmux CLI version.
+version prints the current agentmux CLI version, and in JSON mode what this build can do.
 
 Usage:
   agentmux version [--json]
+
+Output:
+  Text mode prints the version string only.
+  JSON mode also returns data.commands, data.harness_types, and data.features, so a caller can check for a capability instead of probing commands and interpreting failures.
 
 Examples:
   agentmux version

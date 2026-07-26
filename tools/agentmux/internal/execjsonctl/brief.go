@@ -3,6 +3,9 @@ package execjsonctl
 import (
 	"encoding/json"
 	"strconv"
+	"strings"
+
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/capture"
 )
 
 const (
@@ -45,4 +48,13 @@ func truncate(s string, max int) string {
 		cut = i
 	}
 	return s[:cut] + "…(truncated)"
+}
+
+// captureFrom resolves where a capture should start reading: an explicit
+// cursor when the caller passed one, otherwise the scope's natural origin.
+func captureFrom(opts capture.Options, origin func() int64) (int64, error) {
+	if strings.TrimSpace(opts.Since) != "" {
+		return capture.ParseCursor(opts.Since)
+	}
+	return origin(), nil
 }

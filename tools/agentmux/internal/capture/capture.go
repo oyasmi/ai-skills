@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"strconv"
+	"strings"
 	"time"
 
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/apperr"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/tmuxctl"
 )
 
@@ -52,6 +55,30 @@ type Options struct {
 	// Raw includes each protocol event's original JSON in normalized messages.
 	// Off by default: it multiplies the payload an orchestrator must read.
 	Raw bool
+	// Since is a cursor from an earlier capture. When set, only what the
+	// instance produced after it is returned, so watching a long run costs the
+	// new output rather than the whole transcript every time. Structured
+	// harnesses only; it takes precedence over Scope.
+	Since string
+}
+
+// A cursor is an opaque handle over a position in an instance's recorded
+// output. It is a byte offset today; callers must treat it as opaque and only
+// ever pass back a value the tool produced.
+func FormatCursor(offset int64) string {
+	return strconv.FormatInt(offset, 10)
+}
+
+func ParseCursor(cursor string) (int64, error) {
+	trimmed := strings.TrimSpace(cursor)
+	if trimmed == "" {
+		return 0, nil
+	}
+	offset, err := strconv.ParseInt(trimmed, 10, 64)
+	if err != nil || offset < 0 {
+		return 0, apperr.New("invalid_arguments", "invalid --since cursor "+cursor+"; pass back a next_cursor from an earlier capture")
+	}
+	return offset, nil
 }
 
 type TitleState string

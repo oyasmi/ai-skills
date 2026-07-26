@@ -1,4 +1,4 @@
 interface:
   display_name: "AgentMux"
   short_description: "通过 AgentMux 委派并管理外部 CLI coding agent"
-  default_prompt: "使用 $agentmux 选择合适的 harness，创建或复用外部 coding agent 实例，发送包含明确目标、相关上下文、范围边界和可验证完成标准的任务指令，耐心等待并读取输出，最后直接验证实际交付物；全程不要直接调用 tmux。"
+  default_prompt: "使用 $agentmux 委派外部 coding agent：优先用 `agentmux run` 一次性完成单路任务，任务指令要写明目标、相关上下文、范围边界和可验证的完成标准；并行时用 `summon --prompt` 发出后再 `wait --mode any`，且每个写入型实例必须使用独立 worktree 和不同 `--cwd`；耐心等待（超时只表示仍在工作），读输出优先用不带 --json 的 capture，最后必须自己读文件、diff 并运行验证，不能只相信外部 Agent 的完成声明；全程不要直接调用 tmux。"

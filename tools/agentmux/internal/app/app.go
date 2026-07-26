@@ -81,10 +81,11 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 		_ = w.Flush()
 		return 0
 	case "list":
-		if len(args) > 1 {
-			return writeErr(stdout, stderr, jsonMode, "list", "", apperr.New("invalid_arguments", "list does not accept positional arguments\n\n"+listHelp()))
+		includeEnded, err := parseListArgs(args[1:])
+		if err != nil {
+			return writeErr(stdout, stderr, jsonMode, "list", "", err)
 		}
-		items, err := svc.List(ctx)
+		items, err := svc.List(ctx, includeEnded)
 		if err != nil {
 			return writeErr(stdout, stderr, jsonMode, "list", "", err)
 		}
@@ -93,9 +94,9 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 			return 0
 		}
 		w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "NAME\tTEMPLATE\tSTATUS\tMODEL\tCWD\tUPDATED")
+		fmt.Fprintln(w, "NAME\tTEMPLATE\tSTATUS\tMODEL\tCWD\tUPDATED\tENDED")
 		for _, item := range items {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", item.Name, item.Template, item.Status, item.Model, item.CWD, item.UpdatedAt.Format(time.RFC3339))
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", item.Name, item.Template, item.Status, item.Model, item.CWD, item.UpdatedAt.Format(time.RFC3339), item.EndReason)
 		}
 		_ = w.Flush()
 		return 0
@@ -125,6 +126,48 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 			return 0
 		}
 		fmt.Fprintf(stdout, "%s\t%s\t%s\n", res.Instance.Name, res.Instance.Template, res.Instance.Status)
+		return 0
+	case "run":
+		input, useStdin, err := parseRunArgs(args[1:])
+		if err != nil {
+			return writeErr(stdout, stderr, jsonMode, "run", "", err)
+		}
+		if useStdin {
+			input.Prompt, err = readPromptText(os.Stdin)
+			if err != nil {
+				return writeErr(stdout, stderr, jsonMode, "run", input.Summon.Name, err)
+			}
+		}
+		res, err := svc.Run(ctx, input)
+		if err != nil {
+			return writeErr(stdout, stderr, jsonMode, "run", input.Summon.Name, err)
+		}
+		if jsonMode {
+			data := map[string]any{
+				"template":     res.Instance.Template,
+				"harness_type": res.Instance.HarnessType,
+				"cwd":          res.Instance.CWD,
+				"content":      res.Snapshot.Content,
+				"timed_out":    res.TimedOut,
+				"elapsed_ms":   res.ElapsedMS,
+			}
+			for k, v := range res.Snapshot.Extra {
+				data[k] = v
+			}
+			_ = output.WriteJSON(stdout, output.Success{
+				OK:       true,
+				Command:  "run",
+				Instance: res.Instance.Name,
+				Reused:   boolPtr(res.Reused),
+				Status:   string(res.Instance.Status),
+				Data:     data,
+			})
+			return 0
+		}
+		fmt.Fprint(stdout, res.Snapshot.Content)
+		if res.TimedOut {
+			fmt.Fprintf(stderr, "\n%s is still working after %dms; wait on it again\n", res.Instance.Name, res.ElapsedMS)
+		}
 		return 0
 	case "inspect":
 		if len(args) < 2 {
@@ -189,6 +232,9 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 				"scope":        string(opts.Scope),
 				"content":      snap.Content,
 			}
+			if opts.Since != "" {
+				data["since"] = opts.Since
+			}
 			// Screen geometry only means something for a terminal harness;
 			// emitting zeroed fields for structured ones is pure noise.
 			if !service.IsStructuredHarness(inst.HarnessType) {
@@ -210,10 +256,14 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 		fmt.Fprint(stdout, snap.Content)
 		return 0
 	case "wait":
-		name, stableMS, timeoutMS, err := parseWaitArgs(args[1:])
+		names, stableMS, timeoutMS, mode, err := parseWaitArgs(args[1:])
 		if err != nil {
 			return writeErr(stdout, stderr, jsonMode, "wait", "", err)
 		}
+		if len(names) > 1 {
+			return waitMany(ctx, svc, names, stableMS, timeoutMS, mode, jsonMode, stdout, stderr)
+		}
+		name := names[0]
 		inst, snap, err := svc.Wait(ctx, name, stableMS, timeoutMS)
 		if err != nil {
 			return writeErr(stdout, stderr, jsonMode, "wait", name, err)
@@ -269,7 +319,12 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 			return writeErr(stdout, stderr, jsonMode, "version", "", apperr.New("invalid_arguments", "version does not accept positional arguments\n\n"+versionHelp()))
 		}
 		if jsonMode {
-			_ = output.WriteJSON(stdout, output.Success{OK: true, Command: "version", Data: map[string]any{"version": Version}})
+			_ = output.WriteJSON(stdout, output.Success{OK: true, Command: "version", Data: map[string]any{
+				"version":       Version,
+				"commands":      commandNames(),
+				"harness_types": service.HarnessTypes(),
+				"features":      featureNames(),
+			}})
 			return 0
 		}
 		fmt.Fprintln(stdout, Version)

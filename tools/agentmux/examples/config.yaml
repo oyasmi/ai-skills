@@ -10,6 +10,8 @@ defaults:
     busy_ttl_ms: 30000
     # 发送 prompt 后，最多等多久确认 TUI harness 真的开始工作（0 表示不确认）。
     prompt_ack_ms: 5000
+    # 已停止的实例保留多久可供排查（0 表示永久保留）。
+    tombstone_ttl_ms: 86400000
   shell: /bin/bash -lc
   cwd: .
   env:

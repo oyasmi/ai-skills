@@ -50,6 +50,19 @@ func (s Service) harnessFor(inst instance.Instance) (harness, bool) {
 	}
 }
 
+// HarnessTypes lists every harness this binary can drive, so a caller can pick
+// a template without discovering support by trial and error.
+func HarnessTypes() []string {
+	return []string{
+		claudeCodeHarnessType,
+		codexCLIHarnessType,
+		geminiCLIHarnessType,
+		ndjsonctl.HarnessType,
+		execjsonctl.HarnessType,
+		rpcctl.HarnessType,
+	}
+}
+
 // IsStructuredHarness reports whether a harness type talks a protocol instead
 // of driving a terminal. Callers use it to decide which observation fields are
 // meaningful: a structured instance has no screen, cursor or pane title.

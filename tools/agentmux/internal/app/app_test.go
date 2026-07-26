@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/service"
 )
 
 func TestRunRejectsListPositionalArguments(t *testing.T) {
@@ -121,7 +123,7 @@ func TestParseArgsRejectFlagInInstanceNamePosition(t *testing.T) {
 		!strings.Contains(err.Error(), "instance name must come before flags") {
 		t.Fatalf("unexpected prompt error: %v", err)
 	}
-	if _, _, _, err := parseWaitArgs([]string{"--timeout", "5s", "demo"}); err == nil ||
+	if _, _, _, _, err := parseWaitArgs([]string{"--timeout", "5s", "demo"}); err == nil ||
 		!strings.Contains(err.Error(), "instance name must come before flags") {
 		t.Fatalf("unexpected wait error: %v", err)
 	}
@@ -132,12 +134,70 @@ func TestParseArgsRejectFlagInInstanceNamePosition(t *testing.T) {
 }
 
 func TestParseWaitArgsDefaults(t *testing.T) {
-	name, stableMS, timeoutMS, err := parseWaitArgs([]string{"demo"})
+	names, stableMS, timeoutMS, mode, err := parseWaitArgs([]string{"demo"})
 	if err != nil {
 		t.Fatalf("parseWaitArgs: %v", err)
 	}
-	if name != "demo" || stableMS != 1500 || timeoutMS != 30000 {
-		t.Fatalf("unexpected parsed values: %q %d %d", name, stableMS, timeoutMS)
+	if len(names) != 1 || names[0] != "demo" || stableMS != 1500 || timeoutMS != 30000 || mode != service.WaitAll {
+		t.Fatalf("unexpected parsed values: %v %d %d %s", names, stableMS, timeoutMS, mode)
+	}
+}
+
+func TestParseWaitArgsAcceptsSeveralInstances(t *testing.T) {
+	names, _, timeoutMS, mode, err := parseWaitArgs([]string{"a", "b", "a", "--mode", "any", "--timeout", "2m"})
+	if err != nil {
+		t.Fatalf("parseWaitArgs: %v", err)
+	}
+	if len(names) != 2 || names[0] != "a" || names[1] != "b" {
+		t.Fatalf("expected deduplicated names in order, got %v", names)
+	}
+	if mode != service.WaitAny || timeoutMS != 120000 {
+		t.Fatalf("unexpected mode/timeout: %s %d", mode, timeoutMS)
+	}
+
+	if _, _, _, _, err := parseWaitArgs([]string{"a", "--mode", "first"}); err == nil ||
+		!strings.Contains(err.Error(), "must be all or any") {
+		t.Fatalf("expected an invalid mode to fail, got %v", err)
+	}
+	// Names after flags are a mistake worth naming: they would be silently
+	// dropped otherwise.
+	if _, _, _, _, err := parseWaitArgs([]string{"a", "--mode", "any", "b"}); err == nil ||
+		!strings.Contains(err.Error(), "list every instance name first") {
+		t.Fatalf("expected trailing names to fail, got %v", err)
+	}
+}
+
+func TestParseRunArgsRequiresPromptAndDefaultsTimeout(t *testing.T) {
+	in, useStdin, err := parseRunArgs([]string{"--template", "worker", "--prompt", "do it"})
+	if err != nil {
+		t.Fatalf("parseRunArgs: %v", err)
+	}
+	if useStdin || in.Prompt != "do it" || in.TimeoutMS != 300000 {
+		t.Fatalf("unexpected run input: stdin=%v prompt=%q timeout=%d", useStdin, in.Prompt, in.TimeoutMS)
+	}
+	if in.Capture.History != -1 || in.Capture.Raw {
+		t.Fatalf("run must inherit capture defaults, got %+v", in.Capture)
+	}
+
+	if _, _, err := parseRunArgs([]string{"--template", "worker", "--prompt", "a", "--stdin"}); err == nil {
+		t.Fatal("expected --stdin with --prompt to fail")
+	}
+	if _, _, err := parseRunArgs([]string{"--prompt", "a"}); err == nil ||
+		!strings.Contains(err.Error(), "requires --template") {
+		t.Fatalf("expected a missing template to fail, got %v", err)
+	}
+}
+
+func TestParseListArgsAcceptsAll(t *testing.T) {
+	includeEnded, err := parseListArgs([]string{"--all"})
+	if err != nil || !includeEnded {
+		t.Fatalf("parseListArgs --all: %v %v", includeEnded, err)
+	}
+	if includeEnded, err := parseListArgs(nil); err != nil || includeEnded {
+		t.Fatalf("list must hide tombstones by default: %v %v", includeEnded, err)
+	}
+	if _, err := parseListArgs([]string{"worker"}); err == nil {
+		t.Fatal("expected a positional argument to fail")
 	}
 }
 

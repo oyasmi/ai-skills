@@ -71,6 +71,107 @@ func parseSummonArgs(args []string) (service.SummonInput, error) {
 	return in, nil
 }
 
+// parseRunArgs accepts summon's flags plus the ones that shape a single
+// delegated task.
+func parseRunArgs(args []string) (service.RunInput, bool, error) {
+	in := service.RunInput{
+		TimeoutMS: 5 * 60 * 1000,
+		Capture:   capture.Options{History: -1, Scope: capture.ScopeCurrent},
+	}
+	var promptFile, timeoutRaw string
+	useStdin := false
+	rest := make([]string, 0, len(args))
+	args = splitEqualsForms(args, "--prompt-file", "--timeout", "--history")
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--prompt-file", "--timeout", "--history":
+			if i+1 >= len(args) {
+				return in, false, apperr.New("invalid_arguments", "missing value for "+args[i])
+			}
+			switch args[i] {
+			case "--prompt-file":
+				promptFile = args[i+1]
+			case "--timeout":
+				timeoutRaw = args[i+1]
+			case "--history":
+				n, err := strconv.Atoi(args[i+1])
+				if err != nil || n < -1 {
+					return in, false, apperr.New("invalid_arguments", "invalid value for --history: must be -1 or a non-negative integer")
+				}
+				in.Capture.History = n
+			}
+			i++
+		case "--stdin":
+			useStdin = true
+		case "--raw":
+			in.Capture.Raw = true
+		default:
+			rest = append(rest, args[i])
+		}
+	}
+	summon, err := parseSummonArgs(rest)
+	if err != nil {
+		return in, false, err
+	}
+	in.Summon = summon
+	if summon.Prompt != nil {
+		in.Prompt = *summon.Prompt
+	}
+	if promptFile != "" {
+		if in.Prompt != "" || useStdin {
+			return in, false, apperr.New("invalid_arguments", "--prompt-file cannot be combined with --prompt or --stdin")
+		}
+		text, err := readPromptFile(promptFile)
+		if err != nil {
+			return in, false, err
+		}
+		in.Prompt = text
+	}
+	if useStdin && in.Prompt != "" {
+		return in, false, apperr.New("invalid_arguments", "--stdin cannot be used with --text or --prompt")
+	}
+	if timeoutRaw != "" {
+		ms, err := parseMillisOrDuration(timeoutRaw, "--timeout")
+		if err != nil {
+			return in, false, err
+		}
+		in.TimeoutMS = ms
+	}
+	return in, useStdin, nil
+}
+
+// splitEqualsForms rewrites --flag=value into --flag value for the flags this
+// command consumes by hand, so both spellings behave the same.
+func splitEqualsForms(args []string, flags ...string) []string {
+	out := make([]string, 0, len(args))
+	for _, arg := range args {
+		matched := false
+		for _, flag := range flags {
+			if strings.HasPrefix(arg, flag+"=") {
+				out = append(out, flag, strings.TrimPrefix(arg, flag+"="))
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			out = append(out, arg)
+		}
+	}
+	return out
+}
+
+func parseListArgs(args []string) (includeEnded bool, err error) {
+	fs := newFlagSet("list")
+	fs.BoolVar(&includeEnded, "all", false, "")
+	if err := fs.Parse(args); err != nil {
+		return false, err
+	}
+	if fs.NArg() > 0 {
+		return false, apperr.New("invalid_arguments", "list does not accept positional arguments\n\n"+listHelp())
+	}
+	return includeEnded, nil
+}
+
 func parsePromptArgs(args []string) (name, text, key string, useStdin bool, err error) {
 	if len(args) == 0 {
 		return "", "", "", false, apperr.New("invalid_arguments", "missing instance name\n\n"+promptHelp())
@@ -108,6 +209,7 @@ func parseCaptureArgs(args []string) (name string, opts capture.Options, err err
 	fs := newFlagSet("capture")
 	fs.IntVar(&opts.History, "history", -1, "")
 	fs.BoolVar(&opts.Raw, "raw", false, "")
+	fs.StringVar(&opts.Since, "since", "", "")
 	fs.StringVar(&scopeRaw, "scope", string(capture.ScopeCurrent), "")
 	if err := fs.Parse(args[1:]); err != nil {
 		return "", capture.Options{}, err
@@ -139,34 +241,55 @@ func requireInstanceName(name, command, help string) error {
 	return nil
 }
 
-func parseWaitArgs(args []string) (name string, stableMS, timeoutMS int, err error) {
+func parseWaitArgs(args []string) (names []string, stableMS, timeoutMS int, mode service.WaitMode, err error) {
 	if len(args) == 0 {
-		return "", 0, 0, apperr.New("invalid_arguments", "missing instance name\n\n"+waitHelp())
+		return nil, 0, 0, "", apperr.New("invalid_arguments", "missing instance name\n\n"+waitHelp())
 	}
-	name = args[0]
-	if err := requireInstanceName(name, "wait", waitHelp()); err != nil {
-		return "", 0, 0, err
+	if err := requireInstanceName(args[0], "wait", waitHelp()); err != nil {
+		return nil, 0, 0, "", err
+	}
+	rest := args
+	for len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
+		names = appendUnique(names, rest[0])
+		rest = rest[1:]
 	}
 	fs := newFlagSet("wait")
-	var stableRaw string
-	var timeoutRaw string
+	var stableRaw, timeoutRaw, modeRaw string
 	fs.StringVar(&stableRaw, "stable", "1500", "")
 	fs.StringVar(&timeoutRaw, "timeout", "30s", "")
-	if err := fs.Parse(args[1:]); err != nil {
-		return "", 0, 0, err
+	fs.StringVar(&modeRaw, "mode", string(service.WaitAll), "")
+	if err := fs.Parse(rest); err != nil {
+		return nil, 0, 0, "", err
 	}
 	if fs.NArg() > 0 {
-		return "", 0, 0, apperr.New("invalid_arguments", "wait does not accept positional arguments after instance name")
+		return nil, 0, 0, "", apperr.New("invalid_arguments", "wait does not accept positional arguments after flags; list every instance name first")
+	}
+	switch service.WaitMode(strings.TrimSpace(modeRaw)) {
+	case service.WaitAll, "":
+		mode = service.WaitAll
+	case service.WaitAny:
+		mode = service.WaitAny
+	default:
+		return nil, 0, 0, "", apperr.New("invalid_arguments", "invalid value for --mode: must be all or any")
 	}
 	stableMS, err = parseMillisOrDuration(stableRaw, "--stable")
 	if err != nil {
-		return "", 0, 0, err
+		return nil, 0, 0, "", err
 	}
 	timeoutMS, err = parseMillisOrDuration(timeoutRaw, "--timeout")
 	if err != nil {
-		return "", 0, 0, err
+		return nil, 0, 0, "", err
 	}
-	return name, stableMS, timeoutMS, nil
+	return names, stableMS, timeoutMS, mode, nil
+}
+
+func appendUnique(names []string, name string) []string {
+	for _, existing := range names {
+		if existing == name {
+			return names
+		}
+	}
+	return append(names, name)
 }
 
 func parseHaltArgs(args []string) (name string, immediately bool, timeoutMS int, err error) {

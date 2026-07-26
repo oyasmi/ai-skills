@@ -189,6 +189,7 @@ func (c Controller) Reconcile(ctx context.Context, inst instance.Instance) (inst
 	if inst.Status == "" || inst.Status == instance.StatusStarting {
 		inst.Status = instance.StatusIdle
 	}
+	inst.LastError = st.LastError
 	inst.UpdatedAt = nowUTC()
 	return inst, nil
 }
@@ -246,11 +247,16 @@ func (c Controller) Capture(ctx context.Context, inst instance.Instance, opts ca
 	if err != nil {
 		return capture.Snapshot{}, err
 	}
-	var from int64
-	if opts.Scope != capture.ScopeSession {
-		from = promptStartOffset(st)
+	from, err := captureFrom(opts, func() int64 {
+		if opts.Scope == capture.ScopeSession {
+			return 0
+		}
+		return promptStartOffset(st)
+	})
+	if err != nil {
+		return capture.Snapshot{}, err
 	}
-	events, _, err := readEvents(outputPath(inst), from)
+	events, next, err := readEvents(outputPath(inst), from)
 	if err != nil {
 		return capture.Snapshot{}, err
 	}
@@ -270,6 +276,7 @@ func (c Controller) Capture(ctx context.Context, inst instance.Instance, opts ca
 			"turns":           st.TotalTurns,
 			"last_error":      st.LastError,
 			"raw_event_count": len(events),
+			"next_cursor":     capture.FormatCursor(next),
 		},
 	}, nil
 }

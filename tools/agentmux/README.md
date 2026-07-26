@@ -44,9 +44,15 @@ Windows 不是首要目标。
 19. `capture --json` 对结构化 harness 默认只返回最近 20 条消息、不返回协议原始事件，流式 delta 不再逐条成为消息；`--raw`、`--history 0` 可恢复完整输出
 20. 结构化 harness 的 `capture`/`wait` 不再输出恒为 0 的屏幕字段
 21. 实例名写在 flag 之后（`capture --history 40 worker`）会给出明确的用法错误，而不是把 flag 当成实例名
+22. 新增 `run`：一次调用完成 summon + prompt + wait + capture，是编排的默认入口
+23. `wait` 支持多个实例名和 `--mode all|any`，并行分片可以先处理最先完成的那个
+24. `capture --since <cursor>` 只返回新产生的内容；每次结构化 `capture` 都会给出 `data.next_cursor`
+25. 实例停止后保留为墓碑（`end_reason`、`ended_at`、`last_error`），`list --all` 可见，`inspect` 仍可查询，名字可被同名 `summon` 回收
+26. `version --json` 返回能力清单（`commands`、`harness_types`、`features`），便于调用方做特性探测
 
 命令职责上建议这样理解：
 
+0. `run` 用于一次性委派：创建或复用实例、发指令、等待、读回结果，只有一次调用
 1. `list` 用于批量查看实例及其当前状态
 2. `inspect --json` 用于查看单个实例当前状态、`pane_title` 和元数据
 3. `wait` 用于阻塞到 agent 看起来完成当前工作；超时返回 `timed_out: true` 而不是报错
@@ -217,6 +223,7 @@ defaults:
   status:
     busy_ttl_ms: 30000
     prompt_ack_ms: 5000
+    tombstone_ttl_ms: 86400000
   shell: /bin/bash -lc
   cwd: .
   env:
@@ -306,6 +313,16 @@ agentmux summon --template claude-code --name 编码助手-A --cwd ~/work/projec
 agentmux summon --template claude-code-ndjson --name 编码助手-N --cwd ~/work/project
 ```
 
+一次性委派一个任务（默认入口）：
+
+```bash
+agentmux run --template codex-cli-execjson --cwd ~/work/project --prompt "修复登录重试" --timeout 10m --json
+agentmux run --template claude-code-ndjson --name 审查-A --prompt-file ./task.md --json
+cat task.md | agentmux run --template pi-rpc --stdin --json
+```
+
+`run` 结束后实例保留，可以继续追加指令或检查；重复 `run` 同一个名字会在同一会话里继续。并行场景不要用 `run`（它会阻塞到自己这一路结束），改用 `summon --prompt` 发出去再统一 `wait`。
+
 创建并发送首条消息：
 
 ```bash
@@ -326,6 +343,7 @@ agentmux capture 编码助手-A                       # 只输出聚合文本，
 agentmux capture 编码助手-A --history 120         # TUI harness：向上抓 120 行屏幕历史
 agentmux capture 编码助手-A --json                # 结构化 harness：默认最近 20 条消息
 agentmux capture 编码助手-A --scope session --history 40 --json
+agentmux capture 编码助手-A --json --since 18422       # 只看上次之后的新内容
 agentmux capture 编码助手-A --json --history 0 --raw   # 调试用：完整消息与原始事件
 ```
 
@@ -334,6 +352,7 @@ agentmux capture 编码助手-A --json --history 0 --raw   # 调试用：完整�
 ```bash
 agentmux wait 编码助手-A --stable 1500 --timeout 30s --json
 agentmux wait 编码助手-A --timeout 3m --json   # 超时返回 timed_out: true，退出码仍为 0
+agentmux wait 分片-A 分片-B 分片-C --mode any --timeout 5m --json   # 谁先完成就返回谁
 ```
 
 继续发送消息：
@@ -365,11 +384,18 @@ agentmux halt 编码助手-A --immediately
 agentmux halt 编码助手-A --json
 ```
 
-查看版本：
+查看版本和能力：
 
 ```bash
 agentmux version
-agentmux version --json
+agentmux version --json   # 额外返回 commands / harness_types / features
+```
+
+查看实例（含已停止的墓碑）：
+
+```bash
+agentmux list
+agentmux list --all --json
 ```
 
 ## 命令语义
@@ -436,6 +462,14 @@ agentmux version --json
 6. 若调用方没有继续观测，通用 TUI harness 的 `busy` 会在 `defaults.status.busy_ttl_ms` 到期后自动退化为 `idle`
 7. 有 `pane_title` 信号的 harness 在启动确认窗口内不会仅凭上一轮遗留的标题退回 `idle`
 8. 若 `busy_ttl_ms: 0`，表示禁用自动退化，实例不会仅因 TTL 到期而自动回到 `idle`
+
+### 墓碑
+
+1. 实例停止后不会从注册表消失，而是保留 `status`（`exited`/`lost`）、`end_reason`、`ended_at` 和 `last_error`
+2. 这样调用方能区分「名字写错了」（`instance_not_found`）和「worker 死了，原因是 X」（`process_not_running`）
+3. `list` 默认隐藏墓碑，`list --all` 显示；`inspect` 对墓碑正常返回
+4. 墓碑不占 `max_instances` 配额，同名 `summon` 会直接回收名字
+5. 超过 `defaults.status.tombstone_ttl_ms`（默认 24 小时）自动清除
 
 ### `attach`
 

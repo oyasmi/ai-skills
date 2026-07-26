@@ -253,6 +253,7 @@ func (c Controller) applyState(inst instance.Instance, st State) instance.Instan
 		inst.ProcessID = 0
 		inst.ProcessGroupID = 0
 	}
+	inst.LastError = st.LastError
 	inst.UpdatedAt = nowUTC()
 	return inst
 }
@@ -333,14 +334,21 @@ func (c Controller) Capture(ctx context.Context, inst instance.Instance, opts ca
 		return capture.Snapshot{}, err
 	}
 	// Current scope reads the current (or most recent) turn. Session scope reads
-	// from the beginning and lets history act as a message limit.
-	var from int64
-	if opts.Scope != capture.ScopeSession {
-		if i := lastTurn(&st); i >= 0 {
-			from = st.Turns[i].StartOffset
+	// from the beginning and lets history act as a message limit. A cursor
+	// overrides both: it means "whatever is new since I last looked".
+	from, err := captureFrom(opts, func() int64 {
+		if opts.Scope == capture.ScopeSession {
+			return 0
 		}
+		if i := lastTurn(&st); i >= 0 {
+			return st.Turns[i].StartOffset
+		}
+		return 0
+	})
+	if err != nil {
+		return capture.Snapshot{}, err
 	}
-	events, _, err := readEvents(outputPath(inst), from)
+	events, next, err := readEvents(outputPath(inst), from)
 	if err != nil {
 		return capture.Snapshot{}, err
 	}
@@ -366,6 +374,7 @@ func (c Controller) Capture(ctx context.Context, inst instance.Instance, opts ca
 			"turn_state":      turnState,
 			"last_error":      st.LastError,
 			"raw_event_count": len(events),
+			"next_cursor":     capture.FormatCursor(next),
 		},
 	}, nil
 }
