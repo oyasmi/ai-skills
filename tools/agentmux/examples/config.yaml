@@ -8,6 +8,8 @@ defaults:
     load_user_config: false
   status:
     busy_ttl_ms: 30000
+    # 发送 prompt 后，最多等多久确认 TUI harness 真的开始工作（0 表示不确认）。
+    prompt_ack_ms: 5000
   shell: /bin/bash -lc
   cwd: .
   env:

@@ -230,13 +230,6 @@ func mcpToolName(item Item) string {
 	}
 }
 
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "\n…(truncated)"
-}
-
 func trimMessages(msgs []NormalizedMessage, history int) []NormalizedMessage {
 	if history <= 0 || len(msgs) <= history {
 		return msgs

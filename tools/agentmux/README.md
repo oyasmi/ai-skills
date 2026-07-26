@@ -17,7 +17,7 @@ Windows 不是首要目标。
 4. 模板名和实例名支持中文
 5. 关键命令支持 `--json`
 6. `summon` 默认同名复用
-7. `capture` 默认返回纯文本
+7. `capture` 默认返回纯文本，结构化 harness 的 `--json` 默认不含协议原始事件
 8. `claude-code-ndjson` 可绕过 tmux 终端界面，直接使用 Claude Code 的 stream-json 协议
 9. `codex-cli-execjson` 可绕过 tmux 终端界面，直接使用 `codex exec --json` 的事件流
 
@@ -39,13 +39,20 @@ Windows 不是首要目标。
 14. 结构化 harness 在启动状态落盘失败时会回滚新进程，`halt`/`interrupt` 也会向上返回信号与状态持久化错误
 15. `pi-rpc` usage 按事件 offset 幂等累计，避免流式事件重放导致 token 和费用重复计算
 16. CI 在 Linux/macOS 上运行测试与 vet，并在 Linux 上启用 race detector；发布打包前也必须通过测试
+17. `prompt` 现在会确认 TUI harness 真的开始工作（`defaults.status.prompt_ack_ms`，默认 5s），消除「刚发完任务 `wait` 立即返回 idle」的假完成
+18. `wait` 超时不再是错误：返回 `ok: true`、退出码 0、`status: busy`、`data.timed_out: true`，并新增 `saw_busy`、`elapsed_ms`
+19. `capture --json` 对结构化 harness 默认只返回最近 20 条消息、不返回协议原始事件，流式 delta 不再逐条成为消息；`--raw`、`--history 0` 可恢复完整输出
+20. 结构化 harness 的 `capture`/`wait` 不再输出恒为 0 的屏幕字段
+21. 实例名写在 flag 之后（`capture --history 40 worker`）会给出明确的用法错误，而不是把 flag 当成实例名
 
 命令职责上建议这样理解：
 
 1. `list` 用于批量查看实例及其当前状态
 2. `inspect --json` 用于查看单个实例当前状态、`pane_title` 和元数据
-3. `wait` 用于阻塞到 agent 看起来完成当前工作
+3. `wait` 用于阻塞到 agent 看起来完成当前工作；超时返回 `timed_out: true` 而不是报错
 4. `capture` 用于读取实例输出；TUI harness 返回终端文本，结构化 harness 返回协议消息聚合后的文本和结构化数据
+
+面向 Agent 编排的读取建议：只要目的是「看外部 Agent 说了什么」，用不带 `--json` 的 `capture`，它只打印聚合后的 `content`；需要 `usage`、`thread_id`、`turn_state` 时再加 `--json`。
 
 ### 两种结构化 harness 的差异
 
@@ -209,6 +216,7 @@ defaults:
     load_user_config: false
   status:
     busy_ttl_ms: 30000
+    prompt_ack_ms: 5000
   shell: /bin/bash -lc
   cwd: .
   env:
@@ -314,14 +322,18 @@ agentmux inspect 编码助手-A --json
 立即读取当前输出：
 
 ```bash
-agentmux capture 编码助手-A --history 120 --json
+agentmux capture 编码助手-A                       # 只输出聚合文本，最省 token
+agentmux capture 编码助手-A --history 120         # TUI harness：向上抓 120 行屏幕历史
+agentmux capture 编码助手-A --json                # 结构化 harness：默认最近 20 条消息
 agentmux capture 编码助手-A --scope session --history 40 --json
+agentmux capture 编码助手-A --json --history 0 --raw   # 调试用：完整消息与原始事件
 ```
 
 等待 agent 完成当前工作，不返回内容：
 
 ```bash
 agentmux wait 编码助手-A --stable 1500 --timeout 30s --json
+agentmux wait 编码助手-A --timeout 3m --json   # 超时返回 timed_out: true，退出码仍为 0
 ```
 
 继续发送消息：
@@ -406,6 +418,14 @@ agentmux version --json
 7. `codex-cli-execjson` 下 `--text`/`--stdin` 启动一个新 turn 进程；实例正在跑 turn 时会报错 `execjson_instance_busy`，因为 codex 无法向执行中的 turn 追加输入
 8. `codex-cli-execjson` 下 `--key C-c` 会中断当前 turn（进程直接结束），其余 TUI 导航键为 no-op
 
+### `wait` 的完成判定
+
+1. TUI harness 的 `pane_title` 在 harness 反应过来之前仍然描述上一轮，直接相信会把未开始的工作判成已完成
+2. 因此 `prompt` 发送文本后会先确认 `pane_title` 切到 busy 标记，最多等 `defaults.status.prompt_ack_ms`（默认 `5000`，`0` 关闭）
+3. 确认成功后，本轮的 idle 信号立即可信，`wait` 可以马上返回
+4. 未确认时，`wait` 在 `--stable` 窗口内不接受 idle 信号；`data.saw_busy` 说明本次等待是否真的观察到 harness 在工作
+5. 超时返回 `ok: true` + `status: busy` + `data.timed_out: true`，表示「仍在工作」，不是失败
+
 ### `busy` 状态
 
 1. `prompt` 后实例会进入 `busy`
@@ -414,7 +434,8 @@ agentmux version --json
 4. `claude-code-ndjson` 会根据 Claude Code 协议事件收敛到 `idle`；中断后若连续 5 秒没有新事件，也会兜底回到 `idle` 并记录 `interrupted`
 5. `codex-cli-execjson` 在 turn 进程退出后收敛到 `idle`；两个 turn 之间没有进程存在，`idle` 且 `process_id=0` 是正常状态
 6. 若调用方没有继续观测，通用 TUI harness 的 `busy` 会在 `defaults.status.busy_ttl_ms` 到期后自动退化为 `idle`
-7. 若 `busy_ttl_ms: 0`，表示禁用自动退化，实例不会仅因 TTL 到期而自动回到 `idle`
+7. 有 `pane_title` 信号的 harness 在启动确认窗口内不会仅凭上一轮遗留的标题退回 `idle`
+8. 若 `busy_ttl_ms: 0`，表示禁用自动退化，实例不会仅因 TTL 到期而自动回到 `idle`
 
 ### `attach`
 

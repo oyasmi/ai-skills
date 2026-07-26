@@ -23,6 +23,7 @@ defaults:
     load_user_config: false
   status:
     busy_ttl_ms: 30000
+    prompt_ack_ms: 5000
   shell: /bin/bash -lc
   cwd: .
   env:
@@ -133,6 +134,10 @@ type TmuxDefaults struct {
 
 type StatusDefaults struct {
 	BusyTTLMS *int `yaml:"busy_ttl_ms"`
+	// PromptAckMS bounds how long a prompt waits for a TUI harness to visibly
+	// start working before giving up on observing the transition. 0 disables
+	// the confirmation.
+	PromptAckMS *int `yaml:"prompt_ack_ms"`
 }
 
 type CaptureDefaults struct {
@@ -219,6 +224,9 @@ func (c *Config) ApplyDefaults() {
 	if c.Defaults.Status.BusyTTLMS == nil {
 		c.Defaults.Status.BusyTTLMS = intPtr(30000)
 	}
+	if c.Defaults.Status.PromptAckMS == nil {
+		c.Defaults.Status.PromptAckMS = intPtr(5000)
+	}
 	if c.Defaults.CWD == "" {
 		c.Defaults.CWD = "."
 	}
@@ -251,6 +259,9 @@ func (c Config) Validate() error {
 	}
 	if c.Defaults.Status.BusyTTLMS != nil && *c.Defaults.Status.BusyTTLMS < 0 {
 		return apperr.New("config_invalid", "status.busy_ttl_ms must be non-negative")
+	}
+	if c.Defaults.Status.PromptAckMS != nil && *c.Defaults.Status.PromptAckMS < 0 {
+		return apperr.New("config_invalid", "status.prompt_ack_ms must be non-negative")
 	}
 	if strings.TrimSpace(c.Defaults.Tmux.Socket) == "" {
 		return apperr.New("config_invalid", "tmux socket must not be empty")

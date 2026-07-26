@@ -152,7 +152,7 @@ func TestPromptWaitCaptureThenResumeSecondTurn(t *testing.T) {
 		t.Fatal("a thread that emitted thread.started must be resumable")
 	}
 
-	snap, err := ctrl.Capture(context.Background(), inst, 0, capture.ScopeCurrent)
+	snap, err := ctrl.Capture(context.Background(), inst, capture.Options{Scope: capture.ScopeCurrent})
 	if err != nil {
 		t.Fatalf("capture: %v", err)
 	}
@@ -180,14 +180,14 @@ func TestPromptWaitCaptureThenResumeSecondTurn(t *testing.T) {
 	if !strings.Contains(string(script), "resume 'thread-fake-1'") {
 		t.Fatalf("second turn must resume the thread, got:\n%s", script)
 	}
-	current, err := ctrl.Capture(context.Background(), inst, 0, capture.ScopeCurrent)
+	current, err := ctrl.Capture(context.Background(), inst, capture.Options{Scope: capture.ScopeCurrent})
 	if err != nil {
 		t.Fatalf("capture current: %v", err)
 	}
 	if strings.Contains(messagesText(current), "echo:hello") || !strings.Contains(messagesText(current), "echo:again") {
 		t.Fatalf("current scope must only include the latest turn, got %s", messagesText(current))
 	}
-	session, err := ctrl.Capture(context.Background(), inst, 0, capture.ScopeSession)
+	session, err := ctrl.Capture(context.Background(), inst, capture.Options{Scope: capture.ScopeSession})
 	if err != nil {
 		t.Fatalf("capture session: %v", err)
 	}
@@ -342,9 +342,13 @@ func TestCrashedTurnFailsButInstanceStaysIdle(t *testing.T) {
 		t.Fatalf("expected the recorded exit code, got %v", st.Turns[0].ExitCode)
 	}
 	// The instance can still take another prompt.
-	if _, err := ctrl.SendPrompt(context.Background(), inst, "retry"); err != nil {
+	retried, err := ctrl.SendPrompt(context.Background(), inst, "retry")
+	if err != nil {
 		t.Fatalf("expected the instance to remain promptable, got %v", err)
 	}
+	// That prompt spawned a detached turn process. Let it finish, or it races
+	// the temp dir cleanup by writing files back into a directory being removed.
+	waitIdle(t, ctrl, retried)
 }
 
 func TestTurnFailedIsRecordedWithoutFailingWait(t *testing.T) {
@@ -366,7 +370,7 @@ func TestTurnFailedIsRecordedWithoutFailingWait(t *testing.T) {
 	if _, err := ctrl.Wait(context.Background(), inst, 10*time.Second); err != nil {
 		t.Fatalf("wait must succeed even when the turn failed: %v", err)
 	}
-	snap, err := ctrl.Capture(context.Background(), inst, 0, capture.ScopeCurrent)
+	snap, err := ctrl.Capture(context.Background(), inst, capture.Options{Scope: capture.ScopeCurrent})
 	if err != nil {
 		t.Fatalf("capture: %v", err)
 	}

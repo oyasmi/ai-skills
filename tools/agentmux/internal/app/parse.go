@@ -76,6 +76,9 @@ func parsePromptArgs(args []string) (name, text, key string, useStdin bool, err 
 		return "", "", "", false, apperr.New("invalid_arguments", "missing instance name\n\n"+promptHelp())
 	}
 	name = args[0]
+	if err := requireInstanceName(name, "prompt", promptHelp()); err != nil {
+		return "", "", "", false, err
+	}
 	fs := newFlagSet("prompt")
 	fs.StringVar(&text, "text", "", "")
 	fs.StringVar(&key, "key", "", "")
@@ -92,35 +95,48 @@ func parsePromptArgs(args []string) (name, text, key string, useStdin bool, err 
 	return name, text, key, useStdin, nil
 }
 
-func parseCaptureArgs(args []string) (name string, history int, scope capture.Scope, err error) {
+func parseCaptureArgs(args []string) (name string, opts capture.Options, err error) {
 	if len(args) == 0 {
-		return "", 0, "", apperr.New("invalid_arguments", "missing instance name\n\n"+captureHelp())
+		return "", capture.Options{}, apperr.New("invalid_arguments", "missing instance name\n\n"+captureHelp())
 	}
 	name = args[0]
-	history = -1
-	scope = capture.ScopeCurrent
+	if err := requireInstanceName(name, "capture", captureHelp()); err != nil {
+		return "", capture.Options{}, err
+	}
+	opts = capture.Options{History: -1, Scope: capture.ScopeCurrent}
 	var scopeRaw string
 	fs := newFlagSet("capture")
-	fs.IntVar(&history, "history", -1, "")
+	fs.IntVar(&opts.History, "history", -1, "")
+	fs.BoolVar(&opts.Raw, "raw", false, "")
 	fs.StringVar(&scopeRaw, "scope", string(capture.ScopeCurrent), "")
 	if err := fs.Parse(args[1:]); err != nil {
-		return "", 0, "", err
+		return "", capture.Options{}, err
 	}
 	if fs.NArg() > 0 {
-		return "", 0, "", apperr.New("invalid_arguments", "capture does not accept positional arguments after instance name")
+		return "", capture.Options{}, apperr.New("invalid_arguments", "capture does not accept positional arguments after instance name")
 	}
-	if history < -1 {
-		return "", 0, "", apperr.New("invalid_arguments", "invalid value for --history: must be -1 or a non-negative integer")
+	if opts.History < -1 {
+		return "", capture.Options{}, apperr.New("invalid_arguments", "invalid value for --history: must be -1 or a non-negative integer")
 	}
 	switch capture.Scope(strings.TrimSpace(scopeRaw)) {
 	case capture.ScopeCurrent, "":
-		scope = capture.ScopeCurrent
+		opts.Scope = capture.ScopeCurrent
 	case capture.ScopeSession:
-		scope = capture.ScopeSession
+		opts.Scope = capture.ScopeSession
 	default:
-		return "", 0, "", apperr.New("invalid_arguments", "invalid value for --scope: must be current or session")
+		return "", capture.Options{}, apperr.New("invalid_arguments", "invalid value for --scope: must be current or session")
 	}
-	return name, history, scope, nil
+	return name, opts, nil
+}
+
+// requireInstanceName rejects a flag in the instance-name position. Without it
+// `agentmux capture --history 40 worker` silently treats "--history" as the
+// instance and fails with an error that points nowhere near the real mistake.
+func requireInstanceName(name, command, help string) error {
+	if strings.HasPrefix(name, "-") {
+		return apperr.New("invalid_arguments", "the instance name must come before flags: "+command+" <instance-name> [flags]\n\n"+help)
+	}
+	return nil
 }
 
 func parseWaitArgs(args []string) (name string, stableMS, timeoutMS int, err error) {
@@ -128,6 +144,9 @@ func parseWaitArgs(args []string) (name string, stableMS, timeoutMS int, err err
 		return "", 0, 0, apperr.New("invalid_arguments", "missing instance name\n\n"+waitHelp())
 	}
 	name = args[0]
+	if err := requireInstanceName(name, "wait", waitHelp()); err != nil {
+		return "", 0, 0, err
+	}
 	fs := newFlagSet("wait")
 	var stableRaw string
 	var timeoutRaw string
@@ -155,6 +174,9 @@ func parseHaltArgs(args []string) (name string, immediately bool, timeoutMS int,
 		return "", false, 0, apperr.New("invalid_arguments", "missing instance name\n\n"+haltHelp())
 	}
 	name = args[0]
+	if err := requireInstanceName(name, "halt", haltHelp()); err != nil {
+		return "", false, 0, err
+	}
 	fs := newFlagSet("halt")
 	var timeoutRaw string
 	fs.BoolVar(&immediately, "immediately", false, "")

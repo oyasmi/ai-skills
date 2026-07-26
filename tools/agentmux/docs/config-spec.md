@@ -126,17 +126,28 @@ tmux:
 ```yaml
 status:
   busy_ttl_ms: 30000
+  prompt_ack_ms: 5000
 ```
 
 字段：
 
 1. `busy_ttl_ms`
+2. `prompt_ack_ms`
 
-规则：
+`busy_ttl_ms` 规则：
 
 1. 可选，默认为 `30000`（30 秒）
 2. 实例在 `busy` 状态超过此时间后自动退化为 `idle`
 3. 设为 `0` 表示禁用自动退化
+
+`prompt_ack_ms` 规则：
+
+1. 可选，默认为 `5000`（5 秒）
+2. 只作用于有 `pane_title` 状态信号的 TUI harness（`claude-code`、`codex-cli`、`gemini-cli`）
+3. 发送文本 prompt 后，`agentmux` 最多等这么久，确认 harness 的 `pane_title` 真的切换到 busy 标记
+4. 观察到切换即立即返回，因此正常情况下额外开销只有数百毫秒
+5. 观察到切换后，本轮后续的 idle 信号立即可信；未观察到时回退到 `capture.stable_ms` 的保守静默窗口
+6. 设为 `0` 表示不做确认（不推荐：`wait` 可能把上一轮遗留的 idle 标题误判为本轮完成）
 
 ### 4.3 `defaults.shell`
 

@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"time"
 
-	"github.com/oyasmi/ai-skills/tools/agentmux/internal/apperr"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/tmuxctl"
 )
 
@@ -26,8 +25,17 @@ type Snapshot struct {
 	PaneTitle   string
 	CapturedAt  time.Time
 	StableForMS int
+	ElapsedMS   int
 	Dead        bool
-	Extra       map[string]any
+	// SawBusy records that the harness was observed working during this wait.
+	// An idle signal that follows an observed busy signal is a real completion;
+	// one that never left idle may just be a stale pre-prompt reading.
+	SawBusy bool
+	// TimedOut marks "still working when the deadline hit". It is a normal
+	// outcome of waiting, not a failure, so it travels in the snapshot rather
+	// than as an error.
+	TimedOut bool
+	Extra    map[string]any
 }
 
 type Scope string
@@ -37,25 +45,72 @@ const (
 	ScopeSession Scope = "session"
 )
 
-type TitleIdleFunc func(paneTitle string) bool
+// Options carries what a caller wants read back from an instance.
+type Options struct {
+	History int
+	Scope   Scope
+	// Raw includes each protocol event's original JSON in normalized messages.
+	// Off by default: it multiplies the payload an orchestrator must read.
+	Raw bool
+}
+
+type TitleState string
+
+const (
+	TitleIdle    TitleState = "idle"
+	TitleBusy    TitleState = "busy"
+	TitleUnknown TitleState = "unknown"
+)
+
+// TitleStateFunc maps a harness pane title to an agent state.
+type TitleStateFunc func(paneTitle string) TitleState
+
+// WaitOptions configures a blocking wait on a tmux-backed instance.
+type WaitOptions struct {
+	History   int
+	StableMS  int
+	TimeoutMS int
+	PollMS    int
+	// TitleState, when set, is the harness's direct completion signal.
+	TitleState TitleStateFunc
+	// SettleUntil guards against believing a stale idle title. A harness needs
+	// time to react to a freshly sent prompt, so before this instant an idle
+	// title only counts once the harness has been observed busy at least once.
+	SettleUntil time.Time
+}
+
+func (o WaitOptions) normalized() WaitOptions {
+	if o.PollMS <= 0 {
+		o.PollMS = 250
+	}
+	if o.TimeoutMS <= 0 {
+		o.TimeoutMS = 30000
+	}
+	return o
+}
+
+// idleTrusted decides whether an idle reading may be believed yet.
+func idleTrusted(sawBusy bool, settleUntil time.Time) bool {
+	return sawBusy || !time.Now().Before(settleUntil)
+}
 
 // WaitUntilTitleIdle is the lightweight wait path used when a harness exposes
 // a reliable title-level completion signal and screen capture is unnecessary.
-func WaitUntilTitleIdle(ctx context.Context, tmux tmuxClient, target string, timeoutMS, pollMS int, titleIdle TitleIdleFunc) (Snapshot, error) {
-	if titleIdle == nil {
-		return Snapshot{}, apperr.New("internal_error", "title idle detector is required")
+//
+// A timeout is reported through Snapshot.TimedOut, never as an error: "still
+// working" is the expected outcome for long tasks and callers must not have to
+// treat it as a failure.
+func WaitUntilTitleIdle(ctx context.Context, tmux tmuxClient, target string, opts WaitOptions) (Snapshot, error) {
+	opts = opts.normalized()
+	if opts.TitleState == nil {
+		// Without a title signal there is nothing to poll; fall back to the
+		// generic screen-stability wait rather than spinning to the deadline.
+		return WaitStable(ctx, tmux, target, opts)
 	}
-	if pollMS <= 0 {
-		pollMS = 250
-	}
-	if timeoutMS <= 0 {
-		timeoutMS = 30000
-	}
-	deadline := time.Now().Add(time.Duration(timeoutMS) * time.Millisecond)
+	started := time.Now()
+	deadline := started.Add(time.Duration(opts.TimeoutMS) * time.Millisecond)
+	sawBusy := false
 	for {
-		if time.Now().After(deadline) {
-			return Snapshot{}, apperr.New("capture_timeout", "capture timed out before pane title became idle")
-		}
 		info, err := tmux.PaneInfo(ctx, target)
 		if err != nil {
 			return Snapshot{}, err
@@ -69,52 +124,76 @@ func WaitUntilTitleIdle(ctx context.Context, tmux tmuxClient, target string, tim
 			CapturedAt: time.Now(),
 			Dead:       info.Dead,
 		}
-		if snap.Dead || titleIdle(snap.PaneTitle) {
+		state := opts.TitleState(snap.PaneTitle)
+		if state == TitleBusy {
+			sawBusy = true
+		}
+		snap.SawBusy = sawBusy
+		if snap.Dead || (state == TitleIdle && idleTrusted(sawBusy, opts.SettleUntil)) {
+			snap.ElapsedMS = int(time.Since(started).Milliseconds())
 			return snap, nil
 		}
-		if err := waitPollInterval(ctx, pollMS); err != nil {
+		if !time.Now().Before(deadline) {
+			snap.TimedOut = true
+			snap.ElapsedMS = int(time.Since(started).Milliseconds())
+			return snap, nil
+		}
+		if err := waitPollInterval(ctx, opts.PollMS); err != nil {
 			return Snapshot{}, err
 		}
 	}
 }
 
-func WaitStable(ctx context.Context, tmux tmuxClient, target string, history, stableMS, timeoutMS, pollMS int, titleIdle TitleIdleFunc) (Snapshot, error) {
-	if pollMS <= 0 {
-		pollMS = 250
+// WaitStable is the generic completion heuristic: the screen has stopped
+// changing for StableMS. A title signal, when available, still short-circuits
+// it, subject to the same settle guard as WaitUntilTitleIdle.
+func WaitStable(ctx context.Context, tmux tmuxClient, target string, opts WaitOptions) (Snapshot, error) {
+	opts = opts.normalized()
+	if opts.StableMS <= 0 {
+		return Once(ctx, tmux, target, opts.History)
 	}
-	if timeoutMS <= 0 {
-		timeoutMS = 30000
-	}
-	if stableMS <= 0 {
-		return Once(ctx, tmux, target, history)
-	}
-	deadline := time.Now().Add(time.Duration(timeoutMS) * time.Millisecond)
+	started := time.Now()
+	deadline := started.Add(time.Duration(opts.TimeoutMS) * time.Millisecond)
 	var last Snapshot
 	var stableStart time.Time
+	sawBusy := false
 	for {
-		if time.Now().After(deadline) {
-			return Snapshot{}, apperr.New("capture_timeout", "capture timed out before screen became stable")
-		}
-		snap, err := Once(ctx, tmux, target, history)
+		snap, err := Once(ctx, tmux, target, opts.History)
 		if err != nil {
 			return Snapshot{}, err
 		}
-		if titleIdle != nil && titleIdle(snap.PaneTitle) {
-			return snap, nil
+		if opts.TitleState != nil {
+			state := opts.TitleState(snap.PaneTitle)
+			if state == TitleBusy {
+				sawBusy = true
+			}
+			snap.SawBusy = sawBusy
+			if state == TitleIdle && idleTrusted(sawBusy, opts.SettleUntil) {
+				snap.ElapsedMS = int(time.Since(started).Milliseconds())
+				return snap, nil
+			}
 		}
 		if snap.Digest == last.Digest && snap.Digest != "" {
 			if stableStart.IsZero() {
 				stableStart = time.Now()
 			}
 			snap.StableForMS = int(time.Since(stableStart).Milliseconds())
-			if snap.StableForMS >= stableMS {
+			// A screen that never moved can also be a harness that has not
+			// started yet, so stability is only conclusive past the settle point.
+			if snap.StableForMS >= opts.StableMS && idleTrusted(sawBusy, opts.SettleUntil) {
+				snap.ElapsedMS = int(time.Since(started).Milliseconds())
 				return snap, nil
 			}
 		} else {
 			stableStart = time.Now()
 		}
+		if !time.Now().Before(deadline) {
+			snap.TimedOut = true
+			snap.ElapsedMS = int(time.Since(started).Milliseconds())
+			return snap, nil
+		}
 		last = snap
-		if err := waitPollInterval(ctx, pollMS); err != nil {
+		if err := waitPollInterval(ctx, opts.PollMS); err != nil {
 			return Snapshot{}, err
 		}
 	}

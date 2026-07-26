@@ -27,6 +27,7 @@ type fakeTmux struct {
 	hasSessionCalls      []string
 	paneInfoCalls        []string
 	paneInfo             tmuxctl.PaneInfo
+	paneTitles           []string
 	loads                []string
 	sendKeys             []string
 	killed               []string
@@ -61,8 +62,22 @@ func (f *fakeTmux) CaptureSnapshot(context.Context, string, int) (tmuxctl.Captur
 	f.captureSnapshotCalls++
 	return tmuxctl.CaptureSnapshot{
 		Content: f.captureContent,
-		Info:    f.paneInfo,
+		Info:    f.nextPaneInfo(),
 	}, nil
+}
+
+// nextPaneInfo replays paneTitles one call at a time, holding on the last one,
+// so a test can script a harness going busy and then idle.
+func (f *fakeTmux) nextPaneInfo() tmuxctl.PaneInfo {
+	info := f.paneInfo
+	if len(f.paneTitles) == 0 {
+		return info
+	}
+	info.PaneTitle = f.paneTitles[0]
+	if len(f.paneTitles) > 1 {
+		f.paneTitles = f.paneTitles[1:]
+	}
+	return info
 }
 
 func (f *fakeTmux) LoadBuffer(_ context.Context, data string) error {
@@ -88,7 +103,7 @@ func (f *fakeTmux) Attach(string) *exec.Cmd {
 
 func (f *fakeTmux) PaneInfo(context.Context, string) (tmuxctl.PaneInfo, error) {
 	f.paneInfoCalls = append(f.paneInfoCalls, "pane")
-	return f.paneInfo, nil
+	return f.nextPaneInfo(), nil
 }
 
 func TestListPrunesMissingSessions(t *testing.T) {
@@ -933,7 +948,7 @@ func TestCaptureStableMarksIdleAndReturnsContent(t *testing.T) {
 	svc.Config.Defaults.Capture.PollMS = 1
 	saveRunningInstance(t, registryPath, "worker", "live-session", instance.StatusBusy, true, time.Now().UTC().Add(-2*time.Second))
 
-	inst, snap, err := svc.Capture(ctx, "worker", 10, capture.ScopeCurrent)
+	inst, snap, err := svc.Capture(ctx, "worker", capture.Options{History: 10, Scope: capture.ScopeCurrent})
 	if err != nil {
 		t.Fatalf("capture: %v", err)
 	}
@@ -1000,7 +1015,7 @@ func TestWaitClaudeCodeReturnsEarlyFromPaneTitle(t *testing.T) {
 		paneInfo:       tmuxctl.PaneInfo{Width: 80, Height: 24, PaneTitle: "✳ Ready"},
 	}
 	svc, registryPath := newTestService(t, tmux)
-	saveRunningInstance(t, registryPath, "worker", "live-session", instance.StatusBusy, true, time.Now().UTC())
+	saveRunningInstance(t, registryPath, "worker", "live-session", instance.StatusBusy, true, time.Now().UTC().Add(-5*time.Second))
 
 	reg, err := instance.Load(registryPath)
 	if err != nil {
@@ -1041,7 +1056,7 @@ func TestWaitGeminiCLIReturnsEarlyFromPaneTitle(t *testing.T) {
 		paneInfo:       tmuxctl.PaneInfo{Width: 80, Height: 24, PaneTitle: "◇ Ready"},
 	}
 	svc, registryPath := newTestService(t, tmux)
-	saveRunningInstance(t, registryPath, "worker", "live-session", instance.StatusBusy, true, time.Now().UTC())
+	saveRunningInstance(t, registryPath, "worker", "live-session", instance.StatusBusy, true, time.Now().UTC().Add(-5*time.Second))
 
 	reg, err := instance.Load(registryPath)
 	if err != nil {
@@ -1082,7 +1097,7 @@ func TestWaitCodexCLIReturnsEarlyFromPaneTitle(t *testing.T) {
 		paneInfo:       tmuxctl.PaneInfo{Width: 80, Height: 24, PaneTitle: "Ready"},
 	}
 	svc, registryPath := newTestService(t, tmux)
-	saveRunningInstance(t, registryPath, "worker", "live-session", instance.StatusBusy, true, time.Now().UTC())
+	saveRunningInstance(t, registryPath, "worker", "live-session", instance.StatusBusy, true, time.Now().UTC().Add(-5*time.Second))
 
 	reg, err := instance.Load(registryPath)
 	if err != nil {
@@ -1110,6 +1125,196 @@ func TestWaitCodexCLIReturnsEarlyFromPaneTitle(t *testing.T) {
 	}
 	if tmux.captureCalls != 0 {
 		t.Fatalf("expected codex-cli wait to avoid capture-pane, got %d calls", tmux.captureCalls)
+	}
+}
+
+// The prompt-to-title race: a TUI harness needs a moment to react, so right
+// after a prompt its pane title still shows the previous turn's idle marker.
+// Believing it made wait report a task as finished before the agent had even
+// read it.
+func TestWaitDistrustsStaleIdleTitleRightAfterPrompt(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	tmux := &fakeTmux{
+		sessions:       map[string]bool{"live-session": true},
+		captureContent: "screen output",
+		paneInfo:       tmuxctl.PaneInfo{Width: 80, Height: 24, PaneTitle: "✳ Ready"},
+	}
+	svc, registryPath := newTestService(t, tmux)
+	svc.Config.Defaults.Capture.PollMS = 1
+	saveRunningInstance(t, registryPath, "worker", "live-session", instance.StatusBusy, true, time.Now().UTC())
+	setHarnessType(t, registryPath, "worker", "claude-code")
+
+	inst, snap, err := svc.Wait(ctx, "worker", 1500, 200)
+	if err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if !snap.TimedOut {
+		t.Fatal("an idle title inside the settle window must not end the wait")
+	}
+	if snap.SawBusy {
+		t.Fatal("the harness never reported busy in this scenario")
+	}
+	if inst.Status != instance.StatusBusy {
+		t.Fatalf("a timed-out wait must leave the instance busy, got %s", inst.Status)
+	}
+	saved, err := instance.Load(registryPath)
+	if err != nil {
+		t.Fatalf("reload registry: %v", err)
+	}
+	current, _ := saved.Get("worker")
+	if current.Status != instance.StatusBusy {
+		t.Fatalf("expected the registry to keep busy, got %s", current.Status)
+	}
+}
+
+// Reconcile reads the same title and must apply the same guard, otherwise
+// inspect would contradict wait right after a prompt.
+func TestReconcileKeepsBusyForStaleIdleTitle(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	tmux := &fakeTmux{
+		sessions: map[string]bool{"live-session": true},
+		paneInfo: tmuxctl.PaneInfo{Width: 80, Height: 24, PaneTitle: "✳ Ready"},
+	}
+	svc, _ := newTestService(t, tmux)
+
+	fresh, err := svc.reconcile(ctx, instance.Instance{
+		Name:           "worker",
+		SessionID:      "live-session",
+		HarnessType:    "claude-code",
+		Status:         instance.StatusBusy,
+		LastActivityAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if fresh.Status != instance.StatusBusy {
+		t.Fatalf("expected busy inside the settle window, got %s", fresh.Status)
+	}
+
+	settled, err := svc.reconcile(ctx, instance.Instance{
+		Name:           "worker",
+		SessionID:      "live-session",
+		HarnessType:    "claude-code",
+		Status:         instance.StatusBusy,
+		LastActivityAt: time.Now().Add(-5 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if settled.Status != instance.StatusIdle {
+		t.Fatalf("expected idle once the title can be trusted, got %s", settled.Status)
+	}
+}
+
+// Timing out is how a long task reports "still working"; it must not surface as
+// a command failure, and it must not fabricate an idle status.
+func TestWaitTimeoutReportsStillBusyWithoutError(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	tmux := &fakeTmux{
+		sessions:       map[string]bool{"live-session": true},
+		captureContent: "screen that never settles within the timeout",
+		paneInfo:       tmuxctl.PaneInfo{Width: 80, Height: 24},
+	}
+	svc, registryPath := newTestService(t, tmux)
+	svc.Config.Defaults.Capture.PollMS = 1
+	saveRunningInstance(t, registryPath, "worker", "live-session", instance.StatusBusy, true, time.Now().UTC().Add(-5*time.Second))
+
+	inst, snap, err := svc.Wait(ctx, "worker", 60000, 100)
+	if err != nil {
+		t.Fatalf("wait must not fail on timeout: %v", err)
+	}
+	if !snap.TimedOut {
+		t.Fatal("expected the snapshot to report the timeout")
+	}
+	if snap.ElapsedMS <= 0 {
+		t.Fatalf("expected elapsed time to be reported, got %d", snap.ElapsedMS)
+	}
+	if inst.Status != instance.StatusBusy {
+		t.Fatalf("expected the instance to stay busy, got %s", inst.Status)
+	}
+}
+
+// A fixed settle window can only ever be a guess. prompt therefore watches the
+// harness actually pick the work up, which is what makes every later idle
+// reading meaningful -- even for a harness that takes longer to start than any
+// window we would dare to hard-code.
+func TestPromptConfirmsTheHarnessStartedWorking(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	tmux := &fakeTmux{
+		sessions:   map[string]bool{"live-session": true},
+		paneInfo:   tmuxctl.PaneInfo{Width: 80, Height: 24},
+		paneTitles: []string{"✳ Ready", "✳ Ready", "⠋ Thinking"},
+	}
+	svc, registryPath := newTestService(t, tmux)
+	svc.Config.Defaults.Capture.PollMS = 1
+	saveRunningInstance(t, registryPath, "worker", "live-session", instance.StatusIdle, true, time.Now().UTC())
+	setHarnessType(t, registryPath, "worker", "claude-code")
+
+	inst, err := svc.Prompt(ctx, "worker", "do the task", "")
+	if err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	if inst.BusyConfirmedAt.IsZero() {
+		t.Fatal("expected prompt to observe the harness starting")
+	}
+	if inst.Status != instance.StatusBusy {
+		t.Fatalf("expected busy after prompt, got %s", inst.Status)
+	}
+
+	// The transition was seen, so the next idle title is this turn ending and
+	// wait may return immediately.
+	tmux.paneTitles = []string{"✳ Ready"}
+	waited, snap, err := svc.Wait(ctx, "worker", 1500, 1000)
+	if err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if snap.TimedOut {
+		t.Fatal("a confirmed turn must not need the settle window")
+	}
+	if waited.Status != instance.StatusIdle {
+		t.Fatalf("expected idle, got %s", waited.Status)
+	}
+}
+
+// When the harness never visibly starts, the observation is missing and the
+// conservative settle window has to take over again.
+func TestPromptWithoutAcknowledgementKeepsSettleGuard(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	tmux := &fakeTmux{
+		sessions:   map[string]bool{"live-session": true},
+		paneInfo:   tmuxctl.PaneInfo{Width: 80, Height: 24},
+		paneTitles: []string{"✳ Ready"},
+	}
+	svc, registryPath := newTestService(t, tmux)
+	svc.Config.Defaults.Capture.PollMS = 1
+	svc.Config.Defaults.Status.PromptAckMS = intPointer(20)
+	saveRunningInstance(t, registryPath, "worker", "live-session", instance.StatusIdle, true, time.Now().UTC())
+	setHarnessType(t, registryPath, "worker", "claude-code")
+
+	inst, err := svc.Prompt(ctx, "worker", "do the task", "")
+	if err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	if !inst.BusyConfirmedAt.IsZero() {
+		t.Fatal("no busy title was ever shown, so nothing may be confirmed")
+	}
+
+	_, snap, err := svc.Wait(ctx, "worker", 1500, 100)
+	if err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if !snap.TimedOut {
+		t.Fatal("an unconfirmed turn must not trust the stale idle title")
 	}
 }
 
@@ -1240,7 +1445,7 @@ func TestNDJSONHarnessDoesNotUseTmuxForPromptWaitCaptureHalt(t *testing.T) {
 	if inst.Status != instance.StatusIdle {
 		t.Fatalf("expected idle after wait, got %s", inst.Status)
 	}
-	_, snap, err := svc.Capture(ctx, "agent", 0, capture.ScopeCurrent)
+	_, snap, err := svc.Capture(ctx, "agent", capture.Options{Scope: capture.ScopeCurrent})
 	if err != nil {
 		t.Fatalf("capture ndjson: %v", err)
 	}
@@ -1368,3 +1573,20 @@ func saveRunningInstance(t *testing.T, registryPath, name, sessionID string, sta
 		t.Fatalf("save registry: %v", err)
 	}
 }
+
+func setHarnessType(t *testing.T, registryPath, name, harnessType string) {
+	t.Helper()
+
+	reg, err := instance.Load(registryPath)
+	if err != nil {
+		t.Fatalf("load registry: %v", err)
+	}
+	inst := reg.Instances[name]
+	inst.HarnessType = harnessType
+	reg.Put(inst)
+	if err := instance.Save(registryPath, reg); err != nil {
+		t.Fatalf("save registry: %v", err)
+	}
+}
+
+func intPointer(v int) *int { return &v }

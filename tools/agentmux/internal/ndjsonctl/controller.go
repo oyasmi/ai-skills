@@ -243,13 +243,13 @@ func (c Controller) SendPrompt(ctx context.Context, inst instance.Instance, text
 	return inst, nil
 }
 
-func (c Controller) Capture(ctx context.Context, inst instance.Instance, history int, scope capture.Scope) (capture.Snapshot, error) {
+func (c Controller) Capture(ctx context.Context, inst instance.Instance, opts capture.Options) (capture.Snapshot, error) {
 	st, err := c.syncState(inst)
 	if err != nil {
 		return capture.Snapshot{}, err
 	}
 	var from int64
-	if scope != capture.ScopeSession {
+	if opts.Scope != capture.ScopeSession {
 		from = promptStartOffset(st)
 	}
 	events, _, err := readEvents(outputPath(inst), from, 0)
@@ -257,9 +257,12 @@ func (c Controller) Capture(ctx context.Context, inst instance.Instance, history
 		return capture.Snapshot{}, err
 	}
 	msgs, content, usage, cost := normalizeEvents(events)
-	msgs = trimMessages(msgs, history)
+	msgs = trimMessages(msgs, opts.History)
+	if !opts.Raw {
+		msgs = briefMessages(msgs)
+	}
 	return capture.Snapshot{
-		History:    history,
+		History:    opts.History,
 		Content:    content,
 		CapturedAt: nowUTC(),
 		Extra: map[string]any{
@@ -268,6 +271,7 @@ func (c Controller) Capture(ctx context.Context, inst instance.Instance, history
 			"claude_session_id": inst.ClaudeSessionID,
 			"turns":             st.TotalTurns,
 			"raw_event_count":   len(events),
+			"last_error":        st.LastError,
 		},
 	}, nil
 }

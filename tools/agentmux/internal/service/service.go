@@ -28,6 +28,15 @@ const (
 	claudeCodeHarnessType    = "claude-code"
 	codexCLIHarnessType      = "codex-cli"
 	geminiCLIHarnessType     = "gemini-cli"
+
+	// defaultPromptAckMS bounds how long a prompt waits for a title-signalling
+	// harness to visibly start working. Overridable via defaults.status.prompt_ack_ms.
+	defaultPromptAckMS = 5000
+
+	// defaultStructuredMessages bounds `capture` on structured harnesses when
+	// the caller gave no --history. Their message streams are one entry per
+	// protocol event, so an unbounded default would flood the orchestrator.
+	defaultStructuredMessages = 20
 )
 
 type tmuxClient interface {
@@ -341,10 +350,15 @@ func (s Service) Prompt(ctx context.Context, name string, text string, key strin
 			}
 		}
 	}
-	if !structured || strings.TrimSpace(text) != "" {
+	// Text prompts already recorded their own activity, including whether the
+	// harness was observed starting; re-stamping it here would invalidate that
+	// observation. A bare key press has no such bookkeeping, so mark it busy:
+	// it is either submitting staged text or interrupting a run.
+	if !structured && strings.TrimSpace(text) == "" {
 		inst.Status = instance.StatusBusy
 		inst.UpdatedAt = time.Now()
 		inst.LastActivityAt = inst.UpdatedAt
+		inst.BusyConfirmedAt = time.Time{}
 	}
 	err = s.withRegistry(ctx, func(reg *instance.Registry) error {
 		current, ok := reg.Get(name)
@@ -363,7 +377,7 @@ func (s Service) Prompt(ctx context.Context, name string, text string, key strin
 	return inst, nil
 }
 
-func (s Service) Capture(ctx context.Context, name string, history int, scope capture.Scope) (instance.Instance, capture.Snapshot, error) {
+func (s Service) Capture(ctx context.Context, name string, opts capture.Options) (instance.Instance, capture.Snapshot, error) {
 	inst, err := s.getInstanceForCapture(ctx, name)
 	if err != nil {
 		return instance.Instance{}, capture.Snapshot{}, err
@@ -371,12 +385,14 @@ func (s Service) Capture(ctx context.Context, name string, history int, scope ca
 	if inst.Status == instance.StatusLost {
 		return instance.Instance{}, capture.Snapshot{}, apperr.New("session_not_found", fmt.Sprintf("session for %q not found", name))
 	}
-	h := history
-	if h < 0 && scope == capture.ScopeSession {
-		h = s.Config.Defaults.Capture.History
-	}
 	if hs, structured := s.harnessFor(inst); structured {
-		snap, err := hs.Capture(ctx, inst, h, scope)
+		// An unset history must stay bounded here: a structured capture returns
+		// one message per protocol event, so "everything" can be megabytes of
+		// JSON for a single turn. Callers opt into that with --history 0.
+		if opts.History < 0 {
+			opts.History = defaultStructuredMessages
+		}
+		snap, err := hs.Capture(ctx, inst, opts)
 		if err != nil {
 			return instance.Instance{}, capture.Snapshot{}, err
 		}
@@ -395,6 +411,7 @@ func (s Service) Capture(ctx context.Context, name string, history int, scope ca
 		}
 		return inst, snap, nil
 	}
+	h := opts.History
 	if h < 0 {
 		h = s.Config.Defaults.Capture.History
 	}
@@ -426,7 +443,13 @@ func (s Service) Capture(ctx context.Context, name string, history int, scope ca
 	return inst, snap, nil
 }
 
+// Wait blocks until the agent appears done with its current work.
+//
+// Reaching the timeout is a normal outcome, not a failure: the caller learns
+// through Snapshot.TimedOut that the agent is still working, and the instance
+// keeps its busy status. Only a broken instance produces an error.
 func (s Service) Wait(ctx context.Context, name string, stableMS, timeoutMS int) (instance.Instance, capture.Snapshot, error) {
+	started := time.Now()
 	inst, err := s.getInstanceForCapture(ctx, name)
 	if err != nil {
 		return instance.Instance{}, capture.Snapshot{}, err
@@ -434,8 +457,12 @@ func (s Service) Wait(ctx context.Context, name string, stableMS, timeoutMS int)
 	if h, structured := s.harnessFor(inst); structured {
 		snap, err := h.Wait(ctx, inst, time.Duration(timeoutMS)*time.Millisecond)
 		if err != nil {
-			return instance.Instance{}, capture.Snapshot{}, err
+			if apperr.Code(err) != "capture_timeout" {
+				return instance.Instance{}, capture.Snapshot{}, err
+			}
+			snap = capture.Snapshot{CapturedAt: time.Now(), TimedOut: true}
 		}
+		snap.ElapsedMS = int(time.Since(started).Milliseconds())
 		err = s.withRegistryReconcileOne(ctx, name, func(reg *instance.Registry) error {
 			current, ok := reg.Get(name)
 			if !ok {
@@ -451,34 +478,30 @@ func (s Service) Wait(ctx context.Context, name string, stableMS, timeoutMS int)
 		}
 		return inst, snap, nil
 	}
-	// wait is semantically "wait until the agent appears done"; the detection
-	// strategy depends on what the configured harness can signal reliably.
-	if titleState := titleStateFunc(inst.HarnessType); titleState != nil {
-		return s.waitByPaneTitle(ctx, inst, timeoutMS, titleStateIsIdle(titleState))
-	}
-	return s.waitLike(ctx, name, -1, stableMS, timeoutMS, false)
-}
-
-func (s Service) waitLike(ctx context.Context, name string, history, stableMS, timeoutMS int, includeContent bool) (instance.Instance, capture.Snapshot, error) {
-	inst, err := s.getInstanceForCapture(ctx, name)
-	if err != nil {
-		return instance.Instance{}, capture.Snapshot{}, err
-	}
 	if inst.Status == instance.StatusLost {
 		return instance.Instance{}, capture.Snapshot{}, apperr.New("session_not_found", fmt.Sprintf("session for %q not found", name))
 	}
-	h := history
-	if h < 0 {
-		h = s.Config.Defaults.Capture.History
+	// wait is semantically "wait until the agent appears done"; the detection
+	// strategy depends on what the configured harness can signal reliably.
+	opts := capture.WaitOptions{
+		History:     s.Config.Defaults.Capture.History,
+		StableMS:    stableMS,
+		TimeoutMS:   timeoutMS,
+		PollMS:      s.Config.Defaults.Capture.PollMS,
+		TitleState:  titleStateFunc(inst.HarnessType),
+		SettleUntil: s.settleUntil(inst, stableMS),
 	}
-	var titleIdle capture.TitleIdleFunc
-	if titleState := titleStateFunc(inst.HarnessType); titleState != nil {
-		titleIdle = titleStateIsIdle(titleState)
+	var snap capture.Snapshot
+	if opts.TitleState != nil {
+		// Title-driven harnesses need no screen scraping at all.
+		snap, err = capture.WaitUntilTitleIdle(ctx, s.Tmux, target(inst.SessionID), opts)
+	} else {
+		snap, err = capture.WaitStable(ctx, s.Tmux, target(inst.SessionID), opts)
 	}
-	snap, err := capture.WaitStable(ctx, s.Tmux, target(inst.SessionID), h, stableMS, timeoutMS, s.Config.Defaults.Capture.PollMS, titleIdle)
 	if err != nil {
 		return instance.Instance{}, capture.Snapshot{}, err
 	}
+	snap.ElapsedMS = int(time.Since(started).Milliseconds())
 	err = s.withRegistryReconcileOne(ctx, name, func(reg *instance.Registry) error {
 		current, ok := reg.Get(name)
 		if !ok {
@@ -492,7 +515,8 @@ func (s Service) waitLike(ctx context.Context, name string, history, stableMS, t
 			inst.UpdatedAt = time.Now()
 			return nil
 		}
-		if stableMS > 0 {
+		// A timed-out wait observed no completion, so it must not report idle.
+		if !snap.TimedOut && (opts.TitleState != nil || stableMS > 0) {
 			inst.Status = instance.StatusIdle
 		}
 		inst.PaneTitle = snap.PaneTitle
@@ -503,44 +527,44 @@ func (s Service) waitLike(ctx context.Context, name string, history, stableMS, t
 	if err != nil {
 		return instance.Instance{}, capture.Snapshot{}, err
 	}
-	if !includeContent {
-		snap.Content = ""
-		snap.Digest = ""
-	}
+	// wait reports completion, never content.
+	snap.Content = ""
+	snap.Digest = ""
 	return inst, snap, nil
 }
 
-func (s Service) waitByPaneTitle(ctx context.Context, inst instance.Instance, timeoutMS int, titleIdle capture.TitleIdleFunc) (instance.Instance, capture.Snapshot, error) {
-	if inst.Status == instance.StatusLost {
-		return instance.Instance{}, capture.Snapshot{}, apperr.New("session_not_found", fmt.Sprintf("session for %q not found", inst.Name))
+// settleUntil returns the instant before which an idle signal from this
+// instance is not yet believable.
+//
+// A harness needs time to react to a prompt: for a short window after the
+// prompt was sent, the pane title (and the screen) still describe the previous
+// turn. Trusting them there makes wait return "done" for work that has not
+// started. Only an instance that agentmux believes is busy needs the guard,
+// and only while the start of its work has not already been observed.
+func (s Service) settleUntil(inst instance.Instance, stableMS int) time.Time {
+	if inst.Status != instance.StatusBusy {
+		return time.Time{}
 	}
-	snap, err := capture.WaitUntilTitleIdle(ctx, s.Tmux, target(inst.SessionID), timeoutMS, s.Config.Defaults.Capture.PollMS, titleIdle)
-	if err != nil {
-		return instance.Instance{}, capture.Snapshot{}, err
+	// The harness was seen starting this turn, so its signals are current: an
+	// idle reading now really is this turn finishing.
+	if !inst.BusyConfirmedAt.IsZero() && !inst.BusyConfirmedAt.Before(inst.LastActivityAt) {
+		return time.Time{}
 	}
-	err = s.withRegistry(ctx, func(reg *instance.Registry) error {
-		current, ok := reg.Get(inst.Name)
-		if !ok {
-			return apperr.New("instance_not_found", fmt.Sprintf("instance %q not found", inst.Name))
-		}
-		inst = current
-		if snap.Dead {
-			reg.Delete(inst.Name)
-			inst.Status = instance.StatusExited
-			inst.PaneTitle = snap.PaneTitle
-			inst.UpdatedAt = time.Now()
-			return nil
-		}
-		inst.Status = instance.StatusIdle
-		inst.PaneTitle = snap.PaneTitle
-		inst.UpdatedAt = time.Now()
-		reg.Put(inst)
-		return nil
-	})
-	if err != nil {
-		return instance.Instance{}, capture.Snapshot{}, err
+	settle := stableMS
+	if settle < 0 {
+		settle = s.Config.Defaults.Capture.StableMS
 	}
-	return inst, snap, nil
+	if settle <= 0 {
+		return time.Time{}
+	}
+	last := inst.LastActivityAt
+	if last.IsZero() {
+		last = inst.UpdatedAt
+	}
+	if last.IsZero() {
+		return time.Time{}
+	}
+	return last.Add(time.Duration(settle) * time.Millisecond)
 }
 
 func (s Service) getInstanceForCapture(ctx context.Context, name string) (instance.Instance, error) {
@@ -776,7 +800,74 @@ func (s Service) sendPrompt(ctx context.Context, inst *instance.Instance, text s
 	inst.Status = instance.StatusBusy
 	inst.UpdatedAt = time.Now()
 	inst.LastActivityAt = inst.UpdatedAt
+	inst.BusyConfirmedAt = time.Time{}
+	s.confirmPromptStarted(ctx, inst)
 	return nil
+}
+
+// confirmPromptStarted waits for a title-signalling harness to react to the
+// prompt that was just submitted.
+//
+// Until the harness flips its title to a busy marker, that title still
+// describes the previous turn, and every reader -- wait, inspect, list -- would
+// conclude the new work is already finished. Observing the transition once, here,
+// makes all later idle readings trustworthy for this turn.
+//
+// It is deliberately best effort: the prompt has already been delivered, so a
+// tmux error or an unresponsive harness must not turn a successful send into a
+// failure. Callers fall back to the settle window when no transition was seen.
+func (s Service) confirmPromptStarted(ctx context.Context, inst *instance.Instance) {
+	titleState := titleStateFunc(inst.HarnessType)
+	if titleState == nil {
+		return
+	}
+	budget := s.promptAckTimeout()
+	if budget <= 0 {
+		return
+	}
+	poll := time.Duration(s.Config.Defaults.Capture.PollMS) * time.Millisecond
+	if poll <= 0 {
+		poll = 250 * time.Millisecond
+	}
+	deadline := time.Now().Add(budget)
+	for {
+		info, err := s.Tmux.PaneInfo(ctx, target(inst.SessionID))
+		if err != nil {
+			logx.Debug("prompt_ack_probe_failed", map[string]any{
+				"instance": inst.Name,
+				"error":    err.Error(),
+			})
+			return
+		}
+		if titleState(info.PaneTitle) == capture.TitleBusy {
+			inst.PaneTitle = info.PaneTitle
+			inst.BusyConfirmedAt = time.Now()
+			return
+		}
+		if info.Dead || !time.Now().Before(deadline) {
+			logx.Debug("prompt_ack_not_observed", map[string]any{
+				"instance":   inst.Name,
+				"pane_title": info.PaneTitle,
+				"dead":       info.Dead,
+			})
+			return
+		}
+		timer := time.NewTimer(poll)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+}
+
+func (s Service) promptAckTimeout() time.Duration {
+	ms := defaultPromptAckMS
+	if s.Config.Defaults.Status.PromptAckMS != nil {
+		ms = *s.Config.Defaults.Status.PromptAckMS
+	}
+	return time.Duration(ms) * time.Millisecond
 }
 
 func waitForPromptSubmit(ctx context.Context) error {
@@ -830,9 +921,13 @@ func (s Service) reconcile(ctx context.Context, inst instance.Instance) (instanc
 	} else if inst.Status == instance.StatusBusy {
 		if titleState := titleStateFunc(inst.HarnessType); titleState != nil {
 			switch titleState(info.PaneTitle) {
-			case "idle":
-				inst.Status = instance.StatusIdle
-			case "busy", "unknown":
+			case capture.TitleIdle:
+				// A title read this soon after a prompt still describes the
+				// previous turn; keep the instance busy until it can be trusted.
+				if !time.Now().Before(s.settleUntil(inst, -1)) {
+					inst.Status = instance.StatusIdle
+				}
+			case capture.TitleBusy, capture.TitleUnknown:
 				// Harnesses with title signals should be governed by pane title
 				// rather than time-based busy TTL degradation.
 			}
@@ -846,9 +941,7 @@ func (s Service) reconcile(ctx context.Context, inst instance.Instance) (instanc
 	return inst, nil
 }
 
-type titleStateFn func(string) string
-
-func titleStateFunc(harnessType string) titleStateFn {
+func titleStateFunc(harnessType string) capture.TitleStateFunc {
 	switch harnessType {
 	case claudeCodeHarnessType:
 		return claudeCodeTitleState
@@ -861,17 +954,8 @@ func titleStateFunc(harnessType string) titleStateFn {
 	}
 }
 
-func titleStateIsIdle(titleState titleStateFn) capture.TitleIdleFunc {
-	if titleState == nil {
-		return nil
-	}
-	return func(paneTitle string) bool {
-		return titleState(paneTitle) == "idle"
-	}
-}
-
 func claudeCodeTitleIsIdle(paneTitle string) bool {
-	return titleStateIsIdle(claudeCodeTitleState)(paneTitle)
+	return claudeCodeTitleState(paneTitle) == capture.TitleIdle
 }
 
 // claudeCodeTitleState detects agent state from Claude Code's pane_title.
@@ -879,34 +963,34 @@ func claudeCodeTitleIsIdle(paneTitle string) bool {
 //   - idle: first significant rune is ✳ (U+2733)
 //   - busy: first significant rune is a Braille pattern (U+2800–U+28FF)
 //   - unknown: cannot determine (title empty or unrecognized format)
-func claudeCodeTitleState(paneTitle string) string {
+func claudeCodeTitleState(paneTitle string) capture.TitleState {
 	trimmed := strings.TrimSpace(paneTitle)
 	if trimmed == "" {
-		return "unknown"
+		return capture.TitleUnknown
 	}
 	significant := firstTitleMarkerRunes(trimmed, 4)
 	if len(significant) == 0 {
-		return "unknown"
+		return capture.TitleUnknown
 	}
 	for _, r := range significant {
 		switch {
 		case r == '\u2733':
-			return "idle"
+			return capture.TitleIdle
 		case r >= '\u2800' && r <= '\u28ff':
-			return "busy"
+			return capture.TitleBusy
 		case unicode.IsLetter(r) || unicode.IsDigit(r):
-			return "unknown"
+			return capture.TitleUnknown
 		}
 	}
-	return "unknown"
+	return capture.TitleUnknown
 }
 
 func geminiCLITitleIsIdle(paneTitle string) bool {
-	return titleStateIsIdle(geminiCLITitleState)(paneTitle)
+	return geminiCLITitleState(paneTitle) == capture.TitleIdle
 }
 
 func codexCLITitleIsIdle(paneTitle string) bool {
-	return titleStateIsIdle(codexCLITitleState)(paneTitle)
+	return codexCLITitleState(paneTitle) == capture.TitleIdle
 }
 
 // codexCLITitleState detects agent state from Codex CLI's pane_title.
@@ -914,19 +998,19 @@ func codexCLITitleIsIdle(paneTitle string) bool {
 //   - busy: first significant rune is a Braille pattern (U+2800–U+28FF)
 //   - idle: first significant rune is anything else (Codex shows a static prompt)
 //   - unknown: title is empty or has no significant runes
-func codexCLITitleState(paneTitle string) string {
+func codexCLITitleState(paneTitle string) capture.TitleState {
 	trimmed := strings.TrimSpace(paneTitle)
 	if trimmed == "" {
-		return "unknown"
+		return capture.TitleUnknown
 	}
 	significant := firstTitleMarkerRunes(trimmed, 1)
 	if len(significant) == 0 {
-		return "unknown"
+		return capture.TitleUnknown
 	}
 	if r := significant[0]; r >= '\u2800' && r <= '\u28ff' {
-		return "busy"
+		return capture.TitleBusy
 	}
-	return "idle"
+	return capture.TitleIdle
 }
 
 // geminiCLITitleState detects agent state from Gemini CLI's pane_title.
@@ -934,26 +1018,26 @@ func codexCLITitleState(paneTitle string) string {
 //   - idle: first significant rune is ◇ (U+25C7)
 //   - busy: first significant rune is ✦ (U+2726)
 //   - unknown: cannot determine (title empty or unrecognized format)
-func geminiCLITitleState(paneTitle string) string {
+func geminiCLITitleState(paneTitle string) capture.TitleState {
 	trimmed := strings.TrimSpace(paneTitle)
 	if trimmed == "" {
-		return "unknown"
+		return capture.TitleUnknown
 	}
 	significant := firstTitleMarkerRunes(trimmed, 4)
 	if len(significant) == 0 {
-		return "unknown"
+		return capture.TitleUnknown
 	}
 	for _, r := range significant {
 		switch {
 		case r == '\u25c7':
-			return "idle"
+			return capture.TitleIdle
 		case r == '\u2726':
-			return "busy"
+			return capture.TitleBusy
 		case unicode.IsLetter(r) || unicode.IsDigit(r):
-			return "unknown"
+			return capture.TitleUnknown
 		}
 	}
-	return "unknown"
+	return capture.TitleUnknown
 }
 
 // firstTitleMarkerRunes extracts up to limit significant runes from a pane title,

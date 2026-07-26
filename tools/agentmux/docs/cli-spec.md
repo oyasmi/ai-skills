@@ -343,6 +343,13 @@ agentmux prompt <instance-name> [flags]
 2. 第一版 `--key` 一次只接受一个键
 3. `--text` 发送后自动提交
 
+TUI harness 的启动确认：
+
+1. 对有 `pane_title` 状态信号的 harness（`claude-code`、`codex-cli`、`gemini-cli`），发送文本后 `prompt` 会等待 `pane_title` 切换到 busy 标记，最多 `defaults.status.prompt_ack_ms`
+2. 观察到切换即返回，正常只增加数百毫秒
+3. 这一步是 `wait` 可靠的前提：在 harness 反应过来之前，`pane_title` 仍然描述上一轮，直接相信它会把未开始的工作判成已完成
+4. 未观察到切换时不报错（消息已经送达），但本轮的 idle 信号会退回保守判定
+
 支持的键名：
 
 1. `Enter`
@@ -394,7 +401,8 @@ agentmux capture <instance-name> [--scope current|session] [--history <limit>] [
 
 1. `--scope current|session`，默认 `current`
 2. `--history <limit>`
-3. `--json`
+3. `--raw`
+4. `--json`
 
 行为：
 
@@ -402,6 +410,14 @@ agentmux capture <instance-name> [--scope current|session] [--history <limit>] [
 2. TUI harness 下，`current` 表示当前屏幕，`--history` 表示向上抓取的历史行数
 3. 结构化 harness 下，`current` 表示当前或最近 turn，`session` 表示整段已记录会话，`--history` 表示归一化消息数量限制
 4. 调用后立即返回当前可解析内容，不承担等待职责
+5. 结构化 harness 未指定 `--history` 时，默认只返回最近 `20` 条消息；`--history 0` 表示不限制
+6. 默认不返回协议原始事件：`messages[].raw` 被移除，过长的 `text` 与 `input` 会被截断
+7. `--raw` 恢复完整保真度，用于调试；完整事件流始终保存在实例的 `output.jsonl`
+8. 结构化 harness 不返回 `cursor_x`、`cursor_y`、`width`、`height`、`pane_title` 这些屏幕字段，改为返回 `messages_limit`
+
+体积约束：
+
+结构化 harness 每个协议事件对应一条消息。不做上述限制时，一个进行中的 turn 可以产出上百 KB JSON，而真正有用的 `data.content` 往往只有几十字节。只读输出时优先使用不带 `--json` 的 `capture`（只输出 `content`）。
 
 说明：
 
@@ -460,6 +476,23 @@ agentmux wait <instance-name> [--stable <duration-or-ms>] [--timeout <duration-o
 2. `claude-code` 这类 harness 优先使用 `pane_title` 等直接状态信号判断是否完成
 3. 其他 harness 回退到基于屏幕静止的通用启发式
 4. `wait` 不返回屏幕文本
+5. **超时不是错误**：到 `--timeout` 仍未完成时返回 `ok: true`、退出码 `0`、`status: busy`、`data.timed_out: true`
+6. 只有实例损坏、丢失或进程异常才返回 `ok: false`
+
+完成判定的可信度：
+
+1. 若 `prompt` 已确认 harness 开始工作（见 4.5），idle 信号立即可信
+2. 否则在 `--stable` 指定的静默窗口内不接受 idle 信号，避免把上一轮遗留的 idle 标题当作本轮完成
+3. `data.saw_busy` 表示本次等待期间确实观察到 harness 在工作
+4. `--stable 0` 关闭该保护，只在明确不需要时使用
+
+返回字段：
+
+1. `timed_out`：是否因超时返回
+2. `saw_busy`：等待期间是否观察到 busy
+3. `elapsed_ms`：本次等待实际耗时
+4. `stable_for_ms`：通用启发式下的屏幕静止时长
+5. TUI harness 额外返回 `cursor_x`、`cursor_y`、`width`、`height`、`history_lines`、`pane_title`
 
 说明：
 
@@ -475,13 +508,34 @@ JSON 示例：
   "instance": "编码助手-A",
   "status": "idle",
   "data": {
+    "timed_out": false,
+    "saw_busy": true,
+    "elapsed_ms": 8421,
+    "stable_for_ms": 0,
     "cursor_x": 0,
     "cursor_y": 23,
     "width": 120,
     "height": 24,
     "history_lines": 120,
-    "stable_for_ms": 0,
     "pane_title": "✳ Task complete"
+  }
+}
+```
+
+超时（仍在工作）示例：
+
+```json
+{
+  "ok": true,
+  "command": "wait",
+  "instance": "编码助手-A",
+  "status": "busy",
+  "data": {
+    "timed_out": true,
+    "saw_busy": true,
+    "elapsed_ms": 180003,
+    "stable_for_ms": 0,
+    "pane_title": "⠋ Working"
   }
 }
 ```
@@ -560,33 +614,52 @@ JSON 示例：
 
 ## 5. 错误码
 
-第一版标准错误码：
+错误码稳定，调用方可以按码分支。
 
-1. `config_invalid`
-2. `template_not_found`
-3. `instance_not_found`
-4. `tmux_unavailable`
-5. `session_not_found`
-6. `process_not_running`
-7. `capture_timeout`
-8. `invalid_key`
-9. `invalid_arguments`
+### 5.1 通用
 
-`claude-code-ndjson` 专用错误码：
+| 错误码 | 含义 | 建议动作 |
+| --- | --- | --- |
+| `invalid_arguments` | 参数缺失、冲突或位置错误 | 按提示修正；实例名必须写在 flag 之前 |
+| `invalid_key` | `--key` 不在白名单内 | 改用 `Enter`、`C-c`、`Escape`、`Up`、`Down`、`Tab` |
+| `template_not_found` | 模板不存在 | `template list --json` |
+| `instance_not_found` | 实例不存在或已被清理 | `list --json`，必要时 `summon` |
+| `instance_template_mismatch` | 同名实例属于其他模板 | 换一个实例名 |
+| `instance_changed` | 发送期间实例被其他进程替换 | 重新 `inspect` 后再决定 |
+| `process_not_running` | 实例进程已不在运行 | `inspect --json`，必要时重新 `summon` |
+| `session_not_found` | 运行时会话缺失 | 同上 |
+| `tmux_unavailable` | tmux 不可用或命令失败 | 检查 tmux 安装、socket 路径与权限 |
+| `capture_timeout` | 内部超时信号 | `wait` 不再向调用方返回该码，超时表现为 `ok: true` + `timed_out: true` |
+| `input_too_large` | `--stdin` 输入超过上限 | 改为写文件并让外部 Agent 读取 |
+| `input_read_error` | 读取标准输入失败 | 检查管道来源 |
+| `internal_error` | 未归类错误 | 带 `AGENTMUX_LOG_LEVEL=debug` 重跑并上报 |
+
+### 5.2 配置与注册表
+
+| 错误码 | 含义 |
+| --- | --- |
+| `config_invalid` | 配置或模板命令不合法 |
+| `config_parse_error` | 配置文件 YAML 解析失败 |
+| `config_io_error` | 配置目录或文件读写失败 |
+| `registry_io_error` | `instances.json` 读写失败 |
+| `registry_parse_error` | `instances.json` 内容损坏 |
+| `registry_lock_error` | 注册表文件锁获取失败 |
+
+### 5.3 `claude-code-ndjson`
 
 1. `ndjson_fifo_broken`
 2. `ndjson_parse_error`
 3. `ndjson_process_error`
 4. `ndjson_state_error`
 
-`codex-cli-execjson` 专用错误码：
+### 5.4 `codex-cli-execjson`
 
 1. `execjson_parse_error`
 2. `execjson_process_error`
 3. `execjson_state_error`
-4. `execjson_instance_busy` — 实例正在执行一个 turn 时再次 `prompt`。codex 无法向执行中的 turn 追加输入，调用方应先 `wait`。
+4. `execjson_instance_busy` — 实例正在执行一个 turn 时再次 `prompt`。codex 无法向执行中的 turn 追加输入，调用方应先 `wait` 再原样重发。
 
-`pi-rpc` 专用错误码：
+### 5.5 `pi-rpc`
 
 1. `rpc_fifo_broken`
 2. `rpc_parse_error`
@@ -610,11 +683,19 @@ agentmux capture 编码助手-A --json
 
 ```bash
 agentmux summon --template claude-code --name 编码助手-A --json
-agentmux capture 编码助手-A --history 120 --json
+agentmux capture 编码助手-A --history 120
 agentmux prompt 编码助手-A --text "继续修复剩余测试" --json
 ```
 
-### 6.3 中断当前任务
+### 6.3 等待长任务
+
+```bash
+agentmux wait 编码助手-A --timeout 3m --json    # timed_out=true 表示仍在工作，继续等
+agentmux wait 编码助手-A --timeout 5m --json
+agentmux capture 编码助手-A                      # 读结果用纯文本，避免协议噪音
+```
+
+### 6.4 中断当前任务
 
 ```bash
 agentmux prompt 编码助手-A --key C-c --json

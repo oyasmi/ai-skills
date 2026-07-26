@@ -64,32 +64,70 @@ func TestParsePromptArgsRejectsRemovedEnterFlag(t *testing.T) {
 }
 
 func TestParseCaptureArgsRejectsLegacyWaitFlags(t *testing.T) {
-	name, history, scope, err := parseCaptureArgs([]string{"demo", "--history", "120"})
+	name, opts, err := parseCaptureArgs([]string{"demo", "--history", "120"})
 	if err != nil {
 		t.Fatalf("parseCaptureArgs: %v", err)
 	}
-	if name != "demo" || history != 120 || scope != "current" {
-		t.Fatalf("unexpected parsed values: %q %d %s", name, history, scope)
+	if name != "demo" || opts.History != 120 || opts.Scope != "current" {
+		t.Fatalf("unexpected parsed values: %q %+v", name, opts)
 	}
 
-	_, _, _, err = parseCaptureArgs([]string{"demo", "--stable", "1500"})
+	_, _, err = parseCaptureArgs([]string{"demo", "--stable", "1500"})
 	if err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {
 		t.Fatalf("expected legacy stable flag to fail, got %v", err)
 	}
 }
 
 func TestParseCaptureArgsSupportsScope(t *testing.T) {
-	name, history, scope, err := parseCaptureArgs([]string{"demo", "--scope", "session"})
+	name, opts, err := parseCaptureArgs([]string{"demo", "--scope", "session"})
 	if err != nil {
 		t.Fatalf("parseCaptureArgs: %v", err)
 	}
-	if name != "demo" || history != -1 || scope != "session" {
-		t.Fatalf("unexpected parsed values: %q %d %s", name, history, scope)
+	if name != "demo" || opts.History != -1 || opts.Scope != "session" {
+		t.Fatalf("unexpected parsed values: %q %+v", name, opts)
 	}
 
-	_, _, _, err = parseCaptureArgs([]string{"demo", "--scope", "all"})
+	_, _, err = parseCaptureArgs([]string{"demo", "--scope", "all"})
 	if err == nil || !strings.Contains(err.Error(), "current or session") {
 		t.Fatalf("expected invalid scope to fail, got %v", err)
+	}
+}
+
+func TestParseCaptureArgsRawIsOptIn(t *testing.T) {
+	_, opts, err := parseCaptureArgs([]string{"demo"})
+	if err != nil {
+		t.Fatalf("parseCaptureArgs: %v", err)
+	}
+	if opts.Raw {
+		t.Fatal("raw protocol payloads must be opt-in")
+	}
+	_, opts, err = parseCaptureArgs([]string{"demo", "--raw"})
+	if err != nil {
+		t.Fatalf("parseCaptureArgs --raw: %v", err)
+	}
+	if !opts.Raw {
+		t.Fatal("expected --raw to be parsed")
+	}
+}
+
+// `agentmux capture --history 40 worker` used to treat "--history" as the
+// instance name and fail with an unrelated message.
+func TestParseArgsRejectFlagInInstanceNamePosition(t *testing.T) {
+	if _, _, err := parseCaptureArgs([]string{"--history", "40", "demo"}); err == nil ||
+		!strings.Contains(err.Error(), "instance name must come before flags") {
+		t.Fatalf("unexpected capture error: %v", err)
+	}
+	if _, _, _, _, err := parsePromptArgs([]string{"--text", "hi", "demo"}); err == nil ||
+		!strings.Contains(err.Error(), "instance name must come before flags") {
+		t.Fatalf("unexpected prompt error: %v", err)
+	}
+	if _, _, _, err := parseWaitArgs([]string{"--timeout", "5s", "demo"}); err == nil ||
+		!strings.Contains(err.Error(), "instance name must come before flags") {
+		t.Fatalf("unexpected wait error: %v", err)
+	}
+	if _, _, _, err := parseHaltArgs([]string{"--immediately", "demo"}); err == nil ||
+		!strings.Contains(err.Error(), "instance name must come before flags") {
+		t.Fatalf("unexpected halt error: %v", err)
 	}
 }
 

@@ -21,7 +21,7 @@ type harness interface {
 	Start(ctx context.Context, inst instance.Instance, command, systemPrompt string, resume bool) (instance.Instance, error)
 	Reconcile(ctx context.Context, inst instance.Instance) (instance.Instance, error)
 	SendPrompt(ctx context.Context, inst instance.Instance, text string) (instance.Instance, error)
-	Capture(ctx context.Context, inst instance.Instance, history int, scope capture.Scope) (capture.Snapshot, error)
+	Capture(ctx context.Context, inst instance.Instance, opts capture.Options) (capture.Snapshot, error)
 	Wait(ctx context.Context, inst instance.Instance, timeout time.Duration) (capture.Snapshot, error)
 	Interrupt(ctx context.Context, inst instance.Instance) (instance.Instance, error)
 	Halt(ctx context.Context, inst instance.Instance, immediately bool, timeout time.Duration) error
@@ -47,5 +47,17 @@ func (s Service) harnessFor(inst instance.Instance) (harness, bool) {
 		return s.PI, true
 	default:
 		return nil, false
+	}
+}
+
+// IsStructuredHarness reports whether a harness type talks a protocol instead
+// of driving a terminal. Callers use it to decide which observation fields are
+// meaningful: a structured instance has no screen, cursor or pane title.
+func IsStructuredHarness(harnessType string) bool {
+	switch harnessType {
+	case ndjsonctl.HarnessType, execjsonctl.HarnessType, rpcctl.HarnessType:
+		return true
+	default:
+		return false
 	}
 }

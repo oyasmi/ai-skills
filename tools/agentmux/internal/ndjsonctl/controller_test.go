@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/capture"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/instance"
@@ -68,7 +69,7 @@ func TestControllerPromptWaitCaptureAndHalt(t *testing.T) {
 	if _, err := ctrl.Wait(context.Background(), inst, 2*time.Second); err != nil {
 		t.Fatalf("wait: %v", err)
 	}
-	snap, err := ctrl.Capture(context.Background(), inst, 0, capture.ScopeCurrent)
+	snap, err := ctrl.Capture(context.Background(), inst, capture.Options{Scope: capture.ScopeCurrent})
 	if err != nil {
 		t.Fatalf("capture: %v", err)
 	}
@@ -215,6 +216,78 @@ func TestNormalizeEventsUsesAuthoritativeResultTextAndUsage(t *testing.T) {
 	}
 	if usage.InputTokens != 2 || usage.OutputTokens != 3 || cost != 0.01 {
 		t.Fatalf("expected result usage/cost, got input=%d output=%d cost=%v", usage.InputTokens, usage.OutputTokens, cost)
+	}
+}
+
+// Streaming deltas used to become one message each, every one carrying its own
+// raw event. A single reply could turn a 39-byte answer into ~100 KB of JSON
+// for the orchestrator to read.
+func TestNormalizeEventsDoesNotEmitPerDeltaMessages(t *testing.T) {
+	events := []Event{{Type: "system", Subtype: "init"}}
+	for i := 0; i < 200; i++ {
+		events = append(events, Event{
+			Type:  "stream_event",
+			Event: StreamEvent{Delta: json.RawMessage(`{"type":"text_delta","text":"chunk "}`)},
+			Raw:   json.RawMessage(`{"type":"stream_event","event":{"delta":{"type":"text_delta","text":"chunk "}}}`),
+		})
+	}
+	events = append(events, Event{Type: "assistant", Message: Message{Content: json.RawMessage(`[{"type":"text","text":"done"}]`)}})
+
+	msgs, content, _, _ := normalizeEvents(events)
+	if content != "done" {
+		t.Fatalf("expected the aggregated answer, got %q", content)
+	}
+	if len(msgs) > 3 {
+		t.Fatalf("expected deltas to be folded into content, got %d messages", len(msgs))
+	}
+	for _, m := range msgs {
+		if m.ContentType == "text_delta" {
+			t.Fatal("no delta message may reach the caller")
+		}
+	}
+}
+
+// While a turn is in flight there is no completed assistant event yet, so the
+// partial text still has to surface through content.
+func TestNormalizeEventsReportsPartialTextWhileStreaming(t *testing.T) {
+	events := []Event{
+		{Type: "stream_event", Event: StreamEvent{Delta: json.RawMessage(`{"type":"text_delta","text":"par"}`)}},
+		{Type: "stream_event", Event: StreamEvent{Delta: json.RawMessage(`{"type":"text_delta","text":"tial"}`)}},
+	}
+	_, content, _, _ := normalizeEvents(events)
+	if content != "partial" {
+		t.Fatalf("expected accumulated delta text, got %q", content)
+	}
+}
+
+func TestBriefMessagesDropsRawAndClampsBodies(t *testing.T) {
+	long := strings.Repeat("字", maxBriefText)
+	msgs := []NormalizedMessage{{
+		Type:  "tool_use",
+		Tool:  "Write",
+		Text:  long,
+		Input: json.RawMessage(`"` + strings.Repeat("x", maxBriefInput+10) + `"`),
+		Raw:   json.RawMessage(`{"big":"payload"}`),
+	}}
+
+	brief := briefMessages(msgs)
+	if brief[0].Raw != nil {
+		t.Fatal("raw payloads must be dropped unless --raw was asked for")
+	}
+	if len(brief[0].Text) > maxBriefText+len("…(truncated)") {
+		t.Fatalf("expected the body to be clamped, got %d bytes", len(brief[0].Text))
+	}
+	if !utf8.ValidString(brief[0].Text) {
+		t.Fatal("truncation must cut on a rune boundary")
+	}
+	if !json.Valid(brief[0].Input) {
+		t.Fatalf("elided input must stay valid JSON: %s", brief[0].Input)
+	}
+	if len(brief[0].Input) > maxBriefInput {
+		t.Fatalf("expected the tool input to be elided, got %d bytes", len(brief[0].Input))
+	}
+	if msgs[0].Raw == nil {
+		t.Fatal("briefMessages must not mutate its input")
 	}
 }
 

@@ -10,7 +10,7 @@ usage:
   agentmux summon --template <template-name> [--name <instance-name>] [--cwd <path>] [--model <model>] [--command <shell-command>] [--system-prompt <text>] [--prompt <text>] [--json]
   agentmux inspect <instance-name> [--json]
   agentmux prompt <instance-name> [--text <text> | --stdin] [--key <key>] [--json]
-  agentmux capture <instance-name> [--scope current|session] [--history <limit>] [--json]
+  agentmux capture <instance-name> [--scope current|session] [--history <limit>] [--raw] [--json]
   agentmux wait <instance-name> [--stable <duration-or-ms>] [--timeout <duration-or-ms>] [--json]
   agentmux attach [<instance-name>]
   agentmux halt <instance-name> [--json]
@@ -251,6 +251,7 @@ Notes:
   --stdin reads all of stdin as one text payload.
   --stdin cannot be combined with --text.
   --text and --stdin submit automatically after the text is pasted.
+  On title-signaling TUI harnesses, prompt then waits for the harness to visibly start working, bounded by defaults.status.prompt_ack_ms, so later status reads describe this turn instead of the previous one.
   If text appears in the input box but execution does not start, follow up with --key Enter.
   For some TUI harnesses, especially Claude Code, very long stdin payloads may be less reliable than writing instructions to a file and sending a short follow-up prompt.
   On structured harnesses only C-c is meaningful; other keys are accepted as no-ops.
@@ -276,25 +277,29 @@ Arguments:
 
 Flags:
   --scope <scope>           Output scope: current or session, default current
-  --history <limit>         TUI: history lines; structured: message limit
+  --history <limit>         TUI: history lines; structured: message limit (default 20, 0 means no limit)
+  --raw                     Include raw protocol events and untruncated bodies
   --json                    Return JSON output
   -h, --help                Show this help
 
 Output:
-  Text mode prints the current content only.
+  Text mode prints the current content only. This is the cheapest way to read what an agent said.
   JSON mode returns scope, harness type, content, and harness-specific metadata.
 
 Notes:
   capture always returns immediately.
   For TUI harnesses, current means current screen plus optional history lines.
   For structured harnesses, current means the active or most recent turn; session spans the whole recorded conversation.
+  Structured harnesses emit one message per protocol event, so JSON output is capped at 20 messages and strips raw payloads by default.
+  Use --raw (optionally with --history 0) for debugging; the untouched event stream is always kept in the instance output.jsonl.
   capture is for reading output, not for waiting or querying status by itself.
   Use inspect --json when you only need current status or pane title.
   Use wait if you need to block until the agent appears done.
 
 Examples:
   agentmux capture 编码助手-A
-  agentmux capture 编码助手-A --history 120 --json
+  agentmux capture 编码助手-A --history 120
+  agentmux capture 编码助手-A --json
   agentmux capture 编码助手-A --scope session --history 40 --json
 `)
 }
@@ -310,17 +315,21 @@ Arguments:
   <instance-name>           Target instance name
 
 Flags:
-  --stable <duration-or-ms> Stability window for generic harness detection, default 1500
+  --stable <duration-or-ms> Settle window before an idle signal is trusted, and stability window for generic detection, default 1500
   --timeout <duration-or-ms> Maximum wait time, default 30s
   --json                    Return JSON output
   -h, --help                Show this help
 
 Output:
-  Text mode prints instance name, status, and stable duration only.
-  JSON mode returns cursor position, screen size, history lines, stability, and pane title.
+  Text mode prints instance name, status, elapsed time, and a timed_out marker.
+  JSON mode returns timed_out, saw_busy, elapsed_ms, stability, and, for TUI harnesses, screen fields.
 
 Notes:
   wait means "wait until the agent seems done", not "wait until the terminal is visually static".
+  Reaching --timeout is not a failure: it returns ok true with status busy and data.timed_out true, so a long task is simply waited on again.
+  Only a broken, lost, or exited instance makes wait fail.
+  A prompt confirms that a title-signaling harness started working; until that is observed, an idle title inside the --stable window is treated as stale and ignored.
+  data.saw_busy reports whether this wait actually observed the harness working.
   Use inspect or list when you want to query status without blocking.
   For title-signaling harnesses such as claude-code, codex-cli, and gemini-cli, completion is inferred from pane_title idle markers.
   For claude-code-ndjson, completion is inferred from protocol events.
@@ -331,6 +340,7 @@ Notes:
 
 Examples:
   agentmux wait 编码助手-A --stable 1500 --timeout 30s --json
+  agentmux wait 编码助手-A --timeout 3m --json
   agentmux wait 编码助手-A --stable 2s
 `)
 }

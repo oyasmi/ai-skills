@@ -19,9 +19,13 @@ type e2eFakeTmux struct {
 	sessions       map[string]bool
 	captureContent string
 	paneInfo       tmuxctl.PaneInfo
-	loads          []string
-	sendKeys       []string
-	killed         []string
+	// busyTitle is reported once after a prompt is submitted, the way a real
+	// TUI harness flips its title to a spinner before settling back to idle.
+	busyTitle  string
+	promptSent bool
+	loads      []string
+	sendKeys   []string
+	killed     []string
 }
 
 func (f *e2eFakeTmux) HasSession(_ context.Context, sessionID string) (bool, error) {
@@ -61,6 +65,11 @@ func (f *e2eFakeTmux) PasteBuffer(context.Context, string) error {
 
 func (f *e2eFakeTmux) SendKeys(_ context.Context, _ string, keys ...string) error {
 	f.sendKeys = append(f.sendKeys, keys...)
+	for _, key := range keys {
+		if key == "Enter" {
+			f.promptSent = true
+		}
+	}
 	return nil
 }
 
@@ -69,6 +78,12 @@ func (f *e2eFakeTmux) Attach(string) *exec.Cmd {
 }
 
 func (f *e2eFakeTmux) PaneInfo(context.Context, string) (tmuxctl.PaneInfo, error) {
+	if f.promptSent && f.busyTitle != "" {
+		f.promptSent = false
+		info := f.paneInfo
+		info.PaneTitle = f.busyTitle
+		return info, nil
+	}
 	return f.paneInfo, nil
 }
 
@@ -81,6 +96,7 @@ func TestRunE2ELifecycleJSON(t *testing.T) {
 		sessions:       map[string]bool{},
 		captureContent: "ready\n> ",
 		paneInfo:       tmuxctl.PaneInfo{Width: 80, Height: 24, PaneTitle: "✳ Ready"},
+		busyTitle:      "⠋ Working",
 	}
 	prevFactory := newService
 	newService = func(paths config.Paths, cfg config.Config) service.Service {
@@ -126,6 +142,11 @@ func TestRunE2ELifecycleJSON(t *testing.T) {
 		t.Fatalf("unexpected default harness type for claude-code template: %q", inst.HarnessType)
 	}
 
+	// summon observed the harness start working, so the idle title it reports
+	// now really is this turn finishing.
+	if inst.BusyConfirmedAt.IsZero() {
+		t.Fatalf("expected summon --prompt to confirm the harness started: %+v", inst)
+	}
 	stdout, stderr, code = runJSON("capture", "e2e-agent", "--json")
 	if code != 0 {
 		t.Fatalf("capture failed: code=%d stderr=%q", code, stderr)

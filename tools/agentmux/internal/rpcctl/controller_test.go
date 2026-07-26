@@ -70,7 +70,7 @@ func TestControllerPromptWaitCaptureAndHalt(t *testing.T) {
 	if _, err := ctrl.Wait(context.Background(), inst, 3*time.Second); err != nil {
 		t.Fatalf("wait: %v", err)
 	}
-	snap, err := ctrl.Capture(context.Background(), inst, 0, capture.ScopeCurrent)
+	snap, err := ctrl.Capture(context.Background(), inst, capture.Options{Scope: capture.ScopeCurrent})
 	if err != nil {
 		t.Fatalf("capture: %v", err)
 	}

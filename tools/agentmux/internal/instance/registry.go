@@ -41,11 +41,15 @@ type Instance struct {
 	// ProcessID is the long-lived harness process for claude-code-ndjson, but
 	// only the currently running turn for codex-cli-execjson, where it is 0
 	// between turns. A dead ProcessID never implies a dead execjson instance.
-	ProcessID       int       `json:"process_id,omitempty"`
-	ProcessGroupID  int       `json:"process_group_id,omitempty"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
-	LastActivityAt  time.Time `json:"last_activity_at"`
+	ProcessID      int       `json:"process_id,omitempty"`
+	ProcessGroupID int       `json:"process_group_id,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	LastActivityAt time.Time `json:"last_activity_at"`
+	// BusyConfirmedAt is when the harness was last observed actually starting
+	// work on a prompt. Zero means the transition was never seen, so status
+	// signals from this instance may still describe the previous turn.
+	BusyConfirmedAt time.Time `json:"busy_confirmed_at,omitempty"`
 	FirstPromptSent bool      `json:"first_prompt_sent"`
 }
 

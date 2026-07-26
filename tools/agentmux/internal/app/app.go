@@ -175,25 +175,31 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 		fmt.Fprintf(stdout, "%s\t%s\n", inst.Name, inst.Status)
 		return 0
 	case "capture":
-		name, history, scope, err := parseCaptureArgs(args[1:])
+		name, opts, err := parseCaptureArgs(args[1:])
 		if err != nil {
 			return writeErr(stdout, stderr, jsonMode, "capture", "", err)
 		}
-		inst, snap, err := svc.Capture(ctx, name, history, scope)
+		inst, snap, err := svc.Capture(ctx, name, opts)
 		if err != nil {
 			return writeErr(stdout, stderr, jsonMode, "capture", name, err)
 		}
 		if jsonMode {
 			data := map[string]any{
-				"harness_type":  inst.HarnessType,
-				"scope":         string(scope),
-				"cursor_x":      snap.CursorX,
-				"cursor_y":      snap.CursorY,
-				"width":         snap.Width,
-				"height":        snap.Height,
-				"history_lines": snap.History,
-				"pane_title":    snap.PaneTitle,
-				"content":       snap.Content,
+				"harness_type": inst.HarnessType,
+				"scope":        string(opts.Scope),
+				"content":      snap.Content,
+			}
+			// Screen geometry only means something for a terminal harness;
+			// emitting zeroed fields for structured ones is pure noise.
+			if !service.IsStructuredHarness(inst.HarnessType) {
+				data["cursor_x"] = snap.CursorX
+				data["cursor_y"] = snap.CursorY
+				data["width"] = snap.Width
+				data["height"] = snap.Height
+				data["history_lines"] = snap.History
+				data["pane_title"] = snap.PaneTitle
+			} else {
+				data["messages_limit"] = snap.History
 			}
 			for k, v := range snap.Extra {
 				data[k] = v
@@ -213,18 +219,30 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 			return writeErr(stdout, stderr, jsonMode, "wait", name, err)
 		}
 		if jsonMode {
-			_ = output.WriteJSON(stdout, output.Success{OK: true, Command: "wait", Instance: inst.Name, Status: string(inst.Status), Data: map[string]any{
-				"cursor_x":      snap.CursorX,
-				"cursor_y":      snap.CursorY,
-				"width":         snap.Width,
-				"height":        snap.Height,
-				"history_lines": snap.History,
-				"stable_for_ms": snap.StableForMS,
-				"pane_title":    snap.PaneTitle,
-			}})
+			data := map[string]any{
+				"timed_out":  snap.TimedOut,
+				"elapsed_ms": snap.ElapsedMS,
+			}
+			// saw_busy and screen stability describe terminal observation; a
+			// structured harness reports completion through its protocol.
+			if !service.IsStructuredHarness(inst.HarnessType) {
+				data["saw_busy"] = snap.SawBusy
+				data["stable_for_ms"] = snap.StableForMS
+				data["cursor_x"] = snap.CursorX
+				data["cursor_y"] = snap.CursorY
+				data["width"] = snap.Width
+				data["height"] = snap.Height
+				data["history_lines"] = snap.History
+				data["pane_title"] = snap.PaneTitle
+			}
+			_ = output.WriteJSON(stdout, output.Success{OK: true, Command: "wait", Instance: inst.Name, Status: string(inst.Status), Data: data})
 			return 0
 		}
-		fmt.Fprintf(stdout, "%s\t%s\t%dms\n", inst.Name, inst.Status, snap.StableForMS)
+		timedOut := ""
+		if snap.TimedOut {
+			timedOut = "\ttimed_out"
+		}
+		fmt.Fprintf(stdout, "%s\t%s\t%dms%s\n", inst.Name, inst.Status, snap.ElapsedMS, timedOut)
 		return 0
 	case "attach":
 		if len(args) >= 2 {

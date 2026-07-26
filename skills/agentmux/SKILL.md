@@ -5,6 +5,26 @@ description: 通过 `agentmux` CLI 委派和管理外部 AI coding agent：选�
 
 # Agentmux
 
+## 速查
+
+```bash
+agentmux template list --json                                   # 有哪些模板和 harness
+agentmux list --json                                            # 有哪些实例、分别什么状态
+agentmux summon --template <模板> --name <名称> --cwd <路径> --json  # 创建或复用实例
+agentmux prompt <名称> --text "..." --json                       # 发送任务指令
+agentmux wait <名称> --timeout 3m --json                         # 等待；timed_out=true 表示仍在工作
+agentmux capture <名称>                                          # 读输出：纯文本，最省 token
+agentmux capture <名称> --json --history 20                      # 需要 usage/turn_state 等协议字段时
+agentmux halt <名称> --json                                      # 停止实例
+```
+
+四条硬规则：
+
+1. 只通过 `agentmux` 管理外部 Agent 实例。不要直接调用 `tmux`，也不要读取 harness 原始日志，除非用户明确要求调试底层实现。
+2. 读输出优先用**不带 `--json`** 的 `capture`；`--json` 只在需要 `usage`、`thread_id`、`turn_state`、`last_error` 时使用，并始终配合 `--history`。
+3. `wait` 超时（`timed_out: true`）是「还在工作」，不是失败；继续等即可。
+4. `idle`、`wait` 成功、`capture` 中自信的完成声明，都不能证明交付正确。必须自己读文件、diff、跑验证。
+
 ## 安装依赖
 
 这个 skill 需要 `agentmux` CLI；skill 本身不包含二进制文件。使用前先安装
@@ -39,13 +59,22 @@ install -m 0755 ./agentmux ~/.local/bin/agentmux
 外部 CLI；基于 tmux 的模板需要 `tmux`，结构化模板还需要 `claude`、`codex`
 或 `pi`。具体模板命令可通过 `agentmux template list --json` 查看。
 
-只通过 `agentmux` 管理外部 Agent 实例。不要直接调用 `tmux`，也不要读取 harness 原始日志，除非用户明确要求调试底层实现。
-
 ## Harness 模型
 
 先从 `template list --json`、`list --json` 或 `inspect --json` 读取 `harness_type`，再判断实例的输入和完成语义。
 
-TUI harness（`claude-code`、`codex-cli`、`gemini-cli`）在 tmux 中运行交互式终端界面。允许启动耗时；检查升级、确认或权限提示；只有文本已粘贴但未提交时才补发 `Enter`。
+选择 harness：
+
+| 场景 | 选择 | 理由 |
+| --- | --- | --- |
+| 默认：委派可验证的编码任务 | 结构化 harness（`claude-code-ndjson`、`codex-cli-execjson`、`pi-rpc`） | 无终端界面竞态，不需要补 `Enter`，输出可结构化读取 |
+| 多轮追问、需要共享上下文 | `claude-code-ndjson` 或 `pi-rpc` | 长驻进程，busy 时任务指令排队 |
+| 独立 turn、易于并行分片 | `codex-cli-execjson` | 每个 turn 一个进程，turn 之间无进程 |
+| 用户要旁观、接管或调试终端 | `claude-code`、`codex-cli`、`gemini-cli` | 可 `attach`；代价是启动提示、按键和状态推断都更脆弱 |
+
+没有特殊理由时优先结构化 harness。只有需要人工 attach，或环境只提供 TUI 时才用 TUI harness。
+
+TUI harness（`claude-code`、`codex-cli`、`gemini-cli`）在 tmux 中运行交互式终端界面。允许启动耗时；检查升级、确认或权限提示；只有文本已粘贴但未提交时才补发 `Enter`。发送文本后 `agentmux` 会先确认 harness 真的开始工作（默认最多 5 秒），因此 `prompt` 本身可能多花几百毫秒；这是后续 `wait` 和 `inspect` 可信的前提。
 
 结构化 harness 没有终端屏幕，永远不需要补发 `Enter`：
 
@@ -57,7 +86,7 @@ TUI harness（`claude-code`、`codex-cli`、`gemini-cli`）在 tmux 中运行交
 
 ## 标准编排循环
 
-默认使用 JSON 模式：
+控制类命令用 JSON 模式，读输出用文本模式：
 
 ```bash
 agentmux template list --json
@@ -66,7 +95,7 @@ agentmux summon --template <template> --name <name> --json
 agentmux inspect <name> --json
 agentmux prompt <name> --text "..." --json
 agentmux wait <name> --timeout 180s --json
-agentmux capture <name> --json
+agentmux capture <name>
 ```
 
 按意图选择命令：
@@ -151,14 +180,14 @@ agentmux capture <name> --json
 ```bash
 agentmux summon --template codex-cli-execjson --name 登录修复-A --cwd /path/to/repo --prompt "工作模式：实现。修复登录超时后错误重试的问题；先阅读 AGENTS.md 和 internal/auth/；完成后运行 go test ./internal/auth/... 并报告证据。不要改动公开 API。" --json
 agentmux wait 登录修复-A --timeout 180s --json
-agentmux capture 登录修复-A --json
+agentmux capture 登录修复-A
 ```
 
 对新建的 TUI harness，尤其是 Claude Code，优先分开执行 `summon -> capture/inspect -> prompt`，避免启动页或升级提示截获任务指令：
 
 ```bash
 agentmux summon --template claude-code --name wiki审核-A --cwd /path/to/repo --json
-agentmux capture wiki审核-A --history 10 --json
+agentmux capture wiki审核-A --history 10
 agentmux prompt wiki审核-A --text "请阅读 /absolute/path/to/task.md 并按其中的范围和完成标准执行" --json
 ```
 
@@ -175,11 +204,19 @@ agentmux prompt wiki审核-A --text "请阅读 /absolute/path/to/task.md 并按�
 ```bash
 agentmux inspect 编码助手-A --json
 agentmux list --json
-agentmux capture 编码助手-A --history 120 --json
+agentmux capture 编码助手-A
+agentmux capture 编码助手-A --history 120
+agentmux capture 编码助手-A --json --history 20
 agentmux capture 编码助手-A --scope session --history 40 --json
 ```
 
-把 `data.content` 作为 `capture` 的主要输出。先检查 `data.scope`：
+读输出的成本纪律：
+
+- **默认用不带 `--json` 的 `capture`**，它只打印聚合后的内容，通常几十到几百字节。
+- 结构化 harness 每个协议事件对应一条消息。`--json` 默认只返回最近 20 条并去掉原始事件；`--history 0` 和 `--raw` 会恢复完整输出，只在调试协议时使用。
+- TUI harness 的 `--history` 是屏幕行数，按需给值，不要习惯性写 120。
+
+把 `data.content` 作为 `capture --json` 的主要输出。先检查 `data.scope`：
 
 - 默认 `--scope current`。TUI harness 返回当前屏幕和可选历史行；结构化 harness 返回当前或最近 turn。
 - `--scope session` 用于读取结构化 harness 的已记录会话；TUI harness 仍按屏幕和历史行处理。
@@ -187,7 +224,7 @@ agentmux capture 编码助手-A --scope session --history 40 --json
 
 结构化 `capture --json` 还提供协议字段：
 
-- `claude-code-ndjson`：`messages`、`usage`、`claude_session_id`、`turns`。
+- `claude-code-ndjson`：`messages`、`usage`、`claude_session_id`、`turns`、`last_error`。
 - `codex-cli-execjson`：`messages`、`usage`、`thread_id`、`turns`、`turn_state`、`last_error`。
 - `pi-rpc`：`messages`、`usage`、`pi_session_id`、`turns`、`last_error`。
 
@@ -209,9 +246,16 @@ agentmux wait 编码助手-A --stable 1500 --timeout 30s --json
 agentmux wait 登录修复-A --timeout 180s --json
 ```
 
-`--stable` 只影响通用/TUI 的稳定性检测；结构化 harness 根据协议事件或 turn 进程退出判断完成。
+读 `wait` 的返回：
 
-长任务采用耐心循环：`1m, 1m, 3m, 5m`，然后重复。单次等待不要超过 `5m`。`wait` 返回 `capture_timeout` 表示超时时仍在活动，不表示任务失败；随后可用 `capture` 检查进展。
+- `ok: true` + `data.timed_out: false` + `status: idle`：本轮工作已经结束。
+- `ok: true` + `data.timed_out: true` + `status: busy`：**仍在工作**，继续等，不要当作失败，也不要因此中断。
+- `ok: false`：实例真的出问题了（丢失、退出、进程异常），按错误码处理。
+- `data.saw_busy` 表示本次等待确实观察到 harness 在工作，`data.elapsed_ms` 是实际等待时长。
+
+`--stable` 对 TUI harness 有两个作用：通用稳定性检测的窗口，以及信任 idle 信号前的最小观察窗口；结构化 harness 根据协议事件或 turn 进程退出判断完成。除非明确知道后果，不要设 `--stable 0`。
+
+长任务采用耐心循环：`1m, 1m, 3m, 5m`，然后重复。单次等待不要超过 `5m`。每次超时后可以用 `capture` 检查进展，再继续等待。
 
 不要因为任务耗时或仍为 `busy` 就中断。只在用户要求、出现明确阻塞、明显循环或崩溃，或者任务约束要求立即纠偏时中断。
 
@@ -221,7 +265,7 @@ agentmux wait 登录修复-A --timeout 180s --json
 
 1. 发送一次 `C-c`。
 2. 等待 `10-15s`。
-3. 用 `inspect --json` 或 `capture --json` 检查结果。
+3. 用 `inspect --json` 查看状态，或 `capture` 查看输出。
 4. 仅在仍无响应或确实应该停止时使用 `halt`。
 
 ```bash
@@ -236,13 +280,27 @@ agentmux halt 编码助手-A --immediately --json
 
 ## 故障恢复
 
-- `template_not_found`：运行 `agentmux template list --json`。
-- `instance_not_found`：运行 `agentmux list --json`，再决定是否 `summon`。
-- `capture_timeout`：按“仍在活动”处理，继续等待并按需读取快照。
-- `process_not_running`：先用 `inspect --json` 检查实例，再决定是否重新 `summon`。
-- `execjson_instance_busy`：当前任务指令没有发出；先 `wait`，再原样重发。不要立即重试，也不要用 `halt` 解锁。
-- `invalid_key`：改用 `Enter`、`C-c`、`Escape`、`Up`、`Down` 或 `Tab`。
-- 命令疑似不存在：运行 `agentmux version --json` 和 `agentmux help <command>`。
+先读 `error_code`，按下表执行；不要凭错误文本猜测。
+
+| `error_code` | 含义 | 下一步 |
+| --- | --- | --- |
+| `template_not_found` | 模板名不存在 | `agentmux template list --json` |
+| `instance_not_found` | 实例不存在或已被清理 | `agentmux list --json`，再决定是否 `summon` |
+| `instance_template_mismatch` | 同名实例属于其他模板 | 换一个描述性实例名 |
+| `process_not_running` / `session_not_found` | 实例已经不在运行 | `inspect --json` 确认后重新 `summon`，并在新首次指令中吸收已确认的证据 |
+| `execjson_instance_busy` | 任务指令没有发出，turn 正在跑 | 先 `wait`，再原样重发；不要立即重试，也不要用 `halt` 解锁 |
+| `invalid_key` | 按键不在白名单 | 改用 `Enter`、`C-c`、`Escape`、`Up`、`Down`、`Tab` |
+| `invalid_arguments` | 参数错误 | 按提示修正；注意实例名必须写在所有 flag 之前 |
+| `tmux_unavailable` | tmux 不可用或命令失败 | 报告环境问题；这不是外部 Agent 的错误 |
+| `config_invalid` / `config_parse_error` / `config_io_error` | 配置问题 | 见下面的模板命令修复说明；必要时请用户检查配置 |
+| `registry_io_error` / `registry_parse_error` / `registry_lock_error` | agentmux 自身状态文件异常 | 重试一次；仍失败则报告给用户，不要反复重试 |
+| `ndjson_*` / `execjson_*` / `rpc_*` | 对应结构化 harness 的传输或状态错误 | `inspect --json` 确认状态，必要时新建实例继续 |
+| `instance_changed` | 发送期间实例被其他进程替换 | 重新 `inspect --json` 后再决定 |
+| `internal_error` | 未归类错误 | 报告给用户，不要静默重试 |
+
+`wait` 超时不再表现为错误：它返回 `ok: true` 和 `data.timed_out: true`，按“仍在工作”处理。
+
+命令疑似不存在时：运行 `agentmux version --json` 和 `agentmux help <command>`。
 
 `codex-cli-execjson` 出现 `config_invalid` 时，把模板命令改成只带受支持父级 flag 的普通 `codex exec` 前缀，例如 `--sandbox`、`--cd`、`--add-dir`、`--color`、`--skip-git-repo-check` 或 `--model`。移除 `--json`、`-o`、`resume`、`review`、`--ask-for-approval`、`--ephemeral`、位置参数、管道和重定向；turn 参数由 agentmux 注入。
 

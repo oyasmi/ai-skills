@@ -327,7 +327,7 @@ func (c Controller) finalize(inst instance.Instance, st *State, i int, cancelled
 	}
 }
 
-func (c Controller) Capture(ctx context.Context, inst instance.Instance, history int, scope capture.Scope) (capture.Snapshot, error) {
+func (c Controller) Capture(ctx context.Context, inst instance.Instance, opts capture.Options) (capture.Snapshot, error) {
 	st, err := c.load(inst)
 	if err != nil {
 		return capture.Snapshot{}, err
@@ -335,7 +335,7 @@ func (c Controller) Capture(ctx context.Context, inst instance.Instance, history
 	// Current scope reads the current (or most recent) turn. Session scope reads
 	// from the beginning and lets history act as a message limit.
 	var from int64
-	if scope != capture.ScopeSession {
+	if opts.Scope != capture.ScopeSession {
 		if i := lastTurn(&st); i >= 0 {
 			from = st.Turns[i].StartOffset
 		}
@@ -345,14 +345,17 @@ func (c Controller) Capture(ctx context.Context, inst instance.Instance, history
 		return capture.Snapshot{}, err
 	}
 	msgs, content, usage := normalizeEvents(events)
-	msgs = trimMessages(msgs, history)
+	msgs = trimMessages(msgs, opts.History)
+	if !opts.Raw {
+		msgs = briefMessages(msgs)
+	}
 
 	turnState := ""
 	if i := lastTurn(&st); i >= 0 {
 		turnState = string(st.Turns[i].State)
 	}
 	return capture.Snapshot{
-		History:    history,
+		History:    opts.History,
 		Content:    content,
 		CapturedAt: nowUTC(),
 		Extra: map[string]any{

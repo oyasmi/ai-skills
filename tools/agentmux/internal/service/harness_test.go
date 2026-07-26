@@ -3,10 +3,14 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/capture"
 
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/execjsonctl"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/instance"
@@ -120,5 +124,68 @@ func seedRegistry(t *testing.T, path string, inst instance.Instance) {
 	}
 	if err := os.WriteFile(path, b, 0o600); err != nil {
 		t.Fatalf("write registry: %v", err)
+	}
+}
+
+// An unset --history must stay bounded for structured harnesses: their message
+// stream is one entry per protocol event, so "everything" is what floods an
+// orchestrator's context.
+func TestCaptureBoundsStructuredMessagesByDefault(t *testing.T) {
+	svc, registryPath := newTestService(t, &fakeTmux{sessions: map[string]bool{}})
+
+	transport := t.TempDir()
+	writeExecJSONState(t, transport, `{
+	  "version": 1,
+	  "thread_id": "thread-1",
+	  "status": "idle",
+	  "resume_available": true,
+	  "turns": [{"index":0,"state":"completed","start_offset":0}],
+	  "total_turns": 1
+	}`)
+	var events strings.Builder
+	for i := 0; i < 50; i++ {
+		fmt.Fprintf(&events, `{"type":"item.completed","item":{"id":"item_%d","type":"agent_message","text":"chunk %d"}}`+"\n", i, i)
+	}
+	if err := os.WriteFile(filepath.Join(transport, "output.jsonl"), []byte(events.String()), 0o600); err != nil {
+		t.Fatalf("write output: %v", err)
+	}
+
+	seedRegistry(t, registryPath, instance.Instance{
+		Name:         "codex",
+		Template:     "worker",
+		SessionID:    "i_codex",
+		HarnessType:  execjsonctl.HarnessType,
+		TransportDir: transport,
+		ThreadID:     "thread-1",
+		Status:       instance.StatusIdle,
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
+	})
+
+	_, snap, err := svc.Capture(context.Background(), "codex", capture.Options{Scope: capture.ScopeCurrent, History: -1})
+	if err != nil {
+		t.Fatalf("capture: %v", err)
+	}
+	msgs, ok := snap.Extra["messages"].([]execjsonctl.NormalizedMessage)
+	if !ok {
+		t.Fatalf("unexpected messages type %T", snap.Extra["messages"])
+	}
+	if len(msgs) != defaultStructuredMessages {
+		t.Fatalf("expected the default to cap messages at %d, got %d", defaultStructuredMessages, len(msgs))
+	}
+	if msgs[len(msgs)-1].Text != "chunk 49" {
+		t.Fatalf("expected the most recent messages to be kept, got %q", msgs[len(msgs)-1].Text)
+	}
+	if snap.Content != "chunk 49" {
+		t.Fatalf("expected content to hold the latest agent message, got %q", snap.Content)
+	}
+
+	// An explicit 0 still means "no limit" for callers that want the full trace.
+	_, full, err := svc.Capture(context.Background(), "codex", capture.Options{Scope: capture.ScopeCurrent, History: 0})
+	if err != nil {
+		t.Fatalf("capture unlimited: %v", err)
+	}
+	if got := len(full.Extra["messages"].([]execjsonctl.NormalizedMessage)); got != 50 {
+		t.Fatalf("expected --history 0 to keep every message, got %d", got)
 	}
 }

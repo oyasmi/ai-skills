@@ -190,9 +190,11 @@ func normalizeEvents(events []Event) ([]NormalizedMessage, string, Usage, float6
 		case "system":
 			out = append(out, NormalizedMessage{Type: "system", ContentType: ev.Subtype, Text: ev.State, Raw: ev.Raw})
 		case "stream_event":
+			// Deltas are accumulated into the aggregate text but never emitted
+			// as messages: each one would be a separate entry carrying its own
+			// raw event, and the completed `assistant` event repeats all of it.
 			if txt := streamTextDelta(ev); txt != "" {
 				deltaText += txt
-				out = append(out, NormalizedMessage{Type: "assistant", ContentType: "text_delta", Text: txt, Raw: ev.Raw})
 			}
 			if ev.Event.Type == "message_start" || ev.Event.Type == "message_delta" {
 				fallbackUsage = maxUsage(fallbackUsage, ev.Event.Usage)
