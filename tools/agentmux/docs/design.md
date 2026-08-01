@@ -2,7 +2,7 @@
 
 ## 1. 目标
 
-`agentmux` 是一个面向 AI Agent 的命令行控制器。它使用独立的 `tmux` 作为终端运行时，让上层编排器可以稳定地创建、复用、观察和驱动 TUI/CLI Agent 实例。
+`agentmux` 是一个面向 AI Agent 的 coding-agent harness 多路复用器（multiplexer）。本文档聚焦其中基于 `tmux` 的 TUI harness 运行时，让上层编排器可以稳定地创建、复用、观察和驱动 TUI/CLI Agent 实例；结构化 harness（NDJSON、execjson 等，不依赖 tmux）的设计见对应的 `*-transport-design.md`。
 
 核心目标：
 
@@ -10,12 +10,12 @@
 2. 提供高层的“实例”抽象，而不是要求上层直接操作 `tmux session/window/pane`。
 3. 保证输出格式简明、平坦、稳定，便于 Agent 消费。
 4. 控制命令是一次性的 CLI，不引入常驻 daemon。
-5. 即使控制命令退出，实例也继续在 `tmux` 中存活。
+5. 即使控制命令退出，TUI harness 实例也继续在 `tmux` 中存活（结构化 harness 依赖各自的进程/协议模型存活，见对应 transport 设计文档）。
 
 非目标：
 
 1. 不实现终端仿真器。
-2. 不接管各 Agent CLI 的内部协议。
+2. 不接管各 TUI Agent CLI 的内部协议（结构化 harness 属于例外，见对应 transport 设计文档，它们本身就是直接对接协议）。
 3. 不追求覆盖所有 tmux 能力，只做 Agent 编排真正需要的核心集。
 
 ---

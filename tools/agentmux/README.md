@@ -1,6 +1,8 @@
 # agentmux
 
-`agentmux` 是一个面向 AI Agent 的命令行控制器。它可以用隔离的 `tmux` session 运行外部终端 Agent，也可以通过 Claude Code 的 NDJSON 协议直接管理 Claude 进程，并提供适合编排器使用的实例管理、输出读取、输入注入和结构化输出。
+`agentmux` 是一个面向 AI Agent 的 coding-agent harness 多路复用器（multiplexer）：用同一套命令行接口统一管理多种外部 coding agent 的运行方式，既可以通过结构化协议（如 Claude Code 的 NDJSON、`codex exec --json`）直接驱动 headless 进程，也可以用隔离的 `tmux` session 运行传统 TUI 终端 Agent，并为编排器提供统一的实例管理、输出读取、输入注入和结构化输出。
+
+`mux` 得名于「multiplexer」：早期版本主要靠 tmux pane 承载多个 Agent 实例，因此曾经把 `agentmux` 理解为「tmux 的 agent 化封装」。但现在 headless/结构化 harness（`claude-code-ndjson`、`codex-cli-execjson`、`pi-rpc`）已经是更常用的方式，tmux 只是其中受支持的一种 TUI 运行时，不再是唯一或主要的手段。
 
 当前目标平台：
 
@@ -11,15 +13,15 @@ Windows 不是首要目标。
 
 ## 特性
 
-1. 默认使用独立 tmux socket `/tmp/agentmux.sock`，且可通过配置修改
-2. 默认不加载用户 `tmux.conf`，可通过配置显式开启
-3. TUI harness 使用 `1 instance = 1 tmux session`
-4. 模板名和实例名支持中文
-5. 关键命令支持 `--json`
-6. `summon` 默认同名复用
-7. `capture` 默认返回纯文本，结构化 harness 的 `--json` 默认不含协议原始事件
-8. `claude-code-ndjson` 可绕过 tmux 终端界面，直接使用 Claude Code 的 stream-json 协议
-9. `codex-cli-execjson` 可绕过 tmux 终端界面，直接使用 `codex exec --json` 的事件流
+1. 模板名和实例名支持中文
+2. 关键命令支持 `--json`
+3. `summon` 默认同名复用
+4. `capture` 默认返回纯文本，结构化 harness 的 `--json` 默认不含协议原始事件
+5. `claude-code-ndjson`、`pi-rpc` 直接使用各自的流式协议驱动 headless 进程，无需 tmux 终端界面
+6. `codex-cli-execjson` 直接使用 `codex exec --json` 的事件流驱动 headless 进程，无需 tmux 终端界面
+7. TUI harness（`claude-code`、`codex-cli`、`gemini-cli`）默认使用独立 tmux socket `/tmp/agentmux.sock`，且可通过配置修改
+8. TUI harness 默认不加载用户 `tmux.conf`，可通过配置显式开启
+9. TUI harness 使用 `1 instance = 1 tmux session`
 
 ## 近期优化
 

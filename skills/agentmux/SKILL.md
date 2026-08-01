@@ -1,6 +1,6 @@
 ---
 name: agentmux
-description: 通过 `agentmux` CLI 委派和管理外部 AI coding agent：选择 harness、创建或复用实例、编写首次与追加任务指令、等待和读取输出、纠偏、验证交付物以及停止实例。覆盖基于 tmux 的 TUI harness 和 `claude-code-ndjson`、`codex-cli-execjson`、`pi-rpc` 等结构化 harness。用户提到 `agentmux`、需要调用其他 CLI coding agent，或需要复用外部 Agent 完成任务时使用。
+description: 通过 `agentmux` CLI 委派和管理外部 AI coding agent：选择 harness、创建或复用实例、编写首次与追加任务指令、等待和读取输出、纠偏、验证交付物以及停止实例。覆盖 `claude-code-ndjson`、`codex-cli-execjson`、`pi-rpc` 等 headless 结构化 harness，也覆盖基于 tmux 的 TUI harness。用户提到 `agentmux`、需要调用其他 CLI coding agent，或需要复用外部 Agent 完成任务时使用。
 ---
 
 # Agentmux
