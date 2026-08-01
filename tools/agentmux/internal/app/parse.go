@@ -105,6 +105,10 @@ func parseRunArgs(args []string) (service.RunInput, bool, error) {
 			useStdin = true
 		case "--raw":
 			in.Capture.Raw = true
+		case "--trace":
+			in.Capture.Trace = true
+		case "--detach":
+			in.Detach = true
 		default:
 			rest = append(rest, args[i])
 		}
@@ -136,6 +140,9 @@ func parseRunArgs(args []string) (service.RunInput, bool, error) {
 			return in, false, err
 		}
 		in.TimeoutMS = ms
+	}
+	if in.Detach && (in.Capture.Raw || in.Capture.Trace || in.Capture.History >= 0) {
+		return in, false, apperr.New("invalid_arguments", "--detach cannot be combined with --history, --trace, or --raw; nothing is captured until you call capture or wait --collect yourself")
 	}
 	return in, useStdin, nil
 }
@@ -172,28 +179,37 @@ func parseListArgs(args []string) (includeEnded bool, err error) {
 	return includeEnded, nil
 }
 
-func parsePromptArgs(args []string) (name, text, key string, useStdin bool, err error) {
+func parsePromptArgs(args []string) (name, text, key string, useStdin bool, waitIfBusyMS int, err error) {
 	if len(args) == 0 {
-		return "", "", "", false, apperr.New("invalid_arguments", "missing instance name\n\n"+promptHelp())
+		return "", "", "", false, 0, apperr.New("invalid_arguments", "missing instance name\n\n"+promptHelp())
 	}
 	name = args[0]
 	if err := requireInstanceName(name, "prompt", promptHelp()); err != nil {
-		return "", "", "", false, err
+		return "", "", "", false, 0, err
 	}
+	var waitIfBusyRaw string
+	args = splitEqualsForms(args[1:], "--wait-if-busy")
 	fs := newFlagSet("prompt")
 	fs.StringVar(&text, "text", "", "")
 	fs.StringVar(&key, "key", "", "")
 	fs.BoolVar(&useStdin, "stdin", false, "")
-	if err := fs.Parse(args[1:]); err != nil {
-		return "", "", "", false, err
+	fs.StringVar(&waitIfBusyRaw, "wait-if-busy", "", "")
+	if err := fs.Parse(args); err != nil {
+		return "", "", "", false, 0, err
 	}
 	if fs.NArg() > 0 {
-		return "", "", "", false, apperr.New("invalid_arguments", "prompt does not accept positional arguments after instance name")
+		return "", "", "", false, 0, apperr.New("invalid_arguments", "prompt does not accept positional arguments after instance name")
 	}
 	if useStdin && text != "" {
-		return "", "", "", false, apperr.New("invalid_arguments", "--stdin cannot be used with --text")
+		return "", "", "", false, 0, apperr.New("invalid_arguments", "--stdin cannot be used with --text")
 	}
-	return name, text, key, useStdin, nil
+	if waitIfBusyRaw != "" {
+		waitIfBusyMS, err = parseMillisOrDuration(waitIfBusyRaw, "--wait-if-busy")
+		if err != nil {
+			return "", "", "", false, 0, err
+		}
+	}
+	return name, text, key, useStdin, waitIfBusyMS, nil
 }
 
 func parseCaptureArgs(args []string) (name string, opts capture.Options, err error) {
@@ -210,6 +226,8 @@ func parseCaptureArgs(args []string) (name string, opts capture.Options, err err
 	fs.IntVar(&opts.History, "history", -1, "")
 	fs.BoolVar(&opts.Raw, "raw", false, "")
 	fs.StringVar(&opts.Since, "since", "", "")
+	fs.BoolVar(&opts.Trace, "trace", false, "")
+	fs.BoolVar(&opts.New, "new", false, "")
 	fs.StringVar(&scopeRaw, "scope", string(capture.ScopeCurrent), "")
 	if err := fs.Parse(args[1:]); err != nil {
 		return "", capture.Options{}, err
@@ -219,6 +237,9 @@ func parseCaptureArgs(args []string) (name string, opts capture.Options, err err
 	}
 	if opts.History < -1 {
 		return "", capture.Options{}, apperr.New("invalid_arguments", "invalid value for --history: must be -1 or a non-negative integer")
+	}
+	if opts.New && strings.TrimSpace(opts.Since) != "" {
+		return "", capture.Options{}, apperr.New("invalid_arguments", "--new cannot be combined with --since")
 	}
 	switch capture.Scope(strings.TrimSpace(scopeRaw)) {
 	case capture.ScopeCurrent, "":
@@ -241,12 +262,12 @@ func requireInstanceName(name, command, help string) error {
 	return nil
 }
 
-func parseWaitArgs(args []string) (names []string, stableMS, timeoutMS int, mode service.WaitMode, err error) {
+func parseWaitArgs(args []string) (names []string, stableMS, timeoutMS int, mode service.WaitMode, collect bool, err error) {
 	if len(args) == 0 {
-		return nil, 0, 0, "", apperr.New("invalid_arguments", "missing instance name\n\n"+waitHelp())
+		return nil, 0, 0, "", false, apperr.New("invalid_arguments", "missing instance name\n\n"+waitHelp())
 	}
 	if err := requireInstanceName(args[0], "wait", waitHelp()); err != nil {
-		return nil, 0, 0, "", err
+		return nil, 0, 0, "", false, err
 	}
 	rest := args
 	for len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
@@ -258,11 +279,12 @@ func parseWaitArgs(args []string) (names []string, stableMS, timeoutMS int, mode
 	fs.StringVar(&stableRaw, "stable", "1500", "")
 	fs.StringVar(&timeoutRaw, "timeout", "30s", "")
 	fs.StringVar(&modeRaw, "mode", string(service.WaitAll), "")
+	fs.BoolVar(&collect, "collect", false, "")
 	if err := fs.Parse(rest); err != nil {
-		return nil, 0, 0, "", err
+		return nil, 0, 0, "", false, err
 	}
 	if fs.NArg() > 0 {
-		return nil, 0, 0, "", apperr.New("invalid_arguments", "wait does not accept positional arguments after flags; list every instance name first")
+		return nil, 0, 0, "", false, apperr.New("invalid_arguments", "wait does not accept positional arguments after flags; list every instance name first")
 	}
 	switch service.WaitMode(strings.TrimSpace(modeRaw)) {
 	case service.WaitAll, "":
@@ -270,17 +292,17 @@ func parseWaitArgs(args []string) (names []string, stableMS, timeoutMS int, mode
 	case service.WaitAny:
 		mode = service.WaitAny
 	default:
-		return nil, 0, 0, "", apperr.New("invalid_arguments", "invalid value for --mode: must be all or any")
+		return nil, 0, 0, "", false, apperr.New("invalid_arguments", "invalid value for --mode: must be all or any")
 	}
 	stableMS, err = parseMillisOrDuration(stableRaw, "--stable")
 	if err != nil {
-		return nil, 0, 0, "", err
+		return nil, 0, 0, "", false, err
 	}
 	timeoutMS, err = parseMillisOrDuration(timeoutRaw, "--timeout")
 	if err != nil {
-		return nil, 0, 0, "", err
+		return nil, 0, 0, "", false, err
 	}
-	return names, stableMS, timeoutMS, mode, nil
+	return names, stableMS, timeoutMS, mode, collect, nil
 }
 
 func appendUnique(names []string, name string) []string {

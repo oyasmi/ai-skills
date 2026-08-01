@@ -6,16 +6,19 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/apperr"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/capture"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/config"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/output"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/service"
 )
 
 var Version = "dev"
+var BuildTime = "unknown"
 var newService = service.New
 
 const maxPromptInputBytes = 3 << 20
@@ -36,6 +39,9 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	if rest[0] == "version" {
 		return dispatch(ctx, service.Service{}, jsonMode, rest, stdout, stderr)
+	}
+	if rest[0] == "doctor" {
+		return runDoctor(ctx, jsonMode, rest[1:], stdout, stderr)
 	}
 	paths, err := config.DiscoverPaths()
 	if err != nil {
@@ -110,22 +116,29 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 			return writeErr(stdout, stderr, jsonMode, "summon", input.Name, err)
 		}
 		if jsonMode {
+			data := map[string]any{
+				"template":     res.Instance.Template,
+				"model":        res.Instance.Model,
+				"cwd":          res.Instance.CWD,
+				"harness_type": res.Instance.HarnessType,
+			}
+			if len(res.Warnings) > 0 {
+				data["warnings"] = res.Warnings
+			}
 			_ = output.WriteJSON(stdout, output.Success{
 				OK:       true,
 				Command:  "summon",
 				Instance: res.Instance.Name,
 				Reused:   boolPtr(res.Reused),
 				Status:   string(res.Instance.Status),
-				Data: map[string]any{
-					"template":     res.Instance.Template,
-					"model":        res.Instance.Model,
-					"cwd":          res.Instance.CWD,
-					"harness_type": res.Instance.HarnessType,
-				},
+				Data:     data,
 			})
 			return 0
 		}
 		fmt.Fprintf(stdout, "%s\t%s\t%s\n", res.Instance.Name, res.Instance.Template, res.Instance.Status)
+		for _, w := range res.Warnings {
+			fmt.Fprintf(stderr, "warning: %s\n", w)
+		}
 		return 0
 	case "run":
 		input, useStdin, err := parseRunArgs(args[1:])
@@ -147,12 +160,20 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 				"template":     res.Instance.Template,
 				"harness_type": res.Instance.HarnessType,
 				"cwd":          res.Instance.CWD,
-				"content":      res.Snapshot.Content,
-				"timed_out":    res.TimedOut,
 				"elapsed_ms":   res.ElapsedMS,
+				"queued_ms":    res.QueuedMS,
 			}
-			for k, v := range res.Snapshot.Extra {
-				data[k] = v
+			if res.Detached {
+				data["detached"] = true
+			} else {
+				data["content"] = res.Snapshot.Content
+				data["timed_out"] = res.TimedOut
+				for k, v := range res.Snapshot.Extra {
+					data[k] = v
+				}
+			}
+			if len(res.Warnings) > 0 {
+				data["warnings"] = res.Warnings
 			}
 			_ = output.WriteJSON(stdout, output.Success{
 				OK:       true,
@@ -164,9 +185,23 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 			})
 			return 0
 		}
+		if res.Detached {
+			fmt.Fprintf(stdout, "%s\t%s\n", res.Instance.Name, res.Instance.Status)
+			for _, w := range res.Warnings {
+				fmt.Fprintf(stderr, "warning: %s\n", w)
+			}
+			return 0
+		}
 		fmt.Fprint(stdout, res.Snapshot.Content)
+		if !strings.HasSuffix(res.Snapshot.Content, "\n") {
+			fmt.Fprintln(stdout)
+		}
+		fmt.Fprintf(stderr, "instance: %s\n", res.Instance.Name)
+		for _, w := range res.Warnings {
+			fmt.Fprintf(stderr, "warning: %s\n", w)
+		}
 		if res.TimedOut {
-			fmt.Fprintf(stderr, "\n%s is still working after %dms; wait on it again\n", res.Instance.Name, res.ElapsedMS)
+			fmt.Fprintf(stderr, "%s is still working after %dms; wait on it again\n", res.Instance.Name, res.ElapsedMS)
 		}
 		return 0
 	case "inspect":
@@ -194,7 +229,7 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 		fmt.Fprintf(stdout, "last_activity_at: %s\n", inst.LastActivityAt.Format(time.RFC3339))
 		return 0
 	case "prompt":
-		name, text, key, useStdin, err := parsePromptArgs(args[1:])
+		name, text, key, useStdin, waitIfBusyMS, err := parsePromptArgs(args[1:])
 		if err != nil {
 			return writeErr(stdout, stderr, jsonMode, "prompt", "", err)
 		}
@@ -204,6 +239,10 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 				return writeErr(stdout, stderr, jsonMode, "prompt", name, err)
 			}
 		}
+		queuedMS, err := svc.WaitIfBusy(ctx, name, waitIfBusyMS)
+		if err != nil {
+			return writeErr(stdout, stderr, jsonMode, "prompt", name, err)
+		}
 		inst, err := svc.Prompt(ctx, name, text, key)
 		if err != nil {
 			return writeErr(stdout, stderr, jsonMode, "prompt", name, err)
@@ -212,6 +251,7 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 			_ = output.WriteJSON(stdout, output.Success{OK: true, Command: "prompt", Instance: inst.Name, Status: string(inst.Status), Data: map[string]any{
 				"sent_text": text != "",
 				"sent_key":  key,
+				"queued_ms": queuedMS,
 			}})
 			return 0
 		}
@@ -235,6 +275,9 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 			if opts.Since != "" {
 				data["since"] = opts.Since
 			}
+			if opts.New {
+				data["new"] = true
+			}
 			// Screen geometry only means something for a terminal harness;
 			// emitting zeroed fields for structured ones is pure noise.
 			if !service.IsStructuredHarness(inst.HarnessType) {
@@ -244,7 +287,7 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 				data["height"] = snap.Height
 				data["history_lines"] = snap.History
 				data["pane_title"] = snap.PaneTitle
-			} else {
+			} else if _, hasTrace := snap.Extra["messages"]; hasTrace {
 				data["messages_limit"] = snap.History
 			}
 			for k, v := range snap.Extra {
@@ -256,17 +299,24 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 		fmt.Fprint(stdout, snap.Content)
 		return 0
 	case "wait":
-		names, stableMS, timeoutMS, mode, err := parseWaitArgs(args[1:])
+		names, stableMS, timeoutMS, mode, collect, err := parseWaitArgs(args[1:])
 		if err != nil {
 			return writeErr(stdout, stderr, jsonMode, "wait", "", err)
 		}
 		if len(names) > 1 {
-			return waitMany(ctx, svc, names, stableMS, timeoutMS, mode, jsonMode, stdout, stderr)
+			return waitMany(ctx, svc, names, stableMS, timeoutMS, mode, collect, jsonMode, stdout, stderr)
 		}
 		name := names[0]
 		inst, snap, err := svc.Wait(ctx, name, stableMS, timeoutMS)
 		if err != nil {
 			return writeErr(stdout, stderr, jsonMode, "wait", name, err)
+		}
+		var collectSnap capture.Snapshot
+		if collect && !snap.TimedOut {
+			inst, collectSnap, err = svc.Capture(ctx, name, capture.Options{History: -1, Scope: capture.ScopeCurrent})
+			if err != nil {
+				return writeErr(stdout, stderr, jsonMode, "wait", name, err)
+			}
 		}
 		if jsonMode {
 			data := map[string]any{
@@ -285,6 +335,12 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 				data["history_lines"] = snap.History
 				data["pane_title"] = snap.PaneTitle
 			}
+			if collect {
+				data["content"] = collectSnap.Content
+				for k, v := range collectSnap.Extra {
+					data[k] = v
+				}
+			}
 			_ = output.WriteJSON(stdout, output.Success{OK: true, Command: "wait", Instance: inst.Name, Status: string(inst.Status), Data: data})
 			return 0
 		}
@@ -293,6 +349,9 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 			timedOut = "\ttimed_out"
 		}
 		fmt.Fprintf(stdout, "%s\t%s\t%dms%s\n", inst.Name, inst.Status, snap.ElapsedMS, timedOut)
+		if collect {
+			fmt.Fprint(stdout, collectSnap.Content)
+		}
 		return 0
 	case "attach":
 		if len(args) >= 2 {
@@ -321,6 +380,8 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 		if jsonMode {
 			_ = output.WriteJSON(stdout, output.Success{OK: true, Command: "version", Data: map[string]any{
 				"version":       Version,
+				"build_time":    BuildTime,
+				"binary_path":   resolvedExecutablePath(),
 				"commands":      commandNames(),
 				"harness_types": service.HarnessTypes(),
 				"features":      featureNames(),

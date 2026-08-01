@@ -41,7 +41,7 @@ Windows 不是首要目标。
 16. CI 在 Linux/macOS 上运行测试与 vet，并在 Linux 上启用 race detector；发布打包前也必须通过测试
 17. `prompt` 现在会确认 TUI harness 真的开始工作（`defaults.status.prompt_ack_ms`，默认 5s），消除「刚发完任务 `wait` 立即返回 idle」的假完成
 18. `wait` 超时不再是错误：返回 `ok: true`、退出码 0、`status: busy`、`data.timed_out: true`，并新增 `saw_busy`、`elapsed_ms`
-19. `capture --json` 对结构化 harness 默认只返回最近 20 条消息、不返回协议原始事件，流式 delta 不再逐条成为消息；`--raw`、`--history 0` 可恢复完整输出
+19. `capture --json` 对结构化 harness 默认不返回消息数组（`content` 已经是答案）；`--trace`、`--raw`、显式 `--history`、`--since` 都会带回最近 20 条（可调）消息，不返回协议原始事件；`--raw` 恢复完整原始事件
 20. 结构化 harness 的 `capture`/`wait` 不再输出恒为 0 的屏幕字段
 21. 实例名写在 flag 之后（`capture --history 40 worker`）会给出明确的用法错误，而不是把 flag 当成实例名
 22. 新增 `run`：一次调用完成 summon + prompt + wait + capture，是编排的默认入口
@@ -49,6 +49,11 @@ Windows 不是首要目标。
 24. `capture --since <cursor>` 只返回新产生的内容；每次结构化 `capture` 都会给出 `data.next_cursor`
 25. 实例停止后保留为墓碑（`end_reason`、`ended_at`、`last_error`），`list --all` 可见，`inspect` 仍可查询，名字可被同名 `summon` 回收
 26. `version --json` 返回能力清单（`commands`、`harness_types`、`features`），便于调用方做特性探测
+27. 新增 `doctor`：一次性检查二进制版本/PATH 是否有旧副本遮蔽、配置、状态目录、注册表锁、每个模板命令是否在 PATH 上、以及是否需要 tmux；`version --json` 同时新增 `build_time`、`binary_path`
+28. `run` 复用一个仍在忙的实例时不再直接报错或和旧任务混在一起：会在 `--timeout` 预算内先等旧任务结束（`data.queued_ms` 报告花了多久），预算耗尽则报 `instance_busy`；独立的 `prompt --wait-if-busy <duration>` 提供同样的等待
+29. `capture --json` 的消息数组默认不返回（见第 19 条）；新增 `capture --new`：像 `--since` 一样只读新增内容，但游标由 agentmux 自己记在实例上并每次前移，调用方不用来回传游标
+30. 新增 `run --detach`：发出任务立即返回，不等待也不读取输出，用于并行分片；新增 `wait --collect`（单实例和多实例都支持）：等到完成后顺带把精简后的输出带回来，并行场景不再需要每个分片单独调一次 `capture`
+31. `summon`/`run` 在目标 `cwd` 已有其他存活实例时，`data.warnings` 会给出 `cwd_shared:<name>`（不阻断）；agentmux 隔离的是 Agent 进程而不是文件，多个写入型实例共享同一个工作目录会在 Git 状态和构建产物上互相竞争
 
 命令职责上建议这样理解：
 
@@ -133,7 +138,15 @@ cd /path/to/ai-skills/tools/agentmux
 BIN_DIR=$HOME/bin OVERWRITE_CONFIG=1 ./scripts/install.sh
 ```
 
-安装完成后，建议先确认：
+安装完成后，建议先跑一次环境自检：
+
+```bash
+agentmux doctor --json
+```
+
+`doctor` 会一次性检查：这次调用实际跑的是哪个二进制、PATH 上是否有旧版本在遮蔽它（这是最常见的“装了新版本但行为还是老的”原因）、配置和状态目录、注册表锁、每个模板命令是否能在 PATH 上找到、以及需要 tmux 的模板是否真的有 tmux。只有 `fail` 状态会让退出码非零；`warn` 是提醒但不阻塞。
+
+确认环境健康后再看看有哪些模板：
 
 ```bash
 agentmux template list --json
@@ -321,7 +334,13 @@ agentmux run --template claude-code-ndjson --name 审查-A --prompt-file ./task.
 cat task.md | agentmux run --template pi-rpc --stdin --json
 ```
 
-`run` 结束后实例保留，可以继续追加指令或检查；重复 `run` 同一个名字会在同一会话里继续。并行场景不要用 `run`（它会阻塞到自己这一路结束），改用 `summon --prompt` 发出去再统一 `wait`。
+`run` 结束后实例保留，可以继续追加指令或检查；重复 `run` 同一个名字会在同一会话里继续。单路阻塞式的 `run` 不适合并行——它会阻塞到自己这一路结束；并行场景改用 `run --detach`（发出即返回）逐个分片调用，再统一 `wait --mode any --collect`：
+
+```bash
+agentmux run --template codex-cli-execjson --name 分片-A --cwd /wt/a --prompt "..." --detach --json
+agentmux run --template codex-cli-execjson --name 分片-B --cwd /wt/b --prompt "..." --detach --json
+agentmux wait 分片-A 分片-B --mode any --timeout 5m --collect --json
+```
 
 创建并发送首条消息：
 
@@ -341,9 +360,11 @@ agentmux inspect 编码助手-A --json
 ```bash
 agentmux capture 编码助手-A                       # 只输出聚合文本，最省 token
 agentmux capture 编码助手-A --history 120         # TUI harness：向上抓 120 行屏幕历史
-agentmux capture 编码助手-A --json                # 结构化 harness：默认最近 20 条消息
-agentmux capture 编码助手-A --scope session --history 40 --json
-agentmux capture 编码助手-A --json --since 18422       # 只看上次之后的新内容
+agentmux capture 编码助手-A --json                # 结构化 harness：默认只有 content 和状态字段，没有 messages
+agentmux capture 编码助手-A --trace --json        # 需要消息轨迹时再加，默认最近 20 条
+agentmux capture 编码助手-A --scope session --history 40 --json   # --history 在结构化 harness 上等价于 --trace + 限制条数
+agentmux capture 编码助手-A --json --since 18422       # 只看上次之后的新内容（隐含 --trace）
+agentmux capture 编码助手-A --new --json               # 同上，但游标由 agentmux 自己记账，不用手动传
 agentmux capture 编码助手-A --json --history 0 --raw   # 调试用：完整消息与原始事件
 ```
 
@@ -407,6 +428,14 @@ agentmux list --all --json
 3. 新建实例时，若给 `--prompt`，立即发送该消息
 4. 复用实例时，若给 `--prompt`，也发送该消息
 5. 复用实例时不会隐式修改既有实例配置
+6. 若目标 `cwd` 已有其他存活实例，`data.warnings` 会给出 `cwd_shared:<name>`，不阻断创建
+
+### `run`
+
+1. `run` = `summon`（不带 prompt）→ 若复用到的实例正忙则在 `--timeout` 预算内等待 → 发送本次任务的 prompt → `wait` → `capture`，一次调用、一个退出码、一份回执
+2. 复用到忙实例时不会立刻报错或把新任务和旧任务混在一起：先等旧任务收尾，`data.queued_ms` 报告花掉的等待时间；预算耗尽则报 `instance_busy`
+3. `--detach` 在发送完 prompt 后立即返回，不等待也不读取输出，`data.detached: true`；仍会先按上一条等待忙实例，仍不能与 `--history`/`--trace`/`--raw` 同时使用
+4. `--timeout` 到期且已发送 prompt 之后，不是失败：`data.timed_out: true`，可以对同一个实例再次 `wait`
 
 ### `capture`
 
@@ -416,11 +445,12 @@ agentmux list --all --json
 4. TUI harness 通过 `tmux capture-pane` 抓纯文本
 5. `claude-code-ndjson` 读取 Claude Code 的 `output.jsonl`，文本模式只输出聚合后的 `content`
 6. `codex-cli-execjson` 读取 `codex exec --json` 写入的 `output.jsonl`，文本模式只输出聚合后的 `content`
-7. `capture --json` 对 TUI harness 返回屏幕字段；对 `claude-code-ndjson` 额外返回 `messages`、`usage`、`claude_session_id`、`turns`；对 `codex-cli-execjson` 额外返回 `messages`、`usage`、`thread_id`、`turns`、`turn_state`、`last_error`
-8. TUI harness 下 `--history` 控制向上抓取的历史行数；结构化 harness 下表示最近 N 条归一化消息
-9. `capture` 的主要职责是读输出，不是做状态查询，也不是等待接口
-10. 若只想获知某个实例当前状态，应使用 `inspect --json`
-11. 若需要等待 agent 完成工作，应先执行 `wait`
+7. `capture --json` 对 TUI harness 返回屏幕字段；对结构化 harness 默认只返回 `content`、`usage`、`turns`、`last_error`、`next_cursor` 等状态字段，不含逐条 `messages`——`--trace`、`--raw`、显式 `--history`、`--since`、`--new` 中任意一个都会带回 `messages`（`claude-code-ndjson` 额外有 `claude_session_id`；`codex-cli-execjson` 额外有 `thread_id`、`turn_state`）
+8. TUI harness 下 `--history` 控制向上抓取的历史行数；结构化 harness 下表示最近 N 条归一化消息，同时隐含开启 `messages`
+9. `--since <cursor>` 显式传游标；`--new` 效果相同，但游标由 agentmux 记在实例上并自动前移，调用方不用来回传递（两者互斥）
+10. `capture` 的主要职责是读输出，不是做状态查询，也不是等待接口
+11. 若只想获知某个实例当前状态，应使用 `inspect --json`
+12. 若需要等待 agent 完成工作，应先执行 `wait`
 
 ### `wait`
 
@@ -432,6 +462,7 @@ agentmux list --all --json
 6. 其他 harness 则回退到“屏幕静止”这类通用启发式
 7. 支持 `pane_title` 信号的 harness 会走轻量 pane 元信息轮询，不再抓取屏幕文本
 8. 若只是想知道当前是 `idle` 还是 `busy`，单实例使用 `inspect --json`，多实例使用 `list --json`
+9. `--collect` 让每个 `done` 的实例附带一次精简 `capture` 的结果（`content` 及状态字段），单实例和多实例都支持；仍在 pending 的实例不读取。并行分片因此是 `run --detach` × N 之后跟一次 `wait --mode any --collect`，不用再对每个分片单独 `capture`
 
 ### `prompt`
 
@@ -443,6 +474,7 @@ agentmux list --all --json
 6. `claude-code-ndjson` 下 `--text`/`--stdin` 写入一条 user NDJSON 消息；`--key C-c` 会尝试中断进程，其余 TUI 导航键为 no-op
 7. `codex-cli-execjson` 下 `--text`/`--stdin` 启动一个新 turn 进程；实例正在跑 turn 时会报错 `execjson_instance_busy`，因为 codex 无法向执行中的 turn 追加输入
 8. `codex-cli-execjson` 下 `--key C-c` 会中断当前 turn（进程直接结束），其余 TUI 导航键为 no-op
+9. `--wait-if-busy <duration>` 让 `prompt` 在发送前先等实例把当前工作收尾，跨三种 harness 行为一致；默认（不传）保持发送前不等待的历史行为
 
 ### `wait` 的完成判定
 

@@ -180,14 +180,14 @@ func TestPromptWaitCaptureThenResumeSecondTurn(t *testing.T) {
 	if !strings.Contains(string(script), "resume 'thread-fake-1'") {
 		t.Fatalf("second turn must resume the thread, got:\n%s", script)
 	}
-	current, err := ctrl.Capture(context.Background(), inst, capture.Options{Scope: capture.ScopeCurrent})
+	current, err := ctrl.Capture(context.Background(), inst, capture.Options{Scope: capture.ScopeCurrent, Trace: true})
 	if err != nil {
 		t.Fatalf("capture current: %v", err)
 	}
 	if strings.Contains(messagesText(current), "echo:hello") || !strings.Contains(messagesText(current), "echo:again") {
 		t.Fatalf("current scope must only include the latest turn, got %s", messagesText(current))
 	}
-	session, err := ctrl.Capture(context.Background(), inst, capture.Options{Scope: capture.ScopeSession})
+	session, err := ctrl.Capture(context.Background(), inst, capture.Options{Scope: capture.ScopeSession, Trace: true})
 	if err != nil {
 		t.Fatalf("capture session: %v", err)
 	}

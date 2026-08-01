@@ -261,6 +261,8 @@ agentmux summon --template <template-name> [flags]
 2. 新建时它是首次 prompt
 3. 复用时它是继续对既有实例发一条 prompt
 
+若目标 `--cwd` 已有其他存活实例，返回的 `data.warnings` 会包含 `cwd_shared:<那个实例名>`。这不会阻止本次 `summon`：agentmux 隔离的是 Agent 进程，不是文件系统，两个写入型实例共享同一个工作目录会在 Git 状态和构建产物上互相竞争，值得提醒但不必强行禁止（例如只读审查者与写入者共享 `cwd` 就是合理用法）。
+
 返回字段：
 
 1. `instance`
@@ -269,6 +271,7 @@ agentmux summon --template <template-name> [flags]
 4. `data.template`
 5. `data.model`
 6. `data.cwd`
+7. `data.warnings`（仅当存在时出现）
 
 JSON 示例：
 
@@ -311,25 +314,30 @@ agentmux run --template <template-name> (--prompt <text> | --prompt-file <path> 
 6. `--system-prompt <text>`
 7. `--prompt <text>` / `--prompt-file <path>` / `--stdin`（三选一，必填）
 8. `--timeout <duration-or-ms>`，默认 `5m`
-9. `--history <limit>`
-10. `--raw`
-11. `--json`
+9. `--history <limit>`（结构化 harness 上隐含 `--trace`）
+10. `--trace`
+11. `--raw`（隐含 `--trace`）
+12. `--detach`：发送 prompt 后立即返回，不等待也不读取输出；不能与 `--history`/`--trace`/`--raw` 同时使用
+13. `--json`
 
 行为：
 
-1. 等价于 `summon` + `prompt` + `wait` + `capture`，但只有一次调用、一个退出码、一份载荷
+1. 等价于「`summon`（不带 prompt）→ 若复用到忙实例则在 `--timeout` 预算内等待 → `prompt` → `wait` → `capture`」，但只有一次调用、一个退出码、一份载荷
 2. 同名实例存在时复用，因此重复 `run` 会在同一会话里继续
-3. 超时不是失败：agent 继续工作，返回 `data.timed_out: true` 和当前已产出的内容，调用方可以再 `wait`
-4. 结束后实例保留，便于检查和追加指令；需要停止时显式 `halt`
-5. `--prompt-file` 适合较长的任务契约，避免超长命令行和 TUI 粘贴问题
+3. 复用到的实例仍在忙时，不会立刻报错或把新任务和旧任务的输出混在一起：先在 `--timeout` 预算内等旧任务收尾，花掉的时间通过 `data.queued_ms` 报告；预算耗尽仍未空闲则返回 `instance_busy`
+4. prompt 发送之后再超时不是失败：agent 继续工作，返回 `data.timed_out: true` 和当前已产出的内容，调用方可以再 `wait`
+5. 结束后实例保留，便于检查和追加指令；需要停止时显式 `halt`
+6. `--prompt-file` 适合较长的任务契约，避免超长命令行和 TUI 粘贴问题
+7. `--detach` 仍会先按第 3 条等待忙实例，但发送 prompt 后立即返回，用于并行分片；配合 `wait --mode any --collect` 使用
 
 返回字段：
 
 1. `instance`、`reused`、`status`
-2. `data.content`：agent 的产出
-3. `data.timed_out`、`data.elapsed_ms`
-4. `data.template`、`data.harness_type`、`data.cwd`
-5. 结构化 harness 还包含 `capture` 的协议字段（`messages`、`usage`、`turn_state`、`last_error`、`next_cursor` 等）
+2. `data.elapsed_ms`、`data.queued_ms`
+3. `data.template`、`data.harness_type`、`data.cwd`
+4. 非 `--detach`：`data.content`（agent 的产出）、`data.timed_out`；结构化 harness 默认只含状态字段（`usage`、`turn_state`、`last_error`、`next_cursor` 等），`messages` 需要 `--trace`/`--raw`/`--history`
+5. `--detach`：`data.detached: true`，不产生 `data.content`/`data.timed_out`
+6. 若目标 `cwd` 已有其他存活实例，`data.warnings` 含 `cwd_shared:<name>`
 
 JSON 示例：
 
@@ -347,6 +355,7 @@ JSON 示例：
     "content": "已修复重试逻辑，go test ./internal/auth/... 通过。",
     "timed_out": false,
     "elapsed_ms": 42137,
+    "queued_ms": 0,
     "turn_state": "completed",
     "last_error": "",
     "next_cursor": "18422"
@@ -428,13 +437,22 @@ agentmux prompt <instance-name> [flags]
 
 1. `--text <text>`
 2. `--key <key-name>`
-3. `--json`
+3. `--stdin`
+4. `--wait-if-busy <duration-or-ms>`，默认不等待（保持发送前立即尝试的历史行为）
+5. `--json`
 
 约束：
 
-1. `--text` 与 `--key` 至少提供一个
+1. `--text`、`--stdin`、`--key` 至少提供一个；`--text` 与 `--stdin` 互斥
 2. 第一版 `--key` 一次只接受一个键
-3. `--text` 发送后自动提交
+3. `--text`/`--stdin` 发送后自动提交
+
+`--wait-if-busy`：
+
+1. 若实例当前 `busy`，发送前先在给定预算内等待它把当前工作收尾，跨 `claude-code-ndjson`（原本会排队）、`codex-cli-execjson`（原本会报 `execjson_instance_busy`）、`pi-rpc`（原本会排队）三种结构化 harness 统一为同一种行为
+2. `data.queued_ms` 报告这次等待实际花费的时间
+3. 预算耗尽仍未空闲则返回 `instance_busy`，不发送
+4. 不传或传 `0` 时完全跳过这一步，等价于历史行为（立即尝试发送，busy 时的结果由各 harness 自己的语义决定）
 
 TUI harness 的启动确认：
 
@@ -493,10 +511,12 @@ agentmux capture <instance-name> [--scope current|session] [--history <limit>] [
 参数：
 
 1. `--scope current|session`，默认 `current`
-2. `--history <limit>`
-3. `--since <cursor>`
-4. `--raw`
-5. `--json`
+2. `--history <limit>`（结构化 harness 上隐含 `--trace`）
+3. `--since <cursor>`（结构化 harness上隐含 `--trace`，与 `--new` 互斥）
+4. `--new`（效果同 `--since`，但游标由 agentmux 记在实例上并自动前移；与 `--since` 互斥）
+5. `--trace`（结构化 harness 上请求 `messages` 逐条消息，默认不带）
+6. `--raw`（隐含 `--trace`）
+7. `--json`
 
 行为：
 
@@ -504,33 +524,29 @@ agentmux capture <instance-name> [--scope current|session] [--history <limit>] [
 2. TUI harness 下，`current` 表示当前屏幕，`--history` 表示向上抓取的历史行数
 3. 结构化 harness 下，`current` 表示当前或最近 turn，`session` 表示整段已记录会话，`--history` 表示归一化消息数量限制
 4. 调用后立即返回当前可解析内容，不承担等待职责
-5. 结构化 harness 未指定 `--history` 时，默认只返回最近 `20` 条消息；`--history 0` 表示不限制
-6. 默认不返回协议原始事件：`messages[].raw` 被移除，过长的 `text` 与 `input` 会被截断
+5. 结构化 harness 默认**不**返回 `messages`：`data.content` 已经是答案，逐事件轨迹只在明确请求时才构建。`--trace`、`--raw`、显式 `--history`、`--since`、`--new` 中任意一个都会带回 `messages`，未指定条数时限 `20` 条，`--history 0` 表示不限制
+6. `messages` 默认不返回协议原始事件：`messages[].raw` 被移除，过长的 `text` 与 `input` 会被截断
 7. `--raw` 恢复完整保真度，用于调试；完整事件流始终保存在实例的 `output.jsonl`
-8. 结构化 harness 不返回 `cursor_x`、`cursor_y`、`width`、`height`、`pane_title` 这些屏幕字段，改为返回 `messages_limit`
+8. 结构化 harness 不返回 `cursor_x`、`cursor_y`、`width`、`height`、`pane_title` 这些屏幕字段；只有在 `messages` 被返回时才附带 `messages_limit`
 
 增量读取：
 
 1. 每次结构化 `capture` 都返回 `data.next_cursor`
-2. 把它作为下次的 `--since`，只会返回此后新产生的内容，用于低成本地观察长任务
-3. `--since` 覆盖 `--scope`，且不受默认消息条数上限约束，因为增量本身就是有界的
+2. 把它作为下次的 `--since`，只会返回此后新产生的内容，用于低成本地观察长任务；或者直接用 `--new`，让 agentmux 自己记账，不用来回传递游标
+3. `--since`/`--new` 覆盖 `--scope`，且不受默认消息条数上限约束，因为增量本身就是有界的
 4. 没有新内容时返回空 `messages` 且 `next_cursor` 不变
-5. cursor 对调用方不透明，只能原样回传工具给出的值
-6. TUI harness 没有可回放的事件流，使用 `--since` 会返回 `invalid_arguments`
+5. `--since` 的 cursor 对调用方不透明，只能原样回传工具给出的值；`--new` 完全不需要调用方持有 cursor
+6. TUI harness 没有可回放的事件流，使用 `--since`/`--new` 会返回 `invalid_arguments`
 
 体积约束：
 
-结构化 harness 每个协议事件对应一条消息。不做上述限制时，一个进行中的 turn 可以产出上百 KB JSON，而真正有用的 `data.content` 往往只有几十字节。只读输出时优先使用不带 `--json` 的 `capture`（只输出 `content`）。
+结构化 harness 每个协议事件对应一条消息。默认不构建 `messages` 正是为了避免这一点：一个进行中的 turn 可以产出上百 KB JSON，而真正有用的 `data.content` 往往只有几十字节。只读输出时优先使用不带 `--json` 的 `capture`（只输出 `content`）；需要 `--json` 时默认响应也已经是精简过的。
 
 说明：
 
 1. `capture` 的职责是读取输出
 2. 它不是等待接口，也不是专门的状态查询接口
 3. 若需要等待 agent 完成工作，应使用 `wait`
-
-默认值建议：
-
-1. `history=0`
 
 JSON 示例：
 
@@ -559,12 +575,12 @@ JSON 示例：
 
 用途：
 
-等待 agent 看起来完成了当前工作，但不返回屏幕内容。
+等待 agent 看起来完成了当前工作；加 `--collect` 时顺带读回已完成实例产出的内容。
 
 语法：
 
 ```bash
-agentmux wait <instance-name>... [--mode all|any] [--stable <duration-or-ms>] [--timeout <duration-or-ms>] [--json]
+agentmux wait <instance-name>... [--mode all|any] [--stable <duration-or-ms>] [--timeout <duration-or-ms>] [--collect] [--json]
 ```
 
 参数：
@@ -573,15 +589,17 @@ agentmux wait <instance-name>... [--mode all|any] [--stable <duration-or-ms>] [-
 2. `--mode all|any`，默认 `all`
 3. `--stable <duration-or-ms>`
 4. `--timeout <duration-or-ms>`
-5. `--json`
+5. `--collect`：对每个已完成（`done`）的实例，额外做一次精简 `capture` 并把 `content` 等字段附带在结果里；仍 pending 的实例不读取
+6. `--json`
 
 多实例：
 
 1. `--mode all`：全部完成或超时才返回
 2. `--mode any`：任意一个完成即返回，其余等待被取消并报告为 pending。并行分片靠它才可用：先处理最先完成的分片，而不是被最慢的挡住
 3. 单个实例名时返回原有单实例结构；多个实例名时返回 `data.instances` 数组
-4. 多实例下某个实例失败只记在该实例上（`error_code`），不影响其他实例的结果
+4. 多实例下某个实例失败只记在该实例上（`error_code`），不影响其他实例的结果；`--collect` 对某个已完成实例读取失败时，同样只记在该实例上，不影响其他实例
 5. `data.satisfied` 表示是否满足了 `--mode`；`data.done`、`data.pending`、`data.failed` 给出分组
+6. 并行分片的推荐形态：`run --detach` × N（各自独立 `--cwd`），再一次 `wait --mode any --collect`，不必对每个分片单独 `capture`
 
 行为：
 
@@ -606,6 +624,7 @@ agentmux wait <instance-name>... [--mode all|any] [--stable <duration-or-ms>] [-
 3. `elapsed_ms`：本次等待实际耗时
 4. `stable_for_ms`：通用启发式下的屏幕静止时长
 5. TUI harness 额外返回 `cursor_x`、`cursor_y`、`width`、`height`、`history_lines`、`pane_title`
+6. `--collect` 且已完成时，额外返回 `content` 及该 harness 的精简 `capture` 状态字段（结构化 harness 默认不含 `messages`，规则同 `capture`）
 
 说明：
 
@@ -762,8 +781,9 @@ agentmux version [--json]
 行为：
 
 1. 文本模式只输出版本号
-2. `--json` 额外返回能力清单，调用方据此判断特性是否可用，而不是靠试命令看报错
+2. `--json` 额外返回 `build_time`、`binary_path` 和能力清单，调用方据此判断特性是否可用、以及这次调用实际跑的是哪个二进制，而不是靠试命令看报错
 3. 该命令不加载配置，配置损坏时仍可用
+4. `version` 是 `"dev"` 通常意味着这个二进制不是通过 `scripts/install.sh`/`scripts/release.sh` 打的版本戳；配合 `doctor` 检查 PATH 上是否有另一个副本在遮蔽它
 
 JSON 示例：
 
@@ -773,9 +793,53 @@ JSON 示例：
   "command": "version",
   "data": {
     "version": "v0.4.0",
-    "commands": ["template list", "list", "summon", "run", "inspect", "prompt", "capture", "wait", "attach", "halt", "version"],
+    "build_time": "2026-04-01T08:00:00Z",
+    "binary_path": "/home/me/.local/bin/agentmux",
+    "commands": ["template list", "list", "summon", "run", "inspect", "prompt", "capture", "wait", "attach", "halt", "doctor", "version"],
     "harness_types": ["claude-code", "codex-cli", "gemini-cli", "claude-code-ndjson", "codex-cli-execjson", "pi-rpc"],
-    "features": ["run", "wait-multi", "wait-timeout-ok", "wait-observability", "prompt-ack", "capture-since", "capture-raw", "tombstones"]
+    "features": ["run", "doctor", "version-provenance", "run-wait-if-busy", "wait-multi", "wait-timeout-ok", "wait-observability", "prompt-ack", "capture-since", "capture-raw", "lean-capture", "capture-new-cursor", "run-detach", "wait-collect", "cwd-shared-warning", "tombstones"]
+  }
+}
+```
+
+---
+
+## 4.11 `doctor`
+
+用途：
+
+一次性检查 agentmux 依赖的整个环境，而不是让调用方逐条试探命令、再从报错反推问题。
+
+语法：
+
+```bash
+agentmux doctor [--json]
+```
+
+行为：
+
+1. 依次检查：`binary`（这次调用实际运行的版本/构建时间/路径）、`path`（PATH 上是否有另一份 `agentmux` 在遮蔽当前运行的这个）、`paths`（解析出的配置和状态目录）、`state_dir`（可写性）、`registry`（注册表锁可获取）、`config`（配置文件可解析且合法）、每个模板的 `template:<name>`（解析后的命令首个词是否在 PATH 上）、`tmux`（仅当存在需要它的模板时才检查）
+2. 每项结果是 `ok`、`warn`、`fail` 或 `skip`；只有 `fail` 影响整体结果和退出码
+3. 遇到会阻断后续检查的失败（例如配置解析失败）时提前结束，已收集的结果仍会全部返回
+4. 环境异常导致的疑难问题应先跑 `doctor` 而不是先怀疑是 agentmux 的 bug——多数"文档说的行为和实际不一致"最终会定位到 PATH 上的旧二进制或缺失的外部 CLI，这两者 `doctor` 都能直接指出来
+
+JSON 示例：
+
+```json
+{
+  "ok": true,
+  "command": "doctor",
+  "data": {
+    "checks": [
+      {"name": "binary", "status": "ok", "detail": "version=v0.4.2 build_time=2026-04-01T08:00:00Z path=/home/me/.local/bin/agentmux"},
+      {"name": "path", "status": "ok", "detail": "PATH resolves to the running binary: /home/me/.local/bin/agentmux"},
+      {"name": "paths", "status": "ok", "detail": "config=/home/me/.config/agentmux/config.yaml state=/home/me/.local/state/agentmux"},
+      {"name": "state_dir", "status": "ok", "detail": "/home/me/.local/state/agentmux"},
+      {"name": "registry", "status": "ok", "detail": "/home/me/.local/state/agentmux/instances.json"},
+      {"name": "config", "status": "ok", "detail": "4 templates from /home/me/.config/agentmux/config.yaml"},
+      {"name": "template:codex-cli-execjson", "status": "ok", "detail": "codex (harness=codex-cli-execjson)"},
+      {"name": "tmux", "status": "skip", "detail": "no TUI templates configured"}
+    ]
   }
 }
 ```
@@ -798,6 +862,7 @@ JSON 示例：
 | `instance_changed` | 发送期间实例被其他进程替换 | 重新 `inspect` 后再决定 |
 | `process_not_running` | 实例已停止（错误信息带 `end_reason` 和 `last_error`） | `inspect --json` 读墓碑详情，必要时用同名 `summon` 重建 |
 | `session_not_found` | 运行时会话缺失 | 同上 |
+| `instance_busy` | `run` 或 `prompt --wait-if-busy` 在预算内等到实例仍然忙 | 加大超时预算，或换一个实例名 |
 | `tmux_unavailable` | tmux 不可用或命令失败 | 检查 tmux 安装、socket 路径与权限 |
 | `capture_timeout` | 内部超时信号 | `wait` 不再向调用方返回该码，超时表现为 `ok: true` + `timed_out: true` |
 | `input_too_large` | `--stdin` 输入超过上限 | 改为写文件并让外部 Agent 读取 |
@@ -873,21 +938,21 @@ agentmux capture 编码助手-A                      # 读结果用纯文本，�
 
 ### 6.4 并行分片
 
-并行时不要用 `run`：它会阻塞到自己那一路结束。用 `summon --prompt` 把任务发出去，再统一等待。
+单路阻塞式的 `run` 不适合并行：它会阻塞到自己那一路结束。用 `run --detach` 把每个分片的任务发出去（各自独立 `--cwd`），再统一 `wait --mode any --collect`，不用再对每个分片单独 `capture`。
 
 ```bash
-agentmux summon --template codex-cli-execjson --name 分片-A --cwd /wt/a --prompt "..." --json
-agentmux summon --template codex-cli-execjson --name 分片-B --cwd /wt/b --prompt "..." --json
-agentmux wait 分片-A 分片-B --mode any --timeout 5m --json
-agentmux capture 分片-B
+agentmux run --template codex-cli-execjson --name 分片-A --cwd /wt/a --prompt "..." --detach --json
+agentmux run --template codex-cli-execjson --name 分片-B --cwd /wt/b --prompt "..." --detach --json
+agentmux wait 分片-A 分片-B --mode any --timeout 5m --collect --json
 ```
 
 ### 6.5 观察长任务的增量输出
 
 ```bash
-agentmux capture 编码助手-A --json --history 5    # 记下 data.next_cursor
 agentmux wait 编码助手-A --timeout 3m --json
-agentmux capture 编码助手-A --json --since <next_cursor>
+agentmux capture 编码助手-A --new --json   # 游标由 agentmux 自己记账并前移，不用手动传递
+agentmux wait 编码助手-A --timeout 3m --json
+agentmux capture 编码助手-A --new --json   # 只返回上一次 --new 之后新产生的内容
 ```
 
 ### 6.6 中断当前任务

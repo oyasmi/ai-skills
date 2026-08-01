@@ -78,6 +78,13 @@ type SummonInput struct {
 type SummonResult struct {
 	Instance instance.Instance
 	Reused   bool
+	// Warnings are non-blocking; each is "cwd_shared:<other-instance-name>"
+	// for another active instance already pointed at the same cwd. Agentmux
+	// isolates agent processes, not files, so two writers sharing a checkout
+	// will race on the same working tree and Git state -- worth flagging,
+	// but not worth refusing, since a read-only reviewer sharing a cwd with a
+	// writer is a legitimate setup.
+	Warnings []string
 }
 
 func New(paths config.Paths, cfg config.Config) Service {
@@ -302,6 +309,11 @@ func (s Service) Summon(ctx context.Context, in SummonInput) (SummonResult, erro
 	if err != nil {
 		return SummonResult{}, err
 	}
+	warnings, err := s.sharedCWDWarnings(ctx, res.Instance.Name, cwd)
+	if err != nil {
+		return SummonResult{}, err
+	}
+	res.Warnings = warnings
 	if prompt := strings.TrimSpace(resolved.Prompt); prompt != "" {
 		inst, err := s.Prompt(ctx, res.Instance.Name, prompt, "")
 		if err != nil {
@@ -310,6 +322,21 @@ func (s Service) Summon(ctx context.Context, in SummonInput) (SummonResult, erro
 		res.Instance = inst
 	}
 	return res, nil
+}
+
+// sharedCWDWarnings reports other active instances already pointed at cwd.
+func (s Service) sharedCWDWarnings(ctx context.Context, selfName, cwd string) ([]string, error) {
+	var warnings []string
+	err := s.withRegistry(ctx, func(reg *instance.Registry) error {
+		for _, inst := range reg.Active() {
+			if inst.Name == selfName || inst.CWD != cwd {
+				continue
+			}
+			warnings = append(warnings, "cwd_shared:"+inst.Name)
+		}
+		return nil
+	})
+	return warnings, err
 }
 
 func (s Service) Prompt(ctx context.Context, name string, text string, key string) (instance.Instance, error) {
@@ -398,6 +425,23 @@ func (s Service) Capture(ctx context.Context, name string, opts capture.Options)
 		return instance.Instance{}, capture.Snapshot{}, apperr.New("session_not_found", fmt.Sprintf("session for %q not found", name))
 	}
 	if hs, structured := s.harnessFor(inst); structured {
+		if opts.New {
+			if strings.TrimSpace(opts.Since) != "" {
+				return instance.Instance{}, capture.Snapshot{}, apperr.New("invalid_arguments", "--new cannot be combined with --since")
+			}
+			// Nothing remembered yet: behave like an ordinary capture, the
+			// same as the first call in a --since chain would.
+			opts.Since = inst.ReadCursor
+		}
+		// Raw, an explicit History, a non-empty Since, or New are each already
+		// a deliberate ask for event-level detail, so they imply Trace too.
+		// Resolved once, here, so every caller of this method gets the same
+		// answer regardless of whether it came through the CLI's own --trace
+		// flag: a direct Go caller that never touched --trace must not fall
+		// back to the old "messages always included" behavior by accident.
+		if opts.Raw || opts.History >= 0 || strings.TrimSpace(opts.Since) != "" || opts.New {
+			opts.Trace = true
+		}
 		// An unset history must stay bounded here: a structured capture returns
 		// one message per protocol event, so "everything" can be megabytes of
 		// JSON for a single turn. Callers opt into that with --history 0.
@@ -410,6 +454,15 @@ func (s Service) Capture(ctx context.Context, name string, opts capture.Options)
 		if err != nil {
 			return instance.Instance{}, capture.Snapshot{}, err
 		}
+		// --new persists where this read ended, so the next --new call against
+		// this instance picks up from here without the caller tracking a
+		// cursor across calls itself.
+		nextCursor := ""
+		if opts.New {
+			if v, ok := snap.Extra["next_cursor"].(string); ok {
+				nextCursor = v
+			}
+		}
 		err = s.withRegistryReconcileOne(ctx, name, func(reg *instance.Registry) error {
 			current, ok := reg.Get(name)
 			if !ok {
@@ -417,6 +470,9 @@ func (s Service) Capture(ctx context.Context, name string, opts capture.Options)
 			}
 			inst = current
 			inst.UpdatedAt = time.Now()
+			if opts.New {
+				inst.ReadCursor = nextCursor
+			}
 			reg.Put(inst)
 			return nil
 		})
@@ -424,6 +480,10 @@ func (s Service) Capture(ctx context.Context, name string, opts capture.Options)
 			return instance.Instance{}, capture.Snapshot{}, err
 		}
 		return inst, snap, nil
+	}
+	if opts.New {
+		return instance.Instance{}, capture.Snapshot{}, apperr.New("invalid_arguments",
+			fmt.Sprintf("--new needs a recorded event stream, which harness %q does not have; use --history to bound the screen instead", inst.HarnessType))
 	}
 	if strings.TrimSpace(opts.Since) != "" {
 		return instance.Instance{}, capture.Snapshot{}, apperr.New("invalid_arguments",

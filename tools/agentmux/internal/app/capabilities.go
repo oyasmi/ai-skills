@@ -17,6 +17,7 @@ func commandNames() []string {
 		"wait",
 		"attach",
 		"halt",
+		"doctor",
 		"version",
 	}
 }
@@ -25,6 +26,16 @@ func featureNames() []string {
 	return []string{
 		// `run` performs summon + prompt + wait + capture in one call.
 		"run",
+		// `doctor` checks binary/PATH/config/templates/tmux in one pass.
+		"doctor",
+		// `version --json` reports build_time and binary_path so a caller can
+		// detect a stale binary shadowing a fresh install.
+		"version-provenance",
+		// `run` on a busy, reused instance waits inside its own --timeout
+		// budget instead of failing or racing into unrelated work; the wait
+		// is reported as data.queued_ms. `prompt --wait-if-busy` exposes the
+		// same wait standalone.
+		"run-wait-if-busy",
 		// `wait` accepts several instance names plus --mode any|all.
 		"wait-multi",
 		// Reaching --timeout returns ok with data.timed_out instead of failing.
@@ -39,6 +50,26 @@ func featureNames() []string {
 		// `capture --raw` restores full protocol payloads; without it messages
 		// are projected and bounded.
 		"capture-raw",
+		// A structured capture's data.messages trace is opt-in: it appears
+		// only with --trace, --raw, an explicit --history, or --since. The
+		// default response carries content and the harness's status fields,
+		// not a copy of every protocol event.
+		"lean-capture",
+		// `capture --new` reads from the instance's own remembered position
+		// and advances it, so watching a long run does not require the
+		// caller to carry a --since cursor across calls by hand.
+		"capture-new-cursor",
+		// `run --detach` sends the prompt and returns immediately (still
+		// honoring a busy-wait first); `wait --collect` reads back a lean
+		// capture for every instance that finished. Together a parallel
+		// fan-out is summon x N with --detach, then one wait --mode any
+		// --collect, instead of one capture call per shard.
+		"run-detach",
+		"wait-collect",
+		// `summon` and `run` report data.warnings with "cwd_shared:<name>"
+		// when another active instance already points at the same cwd.
+		// Non-blocking: it does not stop the summon.
+		"cwd-shared-warning",
 		// Stopped instances stay queryable as tombstones, and `list --all`
 		// shows them.
 		"tombstones",

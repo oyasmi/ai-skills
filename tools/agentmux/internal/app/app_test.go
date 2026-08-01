@@ -42,26 +42,40 @@ func TestRunTemplateListStillWorks(t *testing.T) {
 }
 
 func TestParsePromptArgsSupportsStdin(t *testing.T) {
-	name, text, key, useStdin, err := parsePromptArgs([]string{"demo", "--stdin"})
+	name, text, key, useStdin, waitIfBusyMS, err := parsePromptArgs([]string{"demo", "--stdin"})
 	if err != nil {
 		t.Fatalf("parsePromptArgs: %v", err)
 	}
-	if name != "demo" || text != "" || key != "" || !useStdin {
-		t.Fatalf("unexpected parsed values: %q %q %q %v", name, text, key, useStdin)
+	if name != "demo" || text != "" || key != "" || !useStdin || waitIfBusyMS != 0 {
+		t.Fatalf("unexpected parsed values: %q %q %q %v %d", name, text, key, useStdin, waitIfBusyMS)
 	}
 }
 
 func TestParsePromptArgsRejectsTextWithStdin(t *testing.T) {
-	_, _, _, _, err := parsePromptArgs([]string{"demo", "--stdin", "--text", "hello"})
+	_, _, _, _, _, err := parsePromptArgs([]string{"demo", "--stdin", "--text", "hello"})
 	if err == nil || !strings.Contains(err.Error(), "--stdin cannot be used with --text") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestParsePromptArgsRejectsRemovedEnterFlag(t *testing.T) {
-	_, _, _, _, err := parsePromptArgs([]string{"demo", "--enter"})
+	_, _, _, _, _, err := parsePromptArgs([]string{"demo", "--enter"})
 	if err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -enter") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParsePromptArgsSupportsWaitIfBusy(t *testing.T) {
+	_, _, _, _, waitIfBusyMS, err := parsePromptArgs([]string{"demo", "--text", "hi", "--wait-if-busy", "2m"})
+	if err != nil {
+		t.Fatalf("parsePromptArgs: %v", err)
+	}
+	if waitIfBusyMS != 120000 {
+		t.Fatalf("expected 120000ms, got %d", waitIfBusyMS)
+	}
+
+	if _, _, _, _, _, err := parsePromptArgs([]string{"demo", "--text", "hi", "--wait-if-busy", "not-a-duration"}); err == nil {
+		t.Fatal("expected an invalid --wait-if-busy value to fail")
 	}
 }
 
@@ -95,6 +109,21 @@ func TestParseCaptureArgsSupportsScope(t *testing.T) {
 	}
 }
 
+func TestParseCaptureArgsNewRejectsSince(t *testing.T) {
+	name, opts, err := parseCaptureArgs([]string{"demo", "--new"})
+	if err != nil {
+		t.Fatalf("parseCaptureArgs: %v", err)
+	}
+	if name != "demo" || !opts.New {
+		t.Fatalf("unexpected parsed values: %q %+v", name, opts)
+	}
+
+	_, _, err = parseCaptureArgs([]string{"demo", "--new", "--since", "10"})
+	if err == nil || !strings.Contains(err.Error(), "--new cannot be combined with --since") {
+		t.Fatalf("expected --new and --since together to fail, got %v", err)
+	}
+}
+
 func TestParseCaptureArgsRawIsOptIn(t *testing.T) {
 	_, opts, err := parseCaptureArgs([]string{"demo"})
 	if err != nil {
@@ -119,11 +148,11 @@ func TestParseArgsRejectFlagInInstanceNamePosition(t *testing.T) {
 		!strings.Contains(err.Error(), "instance name must come before flags") {
 		t.Fatalf("unexpected capture error: %v", err)
 	}
-	if _, _, _, _, err := parsePromptArgs([]string{"--text", "hi", "demo"}); err == nil ||
+	if _, _, _, _, _, err := parsePromptArgs([]string{"--text", "hi", "demo"}); err == nil ||
 		!strings.Contains(err.Error(), "instance name must come before flags") {
 		t.Fatalf("unexpected prompt error: %v", err)
 	}
-	if _, _, _, _, err := parseWaitArgs([]string{"--timeout", "5s", "demo"}); err == nil ||
+	if _, _, _, _, _, err := parseWaitArgs([]string{"--timeout", "5s", "demo"}); err == nil ||
 		!strings.Contains(err.Error(), "instance name must come before flags") {
 		t.Fatalf("unexpected wait error: %v", err)
 	}
@@ -134,34 +163,34 @@ func TestParseArgsRejectFlagInInstanceNamePosition(t *testing.T) {
 }
 
 func TestParseWaitArgsDefaults(t *testing.T) {
-	names, stableMS, timeoutMS, mode, err := parseWaitArgs([]string{"demo"})
+	names, stableMS, timeoutMS, mode, collect, err := parseWaitArgs([]string{"demo"})
 	if err != nil {
 		t.Fatalf("parseWaitArgs: %v", err)
 	}
-	if len(names) != 1 || names[0] != "demo" || stableMS != 1500 || timeoutMS != 30000 || mode != service.WaitAll {
-		t.Fatalf("unexpected parsed values: %v %d %d %s", names, stableMS, timeoutMS, mode)
+	if len(names) != 1 || names[0] != "demo" || stableMS != 1500 || timeoutMS != 30000 || mode != service.WaitAll || collect {
+		t.Fatalf("unexpected parsed values: %v %d %d %s %v", names, stableMS, timeoutMS, mode, collect)
 	}
 }
 
 func TestParseWaitArgsAcceptsSeveralInstances(t *testing.T) {
-	names, _, timeoutMS, mode, err := parseWaitArgs([]string{"a", "b", "a", "--mode", "any", "--timeout", "2m"})
+	names, _, timeoutMS, mode, collect, err := parseWaitArgs([]string{"a", "b", "a", "--mode", "any", "--timeout", "2m", "--collect"})
 	if err != nil {
 		t.Fatalf("parseWaitArgs: %v", err)
 	}
 	if len(names) != 2 || names[0] != "a" || names[1] != "b" {
 		t.Fatalf("expected deduplicated names in order, got %v", names)
 	}
-	if mode != service.WaitAny || timeoutMS != 120000 {
-		t.Fatalf("unexpected mode/timeout: %s %d", mode, timeoutMS)
+	if mode != service.WaitAny || timeoutMS != 120000 || !collect {
+		t.Fatalf("unexpected mode/timeout/collect: %s %d %v", mode, timeoutMS, collect)
 	}
 
-	if _, _, _, _, err := parseWaitArgs([]string{"a", "--mode", "first"}); err == nil ||
+	if _, _, _, _, _, err := parseWaitArgs([]string{"a", "--mode", "first"}); err == nil ||
 		!strings.Contains(err.Error(), "must be all or any") {
 		t.Fatalf("expected an invalid mode to fail, got %v", err)
 	}
 	// Names after flags are a mistake worth naming: they would be silently
 	// dropped otherwise.
-	if _, _, _, _, err := parseWaitArgs([]string{"a", "--mode", "any", "b"}); err == nil ||
+	if _, _, _, _, _, err := parseWaitArgs([]string{"a", "--mode", "any", "b"}); err == nil ||
 		!strings.Contains(err.Error(), "list every instance name first") {
 		t.Fatalf("expected trailing names to fail, got %v", err)
 	}
@@ -185,6 +214,26 @@ func TestParseRunArgsRequiresPromptAndDefaultsTimeout(t *testing.T) {
 	if _, _, err := parseRunArgs([]string{"--prompt", "a"}); err == nil ||
 		!strings.Contains(err.Error(), "requires --template") {
 		t.Fatalf("expected a missing template to fail, got %v", err)
+	}
+}
+
+func TestParseRunArgsDetach(t *testing.T) {
+	in, _, err := parseRunArgs([]string{"--template", "worker", "--prompt", "do it", "--detach"})
+	if err != nil {
+		t.Fatalf("parseRunArgs: %v", err)
+	}
+	if !in.Detach {
+		t.Fatal("expected Detach to be set")
+	}
+
+	for _, flag := range []string{"--history", "--trace", "--raw"} {
+		args := []string{"--template", "worker", "--prompt", "do it", "--detach", flag}
+		if flag == "--history" {
+			args = append(args, "5")
+		}
+		if _, _, err := parseRunArgs(args); err == nil || !strings.Contains(err.Error(), "--detach cannot be combined") {
+			t.Fatalf("expected --detach with %s to fail, got %v", flag, err)
+		}
 	}
 }
 
@@ -241,17 +290,25 @@ func TestRunVersionJSON(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", stateHome)
 	t.Setenv("XDG_CONFIG_HOME", configHome)
 
-	prev := Version
+	prevVersion, prevBuildTime := Version, BuildTime
 	Version = "v1.2.3"
-	t.Cleanup(func() { Version = prev })
+	BuildTime = "2026-01-01T00:00:00Z"
+	t.Cleanup(func() { Version, BuildTime = prevVersion, prevBuildTime })
 
 	var stdout, stderr bytes.Buffer
 	code := Run(context.Background(), []string{"version", "--json"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("expected zero exit code, stderr=%q", stderr.String())
 	}
-	if got := stdout.String(); !strings.Contains(got, `"command": "version"`) || !strings.Contains(got, `"version": "v1.2.3"`) {
+	got := stdout.String()
+	if !strings.Contains(got, `"command": "version"`) || !strings.Contains(got, `"version": "v1.2.3"`) {
 		t.Fatalf("unexpected stdout: %q", got)
+	}
+	if !strings.Contains(got, `"build_time": "2026-01-01T00:00:00Z"`) {
+		t.Fatalf("expected build_time in output: %q", got)
+	}
+	if !strings.Contains(got, `"binary_path"`) {
+		t.Fatalf("expected binary_path in output: %q", got)
 	}
 }
 

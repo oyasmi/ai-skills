@@ -60,6 +60,25 @@ type Options struct {
 	// new output rather than the whole transcript every time. Structured
 	// harnesses only; it takes precedence over Scope.
 	Since string
+	// New requests capture using the instance's own remembered read
+	// position, so the caller does not have to carry a cursor across calls by
+	// hand: the tool persists next_cursor itself after each New read and
+	// starts from there next time. The first read (nothing remembered yet)
+	// behaves like an ordinary Scope-based capture. Structured harnesses
+	// only; mutually exclusive with Since.
+	New bool
+	// Trace requests the per-protocol-event message array on a structured
+	// harness. Off by default: `content` already carries the answer an
+	// orchestrator needs, and a structured stream is one message per protocol
+	// event, easily dwarfing the answer by orders of magnitude.
+	//
+	// A structured Capture caller (service.Capture) resolves this once, before
+	// applying its own History default: Raw, an explicit History, or a
+	// non-empty Since are each already a deliberate ask for event-level
+	// detail, so they imply Trace too. A controller must read Trace directly
+	// rather than re-deriving it from History, which that later default would
+	// otherwise satisfy by accident.
+	Trace bool
 }
 
 // A cursor is an opaque handle over a position in an instance's recorded

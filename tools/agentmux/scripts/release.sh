@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="${DIST_DIR:-$ROOT_DIR/dist}"
 VERSION="${VERSION:-dev}"
+BUILD_TIME="${BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 APP_NAME="agentmux"
 
 TARGETS=(
@@ -30,7 +31,7 @@ for target in "${TARGETS[@]}"; do
 
   echo "Building $GOOS/$GOARCH..."
   GOOS="$GOOS" GOARCH="$GOARCH" CGO_ENABLED=0 \
-    go build -trimpath -ldflags "-s -w -X main.version=$VERSION" \
+    go build -trimpath -ldflags "-s -w -X main.version=$VERSION -X main.buildTime=$BUILD_TIME" \
     -o "$BUILD_DIR/$APP_NAME" "$ROOT_DIR/cmd/agentmux"
 
   cp "$ROOT_DIR/examples/config.yaml" "$BUILD_DIR/config.yaml"

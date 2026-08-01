@@ -831,6 +831,59 @@ func TestSummonReuseReturnsReusedAndSendsPrompt(t *testing.T) {
 	}
 }
 
+// Agentmux isolates agent processes, not files: two writers sharing a
+// checkout will race on the same working tree and Git state, so summoning
+// into an already-occupied cwd must be flagged, though not refused.
+func TestSummonWarnsOnSharedCWD(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	tmux := &fakeTmux{sessions: map[string]bool{"live-session": true}}
+	svc, registryPath := newTestService(t, tmux)
+	svc.Config.Defaults.MaxInstances = 0
+	now := time.Now().UTC()
+	reg := instance.Registry{
+		Instances: map[string]instance.Instance{
+			"worker-a": {
+				Name:            "worker-a",
+				Template:        "worker",
+				SessionID:       "live-session",
+				CWD:             svc.Config.Templates["worker"].CWD,
+				Status:          instance.StatusIdle,
+				UpdatedAt:       now,
+				LastActivityAt:  now,
+				FirstPromptSent: true,
+			},
+		},
+	}
+	if err := instance.Save(registryPath, reg); err != nil {
+		t.Fatalf("save registry: %v", err)
+	}
+
+	res, err := svc.Summon(ctx, SummonInput{TemplateName: "worker", Name: "worker-b"})
+	if err != nil {
+		t.Fatalf("summon: %v", err)
+	}
+	if len(res.Warnings) != 1 || res.Warnings[0] != "cwd_shared:worker-a" {
+		t.Fatalf("expected a cwd_shared warning naming worker-a, got %v", res.Warnings)
+	}
+
+	// A tombstone sharing the cwd is not a live conflict.
+	if _, err := svc.HaltWithOptions(ctx, "worker-a", true, 0); err != nil {
+		t.Fatalf("halt worker-a: %v", err)
+	}
+	if _, err := svc.HaltWithOptions(ctx, "worker-b", true, 0); err != nil {
+		t.Fatalf("halt worker-b: %v", err)
+	}
+	res, err = svc.Summon(ctx, SummonInput{TemplateName: "worker", Name: "worker-c"})
+	if err != nil {
+		t.Fatalf("summon after halt: %v", err)
+	}
+	if len(res.Warnings) != 0 {
+		t.Fatalf("expected no warnings once the other instances are stopped, got %v", res.Warnings)
+	}
+}
+
 func TestSummonRejectsReuseAcrossTemplates(t *testing.T) {
 	t.Parallel()
 

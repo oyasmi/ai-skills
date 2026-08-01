@@ -261,23 +261,26 @@ func (c Controller) Capture(ctx context.Context, inst instance.Instance, opts ca
 		return capture.Snapshot{}, err
 	}
 	msgs, content, _ := normalizeEvents(events)
-	msgs = trimMessages(msgs, opts.History)
-	if !opts.Raw {
-		msgs = briefMessages(msgs)
+	extra := map[string]any{
+		"usage":           usageMap(st),
+		"pi_session_id":   inst.PiSessionID,
+		"turns":           st.TotalTurns,
+		"last_error":      st.LastError,
+		"raw_event_count": len(events),
+		"next_cursor":     capture.FormatCursor(next),
+	}
+	if opts.Trace {
+		msgs = trimMessages(msgs, opts.History)
+		if !opts.Raw {
+			msgs = briefMessages(msgs)
+		}
+		extra["messages"] = msgs
 	}
 	return capture.Snapshot{
 		History:    opts.History,
 		Content:    content,
 		CapturedAt: nowUTC(),
-		Extra: map[string]any{
-			"messages":        msgs,
-			"usage":           usageMap(st),
-			"pi_session_id":   inst.PiSessionID,
-			"turns":           st.TotalTurns,
-			"last_error":      st.LastError,
-			"raw_event_count": len(events),
-			"next_cursor":     capture.FormatCursor(next),
-		},
+		Extra:      extra,
 	}, nil
 }
 

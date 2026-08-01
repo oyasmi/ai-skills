@@ -353,29 +353,35 @@ func (c Controller) Capture(ctx context.Context, inst instance.Instance, opts ca
 		return capture.Snapshot{}, err
 	}
 	msgs, content, usage := normalizeEvents(events)
-	msgs = trimMessages(msgs, opts.History)
-	if !opts.Raw {
-		msgs = briefMessages(msgs)
-	}
 
 	turnState := ""
 	if i := lastTurn(&st); i >= 0 {
 		turnState = string(st.Turns[i].State)
 	}
+	extra := map[string]any{
+		"usage":           usageMap(usage),
+		"thread_id":       st.ThreadID,
+		"turns":           st.TotalTurns,
+		"turn_state":      turnState,
+		"last_error":      st.LastError,
+		"raw_event_count": len(events),
+		"next_cursor":     capture.FormatCursor(next),
+	}
+	// The message trace is one entry per protocol event and easily dwarfs
+	// `content`, the answer an orchestrator actually needs; only build and
+	// attach it when the caller asked for event-level detail.
+	if opts.Trace {
+		msgs = trimMessages(msgs, opts.History)
+		if !opts.Raw {
+			msgs = briefMessages(msgs)
+		}
+		extra["messages"] = msgs
+	}
 	return capture.Snapshot{
 		History:    opts.History,
 		Content:    content,
 		CapturedAt: nowUTC(),
-		Extra: map[string]any{
-			"messages":        msgs,
-			"usage":           usageMap(usage),
-			"thread_id":       st.ThreadID,
-			"turns":           st.TotalTurns,
-			"turn_state":      turnState,
-			"last_error":      st.LastError,
-			"raw_event_count": len(events),
-			"next_cursor":     capture.FormatCursor(next),
-		},
+		Extra:      extra,
 	}, nil
 }
 

@@ -163,9 +163,23 @@ func TestCaptureBoundsStructuredMessagesByDefault(t *testing.T) {
 		UpdatedAt:    time.Now(),
 	})
 
-	_, snap, err := svc.Capture(context.Background(), "codex", capture.Options{Scope: capture.ScopeCurrent, History: -1})
+	// Without any trace-requesting flag, the message array is not built at
+	// all: content already carries the answer, and a caller who wants the
+	// full event trace has to ask for it.
+	_, lean, err := svc.Capture(context.Background(), "codex", capture.Options{Scope: capture.ScopeCurrent, History: -1})
 	if err != nil {
 		t.Fatalf("capture: %v", err)
+	}
+	if _, present := lean.Extra["messages"]; present {
+		t.Fatalf("expected no messages key without --trace/--raw/--history/--since, got %v", lean.Extra["messages"])
+	}
+	if lean.Content != "chunk 49" {
+		t.Fatalf("expected content to hold the latest agent message, got %q", lean.Content)
+	}
+
+	_, snap, err := svc.Capture(context.Background(), "codex", capture.Options{Scope: capture.ScopeCurrent, History: -1, Trace: true})
+	if err != nil {
+		t.Fatalf("capture --trace: %v", err)
 	}
 	msgs, ok := snap.Extra["messages"].([]execjsonctl.NormalizedMessage)
 	if !ok {
@@ -181,7 +195,8 @@ func TestCaptureBoundsStructuredMessagesByDefault(t *testing.T) {
 		t.Fatalf("expected content to hold the latest agent message, got %q", snap.Content)
 	}
 
-	// An explicit 0 still means "no limit" for callers that want the full trace.
+	// An explicit --history implies --trace, and 0 still means "no limit" for
+	// callers that want the full event trace.
 	_, full, err := svc.Capture(context.Background(), "codex", capture.Options{Scope: capture.ScopeCurrent, History: 0})
 	if err != nil {
 		t.Fatalf("capture unlimited: %v", err)
@@ -278,6 +293,149 @@ func TestCaptureSinceRejectedForTerminalHarness(t *testing.T) {
 	saveRunningInstance(t, registryPath, "worker", "live-session", instance.StatusIdle, true, time.Now().UTC())
 
 	_, _, err := svc.Capture(context.Background(), "worker", capture.Options{Since: "0"})
+	if err == nil || apperr.Code(err) != "invalid_arguments" {
+		t.Fatalf("expected invalid_arguments, got %v", err)
+	}
+}
+
+// --new gives the same incremental read as --since, but the caller never
+// carries the cursor itself: the instance remembers where the last --new
+// call left off.
+func TestCaptureNewRemembersCursorAcrossCalls(t *testing.T) {
+	svc, registryPath := newTestService(t, &fakeTmux{sessions: map[string]bool{}})
+
+	transport := t.TempDir()
+	writeExecJSONState(t, transport, `{
+	  "version": 1,
+	  "thread_id": "thread-1",
+	  "status": "idle",
+	  "resume_available": true,
+	  "turns": [{"index":0,"state":"completed","start_offset":0}],
+	  "total_turns": 1
+	}`)
+	output := filepath.Join(transport, "output.jsonl")
+	writeEvents := func(from, to int) {
+		var b strings.Builder
+		for i := from; i < to; i++ {
+			fmt.Fprintf(&b, `{"type":"item.completed","item":{"id":"item_%d","type":"agent_message","text":"chunk %d"}}`+"\n", i, i)
+		}
+		f, err := os.OpenFile(output, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			t.Fatalf("open output: %v", err)
+		}
+		defer f.Close()
+		if _, err := f.WriteString(b.String()); err != nil {
+			t.Fatalf("write output: %v", err)
+		}
+	}
+	writeEvents(0, 5)
+
+	seedRegistry(t, registryPath, instance.Instance{
+		Name:         "codex",
+		Template:     "worker",
+		SessionID:    "i_codex",
+		HarnessType:  execjsonctl.HarnessType,
+		TransportDir: transport,
+		ThreadID:     "thread-1",
+		Status:       instance.StatusIdle,
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
+	})
+
+	// The first --new call has nothing remembered yet, so it reads like an
+	// ordinary capture: the whole current turn.
+	_, first, err := svc.Capture(context.Background(), "codex", capture.Options{New: true})
+	if err != nil {
+		t.Fatalf("capture --new: %v", err)
+	}
+	msgs := first.Extra["messages"].([]execjsonctl.NormalizedMessage)
+	if len(msgs) != 5 {
+		t.Fatalf("expected the first --new to read everything so far, got %d messages", len(msgs))
+	}
+	firstCursor, _ := first.Extra["next_cursor"].(string)
+	if firstCursor == "" {
+		t.Fatal("expected a cursor back from the first --new read")
+	}
+
+	saved, err := instance.Load(registryPath)
+	if err != nil {
+		t.Fatalf("load registry: %v", err)
+	}
+	inst, ok := saved.Get("codex")
+	if !ok || inst.ReadCursor != firstCursor {
+		t.Fatalf("expected the instance to remember the cursor %q, got %q (ok=%v)", firstCursor, inst.ReadCursor, ok)
+	}
+
+	// Nothing new yet: a second --new call must come back empty without the
+	// caller supplying anything.
+	_, idle, err := svc.Capture(context.Background(), "codex", capture.Options{New: true})
+	if err != nil {
+		t.Fatalf("capture --new (idle): %v", err)
+	}
+	if got := len(idle.Extra["messages"].([]execjsonctl.NormalizedMessage)); got != 0 {
+		t.Fatalf("expected no new messages, got %d", got)
+	}
+
+	writeEvents(5, 8)
+	_, next, err := svc.Capture(context.Background(), "codex", capture.Options{New: true})
+	if err != nil {
+		t.Fatalf("capture --new (after new output): %v", err)
+	}
+	msgs = next.Extra["messages"].([]execjsonctl.NormalizedMessage)
+	if len(msgs) != 3 || msgs[0].Text != "chunk 5" {
+		t.Fatalf("expected only the 3 new messages starting at chunk 5, got %+v", msgs)
+	}
+	nextCursor, _ := next.Extra["next_cursor"].(string)
+	if nextCursor == "" || nextCursor == firstCursor {
+		t.Fatalf("expected the remembered cursor to advance past the new events, got %q", nextCursor)
+	}
+
+	saved, err = instance.Load(registryPath)
+	if err != nil {
+		t.Fatalf("reload registry: %v", err)
+	}
+	inst, ok = saved.Get("codex")
+	if !ok || inst.ReadCursor != nextCursor {
+		t.Fatalf("expected the instance's remembered cursor to advance to %q, got %q", nextCursor, inst.ReadCursor)
+	}
+}
+
+func TestCaptureNewRejectsSince(t *testing.T) {
+	svc, registryPath := newTestService(t, &fakeTmux{sessions: map[string]bool{}})
+	transport := t.TempDir()
+	writeExecJSONState(t, transport, `{
+	  "version": 1,
+	  "thread_id": "thread-1",
+	  "status": "idle",
+	  "resume_available": true,
+	  "turns": [{"index":0,"state":"completed","start_offset":0}],
+	  "total_turns": 1
+	}`)
+	seedRegistry(t, registryPath, instance.Instance{
+		Name:         "codex",
+		Template:     "worker",
+		SessionID:    "i_codex",
+		HarnessType:  execjsonctl.HarnessType,
+		TransportDir: transport,
+		ThreadID:     "thread-1",
+		Status:       instance.StatusIdle,
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
+	})
+
+	_, _, err := svc.Capture(context.Background(), "codex", capture.Options{New: true, Since: "10"})
+	if err == nil || apperr.Code(err) != "invalid_arguments" {
+		t.Fatalf("expected invalid_arguments, got %v", err)
+	}
+}
+
+// A cursor has no meaning for a terminal harness, and silently ignoring --new
+// would make a polling loop repeat the same screen forever.
+func TestCaptureNewRejectedForTerminalHarness(t *testing.T) {
+	svc, registryPath := newTestService(t, &fakeTmux{sessions: map[string]bool{"live-session": true}})
+	saveRunningInstance(t, registryPath, "worker", "live-session", instance.StatusIdle, true, time.Now().UTC())
+
+	_, _, err := svc.Capture(context.Background(), "worker", capture.Options{New: true})
 	if err == nil || apperr.Code(err) != "invalid_arguments" {
 		t.Fatalf("expected invalid_arguments, got %v", err)
 	}

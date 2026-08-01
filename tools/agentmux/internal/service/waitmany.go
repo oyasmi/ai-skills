@@ -30,11 +30,16 @@ type WaitOutcome struct {
 	Error     string
 }
 
-// WaitMany waits on several instances at once.
+// WaitMany waits on several instances at once, and when collect is true,
+// also reads back a lean capture for every instance that finished -- so a
+// fan-out can be "summon x N, then wait --collect" instead of a wait
+// followed by one capture call per instance.
 //
 // One bad name does not discard the other results: a failure is reported
-// against the instance it belongs to and the rest still return normally.
-func (s Service) WaitMany(ctx context.Context, names []string, stableMS, timeoutMS int, mode WaitMode) ([]WaitOutcome, bool, error) {
+// against the instance it belongs to and the rest still return normally. A
+// collect failure on an otherwise-successful wait is reported the same way,
+// against that instance alone.
+func (s Service) WaitMany(ctx context.Context, names []string, stableMS, timeoutMS int, mode WaitMode, collect bool) ([]WaitOutcome, bool, error) {
 	if len(names) == 0 {
 		return nil, false, apperr.New("invalid_arguments", "wait requires at least one instance name")
 	}
@@ -102,6 +107,23 @@ func (s Service) WaitMany(ctx context.Context, names []string, stableMS, timeout
 			continue
 		}
 		out.Instance = inst
+	}
+
+	if collect {
+		for i := range outcomes {
+			out := &outcomes[i]
+			if !out.Done || out.ErrorCode != "" {
+				continue
+			}
+			inst, snap, err := s.Capture(ctx, out.Name, capture.Options{History: -1, Scope: capture.ScopeCurrent})
+			if err != nil {
+				out.ErrorCode = apperr.Code(err)
+				out.Error = "collect: " + err.Error()
+				continue
+			}
+			out.Instance = inst
+			out.Snapshot = snap
+		}
 	}
 	return outcomes, satisfied(outcomes, mode), nil
 }

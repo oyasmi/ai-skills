@@ -246,3 +246,79 @@ func TestRunE2EDelegatesInOneCall(t *testing.T) {
 		t.Fatalf("list --all must report the tombstone: %q", stdout.String())
 	}
 }
+
+// Text-mode run must still tell the caller which instance it talked to: the
+// content alone does not say whether a generated name was used, and a
+// follow-up prompt needs that name.
+func TestRunE2ETextModeReportsInstanceOnStderr(t *testing.T) {
+	stateHome, configHome := setupXDGHome(t)
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+
+	tmux := &e2eFakeTmux{
+		sessions:       map[string]bool{},
+		captureContent: "task finished",
+		paneInfo:       tmuxctl.PaneInfo{Width: 80, Height: 24, PaneTitle: "✳ Ready"},
+		busyTitle:      "⠋ Working",
+	}
+	prevFactory := newService
+	newService = func(paths config.Paths, cfg config.Config) service.Service {
+		cfg.Defaults.Capture.PollMS = 1
+		svc := service.New(paths, cfg)
+		svc.Tmux = tmux
+		return svc
+	}
+	t.Cleanup(func() { newService = prevFactory })
+
+	ctx := context.Background()
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, []string{"run", "--template", "claude-code", "--name", "text-mode", "--prompt", "do the task", "--timeout", "5s"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run failed: code=%d stderr=%q", code, stderr.String())
+	}
+	if stdout.String() != "task finished\n" {
+		t.Fatalf("expected content with a trailing newline, got %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "instance: text-mode") {
+		t.Fatalf("expected instance name on stderr, got %q", stderr.String())
+	}
+}
+
+// Without --wait-if-busy, prompt must keep its historical immediate-send
+// behavior and report queued_ms: 0 rather than blocking.
+func TestRunE2EPromptDefaultDoesNotWaitAndReportsQueuedMS(t *testing.T) {
+	stateHome, configHome := setupXDGHome(t)
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+
+	tmux := &e2eFakeTmux{
+		sessions:       map[string]bool{},
+		captureContent: "ready\n> ",
+		paneInfo:       tmuxctl.PaneInfo{Width: 80, Height: 24, PaneTitle: "✳ Ready"},
+		busyTitle:      "⠋ Working",
+	}
+	prevFactory := newService
+	newService = func(paths config.Paths, cfg config.Config) service.Service {
+		cfg.Defaults.Capture.PollMS = 1
+		svc := service.New(paths, cfg)
+		svc.Tmux = tmux
+		return svc
+	}
+	t.Cleanup(func() { newService = prevFactory })
+
+	ctx := context.Background()
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, []string{"summon", "--template", "claude-code", "--name", "wait-flag", "--json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("summon failed: code=%d stderr=%q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	code = Run(ctx, []string{"prompt", "wait-flag", "--text", "hello", "--json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("prompt failed: code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"queued_ms": 0`) {
+		t.Fatalf("expected queued_ms 0 without --wait-if-busy, got %q", stdout.String())
+	}
+}

@@ -28,7 +28,7 @@ func TestWaitManyAnyReturnsOnFirstCompletion(t *testing.T) {
 	seedTwoWorkers(t, registryPath)
 
 	started := time.Now()
-	outcomes, ok, err := svc.WaitMany(ctx, []string{"fast", "slow"}, 1500, 5000, WaitAny)
+	outcomes, ok, err := svc.WaitMany(ctx, []string{"fast", "slow"}, 1500, 5000, WaitAny, false)
 	if err != nil {
 		t.Fatalf("wait many: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestWaitManyAllReportsPendingInstances(t *testing.T) {
 	svc.Config.Defaults.Capture.PollMS = 1
 	seedTwoWorkers(t, registryPath)
 
-	outcomes, ok, err := svc.WaitMany(ctx, []string{"fast", "slow"}, 1500, 100, WaitAll)
+	outcomes, ok, err := svc.WaitMany(ctx, []string{"fast", "slow"}, 1500, 100, WaitAll, false)
 	if err != nil {
 		t.Fatalf("wait many: %v", err)
 	}
@@ -80,6 +80,40 @@ func TestWaitManyAllReportsPendingInstances(t *testing.T) {
 	}
 	if !outcomes[1].Snapshot.TimedOut {
 		t.Fatal("expected the unfinished instance to report its timeout")
+	}
+}
+
+// collect turns a fan-out into "wait once, read every finished shard" instead
+// of a wait followed by one capture call per instance.
+func TestWaitManyCollectAttachesContentForFinishedInstancesOnly(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	tmux := &fakeTmux{
+		sessions:       map[string]bool{"fast-session": true, "slow-session": true},
+		paneInfo:       tmuxctl.PaneInfo{Width: 80, Height: 24},
+		captureContent: "task output\n> ",
+		paneTitleFor: map[string]string{
+			"fast-session:0.0": "✳ Ready",
+			"slow-session:0.0": "⠋ Working",
+		},
+	}
+	svc, registryPath := newTestService(t, tmux)
+	svc.Config.Defaults.Capture.PollMS = 1
+	seedTwoWorkers(t, registryPath)
+
+	outcomes, ok, err := svc.WaitMany(ctx, []string{"fast", "slow"}, 1500, 100, WaitAll, true)
+	if err != nil {
+		t.Fatalf("wait many: %v", err)
+	}
+	if ok {
+		t.Fatal("mode=all must not be satisfied while one instance still works")
+	}
+	if outcomes[0].Snapshot.Content != "task output\n> " {
+		t.Fatalf("expected the finished instance's content to be collected, got %q", outcomes[0].Snapshot.Content)
+	}
+	if outcomes[1].Snapshot.Content != "" {
+		t.Fatalf("expected no content collected for the still-working instance, got %q", outcomes[1].Snapshot.Content)
 	}
 }
 
@@ -98,7 +132,7 @@ func TestWaitManyReportsPerInstanceFailures(t *testing.T) {
 	saveRunningInstance(t, registryPath, "fast", "fast-session", instance.StatusBusy, true, time.Now().UTC().Add(-5*time.Second))
 	setHarnessType(t, registryPath, "fast", "claude-code")
 
-	outcomes, ok, err := svc.WaitMany(ctx, []string{"fast", "ghost"}, 1500, 100, WaitAll)
+	outcomes, ok, err := svc.WaitMany(ctx, []string{"fast", "ghost"}, 1500, 100, WaitAll, false)
 	if err != nil {
 		t.Fatalf("wait many: %v", err)
 	}

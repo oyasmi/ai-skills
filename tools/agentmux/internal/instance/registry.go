@@ -59,6 +59,10 @@ type Instance struct {
 	// signals from this instance may still describe the previous turn.
 	BusyConfirmedAt time.Time `json:"busy_confirmed_at,omitempty"`
 	FirstPromptSent bool      `json:"first_prompt_sent"`
+	// ReadCursor is where `capture --new` last left off on a structured
+	// harness, so watching a long run does not require the caller to track a
+	// cursor across calls by hand. Empty means nothing has been read yet.
+	ReadCursor string `json:"read_cursor,omitempty"`
 }
 
 type Registry struct {
