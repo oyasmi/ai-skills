@@ -2,12 +2,10 @@ package providers
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/oyasmi/ai-skills/tools/aiquota/internal/config"
@@ -21,6 +19,11 @@ import (
 // that requires a browser session key the user pastes into a GUI, which has
 // no CLI equivalent, so only the OAuth path (always available once `claude`
 // has been logged in) is implemented.
+//
+// This is strictly read-only: it never calls the credential file's
+// refreshToken to mint a new accessToken (that would mean reimplementing an
+// undocumented OAuth flow). An expired accessToken is reported as an error;
+// running the `claude` CLI once refreshes it on disk the normal way.
 type Claude struct {
 	client *httpjson.Client
 }
@@ -38,7 +41,12 @@ func (p *Claude) Fetch(ctx context.Context) quota.Snapshot {
 		return quota.Fail(p.ID(), p.Name(), quota.StateNoData, "未找到 Claude Code 登录凭据（先运行 `claude` 登录）")
 	}
 	if time.Now().Unix() >= cred.expiresAt-60 {
-		return quota.Fail(p.ID(), p.Name(), quota.StateError, "Claude Code 登录已过期，请重新登录")
+		// The stored access token is past its expiry, but `claude` refreshes it
+		// automatically on next use (using the credential file's refreshToken,
+		// which this tool never calls itself — see package doc). Most of the
+		// time this just means the CLI hasn't been run in the last hour, not
+		// that the user is actually logged out.
+		return quota.Fail(p.ID(), p.Name(), quota.StateError, "Claude Code 登录凭据已过期，运行一次 `claude` 命令即可自动刷新；仍不行再重新登录")
 	}
 
 	res := p.client.Fetch(ctx, "GET", "https://api.anthropic.com/api/oauth/usage", map[string]string{
@@ -137,27 +145,31 @@ var claudeValidUntilKeys = map[string]bool{
 	"valid_until": true, "validUntil": true,
 }
 
+// claudeValidUntil walks the payload breadth-first so a shallow match always
+// wins over a deeper one anywhere else in the tree, rather than depending on
+// which sibling subtree happens to be visited first.
 func claudeValidUntil(v any) *time.Time {
-	switch t := v.(type) {
-	case map[string]any:
-		for k, val := range t {
-			if claudeValidUntilKeys[k] {
-				if d, ok := jsonpath.Date(val); ok {
-					return &d
+	queue := []any{v}
+	for len(queue) > 0 {
+		var next []any
+		for _, node := range queue {
+			switch t := node.(type) {
+			case map[string]any:
+				for k, val := range t {
+					if claudeValidUntilKeys[k] {
+						if d, ok := jsonpath.Date(val); ok {
+							return &d
+						}
+					}
 				}
+				for _, val := range t {
+					next = append(next, val)
+				}
+			case []any:
+				next = append(next, t...)
 			}
 		}
-		for _, val := range t {
-			if d := claudeValidUntil(val); d != nil {
-				return d
-			}
-		}
-	case []any:
-		for _, val := range t {
-			if d := claudeValidUntil(val); d != nil {
-				return d
-			}
-		}
+		queue = next
 	}
 	return nil
 }
@@ -197,27 +209,4 @@ func claudeCredential() (claudeCred, error) {
 		token:     doc.ClaudeAiOauth.AccessToken,
 		expiresAt: int64(doc.ClaudeAiOauth.ExpiresAt / 1000),
 	}, nil
-}
-
-// parseJWT decodes a JWT's payload segment without verifying the signature —
-// it is only used to read a plan/expiry hint out of our own local, trusted
-// auth file, never to authenticate a request.
-func parseJWT(token string) (map[string]any, bool) {
-	parts := strings.Split(token, ".")
-	if len(parts) < 2 {
-		return nil, false
-	}
-	seg := parts[1]
-	if m := len(seg) % 4; m != 0 {
-		seg += strings.Repeat("=", 4-m)
-	}
-	data, err := base64.URLEncoding.DecodeString(seg)
-	if err != nil {
-		return nil, false
-	}
-	var out map[string]any
-	if err := json.Unmarshal(data, &out); err != nil {
-		return nil, false
-	}
-	return out, true
 }

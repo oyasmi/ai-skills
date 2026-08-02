@@ -4,6 +4,7 @@ package render
 import (
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"text/tabwriter"
 	"time"
@@ -24,10 +25,16 @@ const (
 )
 
 // ColorEnabled decides whether to emit ANSI codes: on by default for a real
-// terminal, off when piped, when NO_COLOR is set, or when forced off.
+// terminal, off when piped, when NO_COLOR is set, or when forced off via
+// --no-color. CLICOLOR_FORCE (any non-empty, non-"0" value) overrides the
+// terminal check but not NO_COLOR/--no-color, matching the convention's own
+// precedence (https://bixense.com/clicolors/).
 func ColorEnabled(forceOff bool) bool {
 	if forceOff || os.Getenv("NO_COLOR") != "" {
 		return false
+	}
+	if v := os.Getenv("CLICOLOR_FORCE"); v != "" && v != "0" {
+		return true
 	}
 	info, err := os.Stdout.Stat()
 	if err != nil {
@@ -145,6 +152,6 @@ func expiryLabel(t time.Time) string {
 	if diff <= 0 {
 		return "已到期 · " + date
 	}
-	days := int((diff + 24*time.Hour - time.Nanosecond) / (24 * time.Hour))
+	days := int(math.Ceil(diff.Hours() / 24))
 	return fmt.Sprintf("%s · 剩 %d 天", date, days)
 }

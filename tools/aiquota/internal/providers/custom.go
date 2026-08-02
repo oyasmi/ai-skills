@@ -107,7 +107,7 @@ func customWindow(m config.WindowMapping, body any) *quota.Window {
 		remaining, remOK := jsonpath.Number(jsonpath.Value(m.RemainingPath, body))
 		total, totOK := jsonpath.Number(jsonpath.Value(m.TotalPath, body))
 		if remOK && totOK && total > 0 {
-			used := clampPercent((1 - remaining/total) * 100)
+			used := quota.Clamp((1 - remaining/total) * 100)
 			detail := m.DetailUnit + trimNumber(remaining) + " / " + m.DetailUnit + trimNumber(total)
 			w := quota.NewWindow(windowKeyFor(m.Label), m.Label, used, resetAt)
 			w.Detail = detail
@@ -128,16 +128,6 @@ func customWindow(m config.WindowMapping, body any) *quota.Window {
 
 func windowKeyFor(label string) string {
 	return "custom_" + strings.ToLower(strings.ReplaceAll(label, " ", "_"))
-}
-
-func clampPercent(v float64) float64 {
-	if v < 0 {
-		return 0
-	}
-	if v > 100 {
-		return 100
-	}
-	return v
 }
 
 func trimNumber(v float64) string {

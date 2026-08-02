@@ -49,7 +49,7 @@ type Window struct {
 
 // NewWindow builds a window with UsedPercent clamped to 0–100.
 func NewWindow(key, label string, usedPercent float64, resetAt *time.Time) Window {
-	w := Window{Key: key, Label: label, UsedPercent: clamp(usedPercent)}
+	w := Window{Key: key, Label: label, UsedPercent: Clamp(usedPercent)}
 	w.ResetAt = resetAt
 	return w
 }
@@ -142,7 +142,7 @@ func (s *Snapshot) Normalize(now time.Time) {
 	}
 	for i := range s.Windows {
 		w := &s.Windows[i]
-		w.UsedPercent = clamp(w.UsedPercent)
+		w.UsedPercent = Clamp(w.UsedPercent)
 		w.RemainingPercent = round1(100 - w.UsedPercent)
 		w.UsedPercent = round1(w.UsedPercent)
 		w.ResetInSeconds = nil
@@ -156,7 +156,7 @@ func (s *Snapshot) Normalize(now time.Time) {
 	}
 }
 
-func clamp(v float64) float64 {
+func Clamp(v float64) float64 {
 	if math.IsNaN(v) {
 		return 0
 	}

@@ -84,6 +84,8 @@ func (p *Zai) Fetch(ctx context.Context) quota.Snapshot {
 }
 
 type zaiEntry struct {
+	unit    int
+	number  int
 	minutes int
 	label   string
 	percent float64
@@ -112,6 +114,8 @@ func zaiWindows(limits []any) []quota.Window {
 			resetAt = &t
 		}
 		entries = append(entries, zaiEntry{
+			unit:    int(unit),
+			number:  int(number),
 			minutes: zaiWindowMinutes(int(unit), int(number)),
 			label:   zaiWindowLabel(int(unit), int(number)),
 			percent: percent,
@@ -123,21 +127,29 @@ func zaiWindows(limits []any) []quota.Window {
 	windows := make([]quota.Window, 0, len(entries))
 	seen := map[string]int{}
 	for _, e := range entries {
+		key := zaiWindowKey(e.unit, e.number)
 		label := e.label
-		key := label
 		if n, ok := seen[key]; ok {
 			seen[key] = n + 1
 			label = fmt.Sprintf("%s %d", e.label, n+1)
+			key = fmt.Sprintf("%s_%d", key, n+1)
 		} else {
 			seen[key] = 1
 		}
-		windows = append(windows, quota.NewWindow(zaiWindowKey(label), label, e.percent, e.resetAt))
+		windows = append(windows, quota.NewWindow(key, label, e.percent, e.resetAt))
 	}
 	return windows
 }
 
-func zaiWindowKey(label string) string {
-	return "zai_" + label
+// zaiWindowKey builds a stable machine id from the raw unit/number pair
+// instead of the (Chinese, human-facing) label, so callers can filter on Key
+// the same way they do for Claude/Codex's 5h/7d windows.
+func zaiWindowKey(unit, number int) string {
+	suffix := map[int]string{5: "m", 3: "h", 1: "d", 6: "w"}[unit]
+	if suffix == "" {
+		suffix = "u"
+	}
+	return fmt.Sprintf("zai_%d%s", number, suffix)
 }
 
 func zaiWindowMinutes(unit, number int) int {

@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"io/fs"
@@ -275,6 +276,29 @@ func codexNonExpired(v any) *time.Time {
 		return nil
 	}
 	return &t
+}
+
+// parseJWT decodes a JWT's payload segment without verifying the signature —
+// it is only used to read a plan/expiry hint out of our own local, trusted
+// auth file, never to authenticate a request.
+func parseJWT(token string) (map[string]any, bool) {
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return nil, false
+	}
+	seg := parts[1]
+	if m := len(seg) % 4; m != 0 {
+		seg += strings.Repeat("=", 4-m)
+	}
+	data, err := base64.URLEncoding.DecodeString(seg)
+	if err != nil {
+		return nil, false
+	}
+	var out map[string]any
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, false
+	}
+	return out, true
 }
 
 func stringField(m map[string]any, key string) (string, bool) {

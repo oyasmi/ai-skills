@@ -36,7 +36,8 @@ func run(args []string, stdout, stderr *os.File) int {
 	jsonOut := fs.Bool("json", false, "输出 JSON 而不是文本表格")
 	configPath := fs.String("config", "", "配置文件路径（默认 ~/.config/quota-list/config.json，可用 AIQUOTA_CONFIG 覆盖）")
 	providerFilter := fs.String("provider", "", "只查询指定渠道，逗号分隔，如 claude,codex")
-	timeout := fs.Duration("timeout", 15*time.Second, "单次请求超时")
+	timeout := fs.Duration("timeout", 15*time.Second, "所有渠道并发请求共用的总体超时上限")
+	refresh := fs.Bool("refresh", false, "跳过本地节流缓存，强制向上游重新查询")
 	noColor := fs.Bool("no-color", false, "禁用文本输出的颜色")
 	showVersion := fs.Bool("version", false, "打印版本信息")
 	fs.Usage = func() { printHelp(stderr, fs) }
@@ -71,7 +72,7 @@ func run(args []string, stdout, stderr *os.File) int {
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 
-	snapshots := providers.FetchAll(ctx, list)
+	snapshots := providers.FetchAll(ctx, list, *refresh)
 	now := time.Now()
 	for i := range snapshots {
 		snapshots[i].Normalize(now)

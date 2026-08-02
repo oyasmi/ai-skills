@@ -54,14 +54,19 @@ type entry struct {
 	Snapshot  quota.Snapshot `json:"snapshot"`
 }
 
-// Fetch returns id's snapshot, calling `fresh` only when the last upstream
-// query for id is missing or older than MinInterval; otherwise it returns the
-// cached snapshot unchanged. The read-decide-write cycle holds an exclusive
-// flock on id's cache file, so this also serializes concurrent aiquota
-// processes racing for the same provider. Any cache I/O failure (unwritable
-// dir, corrupt file, ...) falls back to calling `fresh` directly rather than
-// blocking the query.
-func (c *Cache) Fetch(id string, fresh func() quota.Snapshot) quota.Snapshot {
+// Fetch returns id's snapshot, calling `fresh` only when force is set, or the
+// last upstream query for id is missing or older than MinInterval; otherwise
+// it returns the cached snapshot unchanged. The read-decide-write cycle holds
+// an exclusive flock on id's cache file, so this also serializes concurrent
+// aiquota processes racing for the same provider. Any cache I/O failure
+// (unwritable dir, corrupt file, ...) falls back to calling `fresh` directly
+// rather than blocking the query.
+//
+// A StateError snapshot is never written to the cache: a transient upstream
+// hiccup (network blip, 429) must not pin every caller to the same failure
+// for the rest of MinInterval, since retrying is exactly what callers (often
+// an agent loop) want to be able to do.
+func (c *Cache) Fetch(id string, force bool, fresh func() quota.Snapshot) quota.Snapshot {
 	if err := os.MkdirAll(c.dir, 0o700); err != nil {
 		return fresh()
 	}
@@ -82,11 +87,14 @@ func (c *Cache) Fetch(id string, fresh func() quota.Snapshot) quota.Snapshot {
 		_ = json.Unmarshal(data, &e)
 	}
 
-	if !e.FetchedAt.IsZero() && time.Since(e.FetchedAt) < MinInterval {
+	if !force && !e.FetchedAt.IsZero() && time.Since(e.FetchedAt) < MinInterval {
 		return e.Snapshot
 	}
 
 	snap := fresh()
+	if snap.State == quota.StateError {
+		return snap
+	}
 	e = entry{FetchedAt: time.Now(), Snapshot: snap}
 	if data, err := json.Marshal(e); err == nil {
 		if _, err := f.Seek(0, 0); err == nil {
