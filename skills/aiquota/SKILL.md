@@ -15,11 +15,13 @@ aiquota --json
 
 ```bash
 aiquota                          # 文本表格，人看
-aiquota --json                   # 结构化输出，Agent 解析用这个
-aiquota --provider claude        # 只查一个渠道，逗号分隔可查多个
-aiquota --config <path>          # 覆盖配置文件路径（一般不需要）
-aiquota --refresh                # 跳过 10 秒节流缓存，强制重新查询（一般不需要）
+aiquota --json                   # 结构化输出，Agent 解析用这个（短参数 -j）
+aiquota --provider claude        # 只查一个渠道，逗号分隔可查多个（短参数 -p）
+aiquota --config <path>          # 覆盖配置文件路径（一般不需要，短参数 -c）
+aiquota --refresh                # 跳过 10 秒节流缓存，强制重新查询（一般不需要，短参数 -r）
 ```
+
+长参数都有对应短参数（`-c` `-j` `-n` `-p` `-r` `-t` `-v`），可组合，如 `aiquota -p claude -j`。
 
 不需要参数、不需要登录步骤——渠道是否可查完全由配置文件决定（见下）。
 

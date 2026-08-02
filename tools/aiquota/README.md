@@ -18,12 +18,14 @@ scripts/install.sh
 
 ```bash
 aiquota                          # 文本表格：所有已启用渠道
-aiquota --json                   # 结构化输出，供 Agent 解析
-aiquota --provider claude,codex  # 只查询指定渠道
-aiquota --config <path>          # 覆盖配置文件路径
-aiquota --refresh                # 跳过节流缓存，强制重新查询上游
-aiquota --timeout 30s            # 所有渠道并发请求共用的总体超时上限（默认 15s），不是单个请求各自的超时
+aiquota --json                   # 结构化输出，供 Agent 解析（短参数 -j）
+aiquota --provider claude,codex  # 只查询指定渠道（短参数 -p）
+aiquota --config <path>          # 覆盖配置文件路径（短参数 -c）
+aiquota --refresh                # 跳过节流缓存，强制重新查询上游（短参数 -r）
+aiquota --timeout 30s            # 所有渠道并发请求共用的总体超时上限（默认 15s），不是单个请求各自的超时（短参数 -t）
 ```
+
+每个长参数都有对应的单字母短参数（`-c` `-j` `-n` `-p` `-r` `-t` `-v`），可以组合使用，如 `aiquota -p claude -j`。运行 `aiquota -h` 查看完整列表。
 
 ```
 $ aiquota
