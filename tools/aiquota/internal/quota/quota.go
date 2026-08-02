@@ -5,9 +5,21 @@ package quota
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"time"
 )
+
+// localTimeLayout is RFC3339 without the fractional-second component, e.g.
+// "2026-08-02T12:49:59+08:00". Every timestamp this tool emits (JSON or text)
+// goes through FormatLocal so times read in the viewer's local zone instead
+// of the raw UTC/whatever-zone the upstream API returned.
+const localTimeLayout = "2006-01-02T15:04:05Z07:00"
+
+// FormatLocal renders `t` in the local timezone, seconds precision.
+func FormatLocal(t time.Time) string {
+	return t.Local().Format(localTimeLayout)
+}
 
 // State is the fetch outcome of one provider.
 type State string
@@ -42,6 +54,21 @@ func NewWindow(key, label string, usedPercent float64, resetAt *time.Time) Windo
 	return w
 }
 
+// MarshalJSON emits ResetAt in the local timezone (see FormatLocal) instead
+// of time.Time's default UTC/nanosecond rendering.
+func (w Window) MarshalJSON() ([]byte, error) {
+	type alias Window
+	var resetAt *string
+	if w.ResetAt != nil {
+		s := FormatLocal(*w.ResetAt)
+		resetAt = &s
+	}
+	return json.Marshal(struct {
+		alias
+		ResetAt *string `json:"reset_at,omitempty"`
+	}{alias: alias(w), ResetAt: resetAt})
+}
+
 // Snapshot is one provider's result.
 type Snapshot struct {
 	ID    string `json:"id"`
@@ -61,11 +88,37 @@ type Snapshot struct {
 	FetchedAt time.Time `json:"fetched_at"`
 }
 
+// MarshalJSON emits ValidUntil/FetchedAt in the local timezone (see
+// FormatLocal) instead of time.Time's default UTC/nanosecond rendering.
+func (s Snapshot) MarshalJSON() ([]byte, error) {
+	type alias Snapshot
+	var validUntil *string
+	if s.ValidUntil != nil {
+		v := FormatLocal(*s.ValidUntil)
+		validUntil = &v
+	}
+	return json.Marshal(struct {
+		alias
+		ValidUntil *string `json:"valid_until,omitempty"`
+		FetchedAt  string  `json:"fetched_at"`
+	}{alias: alias(s), ValidUntil: validUntil, FetchedAt: FormatLocal(s.FetchedAt)})
+}
+
 // Report is the top-level payload of `aiquota --json`.
 type Report struct {
 	OK        bool       `json:"ok"`
 	Now       time.Time  `json:"now"`
 	Providers []Snapshot `json:"providers"`
+}
+
+// MarshalJSON emits Now in the local timezone (see FormatLocal) instead of
+// time.Time's default UTC/nanosecond rendering.
+func (r Report) MarshalJSON() ([]byte, error) {
+	type alias Report
+	return json.Marshal(struct {
+		alias
+		Now string `json:"now"`
+	}{alias: alias(r), Now: FormatLocal(r.Now)})
 }
 
 // Provider fetches one channel's quota. Implementations are strictly read-only.

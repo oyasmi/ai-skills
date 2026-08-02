@@ -26,13 +26,15 @@ aiquota --config <path>          # 覆盖配置文件路径
 ```
 $ aiquota
 Claude  Claude Code
-  5小时   13.0%    ↻ 4小时38分钟
-  一周    63.0%    ↻ 1天21小时
+  5小时   13.0%    ↻ 4小时38分钟（08-02 12:53:45）
+  一周    63.0%    ↻ 1天17小时（08-04 01:15:45）
 
 Codex  Plus
-  5小时    1.0%    ↻ 6天13小时
-  到期 2026-08-09 · 剩 8 天
+  5小时    1.0%    ↻ 4小时38分钟（08-02 12:53:45）
+  到期 2026-08-10 · 剩 8 天
 ```
+
+所有时间（含 JSON 里的 `reset_at` / `valid_until` / `fetched_at` / `now`）都换算成本地时区显示，精确到秒；文本表格里每个额度窗口在倒计时后面额外带上重置的绝对时间。
 
 ## 配置
 
@@ -44,6 +46,10 @@ Codex  Plus
 - **Codex**：读取 `~/.codex/auth.json`，优先调用 ChatGPT 用量 API，接口不可用时回退最近一次本地 session 文件里的 `rate_limits`。
 - **z.ai**：需要在配置文件里启用并填入 token（`zaiEnabled` + `zaiToken`），仅支持中国大陆端点。
 - **自定义渠道**：`customProviders[]`，字段与 QuotaList 完全一致（`url` / `headers` / `windows[].usedPath` 等 keypath 映射 / `autoDetect`）。高级映射请直接编辑配置文件。
+
+## 查询节流
+
+工具调用的频次不等于应该发往上游的查询频次——尤其是被 Agent 反复调用时。每个渠道的查询结果和最近一次查询时间会缓存在本地（默认 `~/.cache/aiquota/`，一个渠道一个文件，可用 `AIQUOTA_CACHE_DIR` 覆盖），同一渠道两次真正的上游请求之间至少间隔 10 秒；间隔内的调用直接返回上一次缓存的结果（`fetched_at` 会显示数据实际取回的时间，不是本次调用时间）。缓存文件通过文件锁协调，多个并发的 `aiquota` 进程共享同一节流窗口。
 
 ## 输出字段（`--json`）
 
@@ -64,11 +70,11 @@ Codex  Plus
           "label": "5小时",
           "used_percent": 13,
           "remaining_percent": 87,
-          "reset_at": "2026-08-01T20:10:00Z",
-          "reset_in_seconds": 16727
+          "reset_in_seconds": 16727,
+          "reset_at": "2026-08-02T04:10:00+08:00"
         }
       ],
-      "valid_until": "2026-08-09T08:22:32Z",  // 订阅/账号到期时间，若有
+      "valid_until": "2026-08-09T16:22:32+08:00",  // 订阅/账号到期时间，若有
       "fetched_at": "2026-08-01T23:31:13+08:00"
     }
   ]

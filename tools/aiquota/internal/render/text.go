@@ -88,7 +88,8 @@ func writeProvider(tw io.Writer, s quota.Snapshot, color bool) {
 		percent := colorize(color, usageColor(win.UsedPercent), fmt.Sprintf("%5.1f%%", win.UsedPercent))
 		line := fmt.Sprintf("  %s\t%s\t%s", win.Label, percent, win.Detail)
 		if win.ResetAt != nil {
-			line += "\t↻ " + countdown(*win.ResetInSeconds)
+			reset := fmt.Sprintf("↻ %s（%s）", countdown(*win.ResetInSeconds), localClock(*win.ResetAt))
+			line += "\t" + colorize(color, colorGray, reset)
 		}
 		fmt.Fprintln(tw, line)
 	}
@@ -124,6 +125,18 @@ func countdown(seconds int64) string {
 		return fmt.Sprintf("%d分钟", minutes)
 	}
 	return "不到1分钟"
+}
+
+// localClock renders an absolute time for text output: local zone, seconds
+// precision, no "T"/offset noise since the reader's own clock is already in
+// that zone. Drops the year when it matches today's, since every reset here
+// is at most a few days out.
+func localClock(t time.Time) string {
+	t = t.Local()
+	if t.Year() == time.Now().Year() {
+		return t.Format("01-02 15:04:05")
+	}
+	return t.Format("2006-01-02 15:04:05")
 }
 
 func expiryLabel(t time.Time) string {

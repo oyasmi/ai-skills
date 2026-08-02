@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/oyasmi/ai-skills/tools/aiquota/internal/cache"
 	"github.com/oyasmi/ai-skills/tools/aiquota/internal/config"
 	"github.com/oyasmi/ai-skills/tools/aiquota/internal/quota"
 )
@@ -28,15 +29,18 @@ func Build(cfg config.Config) []quota.Provider {
 }
 
 // FetchAll runs every provider concurrently and returns snapshots in the same
-// order as `list`.
+// order as `list`. Each provider's actual upstream call is throttled by
+// `cache` (see internal/cache): back-to-back invocations of this CLI reuse
+// the last result instead of re-querying every time.
 func FetchAll(ctx context.Context, list []quota.Provider) []quota.Snapshot {
+	c := cache.New("")
 	results := make([]quota.Snapshot, len(list))
 	var wg sync.WaitGroup
 	for i, p := range list {
 		wg.Add(1)
 		go func(i int, p quota.Provider) {
 			defer wg.Done()
-			results[i] = p.Fetch(ctx)
+			results[i] = c.Fetch(p.ID(), func() quota.Snapshot { return p.Fetch(ctx) })
 		}(i, p)
 	}
 	wg.Wait()
