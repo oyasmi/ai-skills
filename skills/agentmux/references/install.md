@@ -28,16 +28,43 @@ cd /path/to/ai-skills/tools/agentmux
 go build -o ./bin/agentmux ./cmd/agentmux
 ```
 
-## 使用发布包安装
+## 使用发布包安装（无需克隆仓库）
 
-从项目 Release 下载与当前系统匹配的 `agentmux_<version>_<os>_<arch>.tar.gz`，解压后将其中的 `agentmux` 放入 PATH，例如：
+仓库在 GitHub 公开发布：https://github.com/oyasmi/ai-skills 。发布包只提供 `darwin_arm64` 和 `linux_amd64` 两个平台的 `agentmux` 二进制；其他平台用上面「从本仓库安装」的源码构建方式。
 
 ```bash
+set -euo pipefail
+REPO="oyasmi/ai-skills"
+OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+ARCH="$(uname -m)"
+case "$ARCH" in
+  arm64|aarch64) ARCH=arm64 ;;
+  x86_64|amd64) ARCH=amd64 ;;
+esac
+[[ "$OS-$ARCH" == "darwin-arm64" || "$OS-$ARCH" == "linux-amd64" ]] || {
+  echo "没有 $OS/$ARCH 的发布包，改用源码构建" >&2; exit 1
+}
+
+TMP="$(mktemp -d)"
+curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" -o "$TMP/release.json"
+urls() { grep -oE '"browser_download_url": *"[^"]+"' "$TMP/release.json" | grep -oE 'https://[^"]+'; }
+ASSET_URL="$(urls | grep -E "agentmux_.*_${OS}_${ARCH}\.tar\.gz$")"
+CHECKSUMS_URL="$(urls | grep -E "checksums-agentmux\.txt$")"
+ASSET_FILE="$(basename "$ASSET_URL")"
+
+curl -fsSL -o "$TMP/$ASSET_FILE" "$ASSET_URL"
+curl -fsSL -o "$TMP/checksums-agentmux.txt" "$CHECKSUMS_URL"
+(cd "$TMP" && grep "$ASSET_FILE" checksums-agentmux.txt | sha256sum -c -)
+
+tar -C "$TMP" -xzf "$TMP/$ASSET_FILE"
 mkdir -p ~/.local/bin
-install -m 0755 ./agentmux ~/.local/bin/agentmux
+install -m 0755 "$TMP"/agentmux_*_"${OS}_${ARCH}"/agentmux ~/.local/bin/agentmux
+rm -rf "$TMP"
+
+agentmux doctor --json
 ```
 
-装完同样先跑 `agentmux doctor --json` 确认。
+装到别的目录用 `BIN_DIR=<path>` 替换 `~/.local/bin`；需要固定版本而不是最新版时，把 `releases/latest` 换成 `releases/tags/<version>`（如 `releases/tags/v0.5.1`），可用版本见 [Releases 页面](https://github.com/oyasmi/ai-skills/releases)。装完同样先跑 `agentmux doctor --json` 确认。
 
 ## 外部依赖
 

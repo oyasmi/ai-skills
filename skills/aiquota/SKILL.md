@@ -25,6 +25,10 @@ aiquota --refresh                # 跳过 10 秒节流缓存，强制重新查�
 
 不需要参数、不需要登录步骤——渠道是否可查完全由配置文件决定（见下）。
 
+## 安装依赖
+
+命令不存在时看[安装参考](references/install.md)：从 GitHub Release 下载对应平台（`darwin_arm64`/`linux_amd64`）的二进制，或从本仓库源码构建。命令存在但某个渠道读不到数据，先看返回里该渠道的 `state`/`error` 字段和下面的「配置」一节，不要怀疑 `aiquota` 本身有 bug。
+
 ## 读 `--json` 输出
 
 ```jsonc

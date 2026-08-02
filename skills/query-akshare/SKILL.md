@@ -15,7 +15,19 @@ description: 使用 akqry CLI 发现、检查和调用 AkShare 金融数据接�
 akqry doctor --json
 ```
 
-若 `akqry` 不在 `PATH`，从本仓库安装：`uv tool install --editable 'tools/akqry[parquet]'`。若需要使用本地 AkShare 源码，在每个命令中显式传入 `--akshare-path /path/to/akshare`，并在报告中保留输出的版本与模块路径。
+若 `akqry` 不在 `PATH`：
+
+- **从 GitHub Release 安装**（无需克隆仓库，推荐；仓库公开在 https://github.com/oyasmi/ai-skills ）：
+
+  ```bash
+  WHL_URL="$(curl -fsSL https://api.github.com/repos/oyasmi/ai-skills/releases/latest \
+    | grep -oE 'https://[^"]+akqry-[^"]+-py3-none-any\.whl')"
+  uv tool install "akqry[parquet] @ $WHL_URL"
+  ```
+
+- **从本仓库安装**（已克隆仓库时）：`uv tool install --editable 'tools/akqry[parquet]'`。
+
+若需要使用本地 AkShare 源码，在每个命令中显式传入 `--akshare-path /path/to/akshare`，并在报告中保留输出的版本与模块路径。
 
 `doctor` 会报告可用的输出格式。若 `parquet` 不可用，改用 `.jsonl` 落盘，不要因为示例写着 parquet 就照抄。
 
