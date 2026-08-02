@@ -7,6 +7,7 @@
 | Skill | 用途 |
 |---|---|
 | [`skills/agentmux`](skills/agentmux) | 通过 `agentmux` 委派和管理外部 coding agent。使用前请按 [`SKILL.md`](skills/agentmux/SKILL.md) 安装 `agentmux` CLI。 |
+| [`skills/aiquota`](skills/aiquota) | 通过 `aiquota` 查看 AI 编程订阅的额度用量与重置时间。使用前请安装 `aiquota` CLI。 |
 | [`skills/cookbook-forge`](skills/cookbook-forge) | 研究、写作并构建可离线阅读的中文 HTML cookbook。需要 Node.js 来运行模板脚本。 |
 | [`skills/query-akshare`](skills/query-akshare) | 使用 akqry 查询并分析 A 股、港股、行业板块、基金与 ETF 的可追溯数据。 |
 
@@ -17,6 +18,7 @@
 
 ```bash
 cp -R skills/agentmux "${CODEX_HOME:-$HOME/.codex}/skills/agentmux"
+cp -R skills/aiquota "${CODEX_HOME:-$HOME/.codex}/skills/aiquota"
 cp -R skills/cookbook-forge "${CODEX_HOME:-$HOME/.codex}/skills/cookbook-forge"
 cp -R skills/query-akshare "${CODEX_HOME:-$HOME/.codex}/skills/query-akshare"
 ```
@@ -29,10 +31,11 @@ cp -R skills/query-akshare "${CODEX_HOME:-$HOME/.codex}/skills/query-akshare"
 `tools/` 存放 skill 可能依赖的独立工具，不属于 skill 的安装内容：
 
 - [`tools/agentmux`](tools/agentmux)：`agentmux` CLI 的 Go 源码、配置示例和发布脚本。它的安装脚本只安装 CLI 和默认配置，不安装 skill。
-- [`tools/cmd_mgr`](tools/cmd_mgr)：跨平台命令管理 GUI。
+- [`tools/aiquota`](tools/aiquota)：查看 AI 编程订阅额度用量的 Go CLI，供 `aiquota` skill 使用，也可独立使用。
 - [`tools/akqry`](tools/akqry)：AkShare 数据接口发现、参数检查、查询与可追溯落盘 CLI；供 `query-akshare` skill 使用。
+- [`tools/cmd_mgr`](tools/cmd_mgr)：跨平台命令管理 GUI，不参与本仓库的自动化测试/发布流程。
 
-构建 agentmux：
+构建 Go 工具（以 agentmux 为例，aiquota 同理）：
 
 ```bash
 cd tools/agentmux
@@ -40,11 +43,11 @@ go test ./...
 go build -o ./bin/agentmux ./cmd/agentmux
 ```
 
-制作 CLI 发布包：
+制作单个 CLI 的本地发布包：
 
 ```bash
 cd tools/agentmux
-VERSION=v0.1.0 ./scripts/release.sh
+VERSION=v0.1.0 ./scripts/release.sh   # 产物在 dist/，只打 darwin_arm64 和 linux_amd64 两个平台
 ```
 
 安装 akqry：
@@ -55,12 +58,19 @@ uv tool install --editable '.[parquet]'
 akqry doctor --json
 ```
 
-发布包只包含 `agentmux` CLI、示例配置和工具 README；skill 始终从根目录的
-`skills/` 单独安装。
+## 发布
+
+推送 `v*` 标签会触发 [`.github/workflows/release.yml`](.github/workflows/release.yml)，在一次 GitHub Release 里发布：
+
+- `agentmux`、`aiquota`：Go 二进制压缩包，只保留 `darwin_arm64` 和 `linux_amd64` 两个平台（`agentmux_<version>_<os>_<arch>.tar.gz` / `aiquota_<version>_<os>_<arch>.tar.gz`），附各自的 checksums。
+- `akqry`：与平台无关的 Python 包（wheel + sdist）。
+- 每个 `skills/<name>` 目录单独打包成 `skill-<name>-<version>.tar.gz`，与上面的可执行文件产物完全分开；也可以直接从 `skills/` 目录复制安装，无需等发布。
+
+也可以在 Actions 里手动触发该 workflow（`workflow_dispatch`）来验证构建，但只有打了 tag 的运行才会真正发布 Release。
 
 ## 开发检查
 
-修改 Go 工具后，在 `tools/agentmux/` 下运行：
+修改 Go 工具后，在对应的 `tools/agentmux/` 或 `tools/aiquota/` 下运行：
 
 ```bash
 go test ./...

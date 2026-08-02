@@ -8,10 +8,8 @@ BUILD_TIME="${BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 APP_NAME="aiquota"
 
 TARGETS=(
-  "darwin amd64"
   "darwin arm64"
   "linux amd64"
-  "linux arm64"
 )
 
 export GOCACHE="${GOCACHE:-$ROOT_DIR/.cache/go-build}"

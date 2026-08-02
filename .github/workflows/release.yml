@@ -1,0 +1,199 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      value: ${{ steps.version.outputs.value }}
+    steps:
+      - name: Resolve version
+        id: version
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            value="${GITHUB_REF_NAME}"
+          else
+            value="main-${GITHUB_SHA::7}"
+          fi
+          echo "value=$value" >> "$GITHUB_OUTPUT"
+
+  agentmux:
+    name: Build agentmux
+    needs: version
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: tools/agentmux
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/agentmux/go.mod
+          cache: true
+          cache-dependency-path: tools/agentmux/go.sum
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build release archives
+        env:
+          VERSION: ${{ needs.version.outputs.value }}
+        run: ./scripts/release.sh
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentmux-${{ needs.version.outputs.value }}
+          path: |
+            tools/agentmux/dist/*.tar.gz
+            tools/agentmux/dist/checksums.txt
+          if-no-files-found: error
+
+  aiquota:
+    name: Build aiquota
+    needs: version
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: tools/aiquota
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/aiquota/go.mod
+          cache: true
+          cache-dependency-path: tools/aiquota/go.mod
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build release archives
+        env:
+          VERSION: ${{ needs.version.outputs.value }}
+        run: ./scripts/release.sh
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: aiquota-${{ needs.version.outputs.value }}
+          path: |
+            tools/aiquota/dist/*.tar.gz
+            tools/aiquota/dist/checksums.txt
+          if-no-files-found: error
+
+  akqry:
+    name: Build akqry
+    needs: version
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: tools/akqry
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Test
+        run: |
+          uv run --extra dev pytest
+          uv run --extra dev ruff check .
+
+      - name: Build package
+        run: |
+          rm -rf dist
+          uv build
+          (cd dist && sha256sum * > checksums.txt)
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: akqry-${{ needs.version.outputs.value }}
+          path: tools/akqry/dist/*
+          if-no-files-found: error
+
+  skills:
+    name: Package skills
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Archive each skill
+        env:
+          VERSION: ${{ needs.version.outputs.value }}
+        run: |
+          mkdir -p dist
+          for dir in skills/*/; do
+            name="$(basename "$dir")"
+            tar -C skills -czf "dist/skill-${name}-${VERSION}.tar.gz" "$name"
+          done
+          (cd dist && sha256sum *.tar.gz > checksums.txt)
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: skills-${{ needs.version.outputs.value }}
+          path: |
+            dist/*.tar.gz
+            dist/checksums.txt
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: [version, agentmux, aiquota, akqry, skills]
+    if: github.ref_type == 'tag'
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Assemble release assets
+        env:
+          VERSION: ${{ needs.version.outputs.value }}
+        run: |
+          mkdir -p release
+          cp "dist/agentmux-$VERSION"/*.tar.gz release/
+          cp "dist/agentmux-$VERSION/checksums.txt" "release/checksums-agentmux.txt"
+          cp "dist/aiquota-$VERSION"/*.tar.gz release/
+          cp "dist/aiquota-$VERSION/checksums.txt" "release/checksums-aiquota.txt"
+          cp "dist/akqry-$VERSION"/* release/
+          mv "release/checksums.txt" "release/checksums-akqry.txt"
+          cp "dist/skills-$VERSION"/*.tar.gz release/
+          cp "dist/skills-$VERSION/checksums.txt" "release/checksums-skills.txt"
+          ls -la release
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true

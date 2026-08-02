@@ -1,0 +1,53 @@
+name: aiquota Test
+
+on:
+  push:
+    paths:
+      - "tools/aiquota/**"
+      - ".github/workflows/aiquota-*.yml"
+  pull_request:
+    paths:
+      - "tools/aiquota/**"
+      - ".github/workflows/aiquota-*.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aiquota-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Go ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: tools/aiquota
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/aiquota/go.mod
+          cache: true
+          cache-dependency-path: tools/aiquota/go.mod
+
+      - name: Test
+        run: go test ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Race test
+        if: runner.os == 'Linux'
+        run: go test -race ./...
