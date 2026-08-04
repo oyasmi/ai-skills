@@ -45,7 +45,7 @@ defaults:
     history: 120
     stable_ms: 1500
     poll_ms: 250
-  max_instances: 8
+  max_instances: 12
 
 templates:
   builder:
@@ -251,14 +251,16 @@ capture:
 类型：
 
 ```yaml
-max_instances: 8
+max_instances: 12
 ```
 
 规则：
 
-1. 可选
-2. 若设置，则用于限制实例总数
-3. 第一版可实现，也可先只校验不强制
+1. 可选，默认 `12`
+2. 限制同时存活的实例数；超限时 `summon`/`run` 报 `config_invalid`（`max_instances exceeded`），
+   而不是排队等待
+3. 只统计存活实例。墓碑（已 `halt` 或已退出的实例）不占配额
+4. `0` 表示不限制；负数在配置加载阶段报 `config_invalid`
 
 ---
 
@@ -413,14 +415,31 @@ effort: high
 类型：
 
 ```yaml
-system_prompt: 你是编程专家，优先阅读上下文、定位根因、直接给出可执行修改。
+system_prompt: |
+  你是编程专家，优先阅读上下文、定位根因、直接给出可执行修改。
 ```
 
 规则：
 
-1. 可为空
-2. 作为首次消息前缀文本
-3. 第一版不映射成 harness 的原生 system role
+1. 可为空；支持多行（YAML `|` 块）
+2. **它永远是追加，不会替换 harness 自己的系统提示。** 具体注入方式按 `harness_type` 分两类：
+
+   | harness_type | 注入方式 | 生效范围 |
+   | --- | --- | --- |
+   | `claude-code-ndjson` | 原生 `claude --append-system-prompt` | 整个会话，含 `resume` 后的所有 turn |
+   | `pi-rpc` | 原生 `pi --append-system-prompt` | 整个会话 |
+   | `codex-cli-execjson` | 文本前缀 `[SYSTEM]\n…\n\n[USER]\n…` | **只拼在首条 prompt 前面**，后续 turn 不再重复 |
+   | `claude-code` / `codex-cli` / `gemini-cli`（TUI） | 同上，文本前缀 | **只拼在首条 prompt 前面** |
+
+3. 因此给走文本前缀的 harness 写 `system_prompt` 时，正文要自己声明「对本轮及之后每一轮
+   指令持续生效」；否则模型容易把它当成只约束第一条任务的一次性说明
+4. `command` 里如果已经自己写了系统提示 flag，agentmux 不再注入：
+   `claude-code-ndjson` 检查 `--system-prompt`、`--system-prompt-file`、`--append-system-prompt`、
+   `--append-system-prompt-file`；`pi-rpc` 检查 `--system-prompt`、`--append-system-prompt`
+5. 内容应该只写这个角色跨任务不变的东西：工作方式、硬边界、报告格式。具体任务的目标、
+   路径和完成标准属于 `prompt`，不要写进这里
+6. 已存在的实例保留 `summon` 时解析出的值：改配置只影响新建实例，`inspect --json` 的
+   `system_prompt` 显示该实例实际生效的内容
 
 ### 6.6 `prompt`
 
@@ -622,7 +641,7 @@ i_<random-or-hash>
 2. `templates` 必须存在且至少有一个模板
 3. 每个模板必须有 `command`
 4. `capture.history`、`capture.stable_ms`、`capture.poll_ms` 必须为非负整数
-5. `max_instances` 若存在必须为正整数
+5. `max_instances` 若存在必须为非负整数（`0` 表示不限制）
 6. 模板名不能为空
 7. `effort` 若存在必须是 `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max` 之一
 8. `model` 的格式不做统一校验：取值合法性由目标 harness 决定（见 6.3）
