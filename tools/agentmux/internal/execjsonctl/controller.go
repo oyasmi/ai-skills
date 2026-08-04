@@ -75,7 +75,7 @@ func (c Controller) CanResume(inst instance.Instance) bool {
 // Start prepares the transport directory. It deliberately spawns nothing: a
 // codex instance has no process until its first prompt.
 func (c Controller) Start(ctx context.Context, inst instance.Instance, command, systemPrompt string, resume bool) (instance.Instance, error) {
-	if err := validateCommand(command); err != nil {
+	if err := ValidateCommand(command); err != nil {
 		return instance.Instance{}, err
 	}
 	dir := inst.TransportDir

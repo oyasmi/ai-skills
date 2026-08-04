@@ -115,7 +115,7 @@ func TestRunE2ELifecycleJSON(t *testing.T) {
 		return stdout.String(), stderr.String(), code
 	}
 
-	stdout, stderr, code := runJSON("summon", "--template", "claude-code", "--name", "e2e-agent", "--prompt", "hello", "--json")
+	stdout, stderr, code := runJSON("summon", "--template", "claude-code-tui", "--name", "e2e-agent", "--prompt", "hello", "--json")
 	if code != 0 {
 		t.Fatalf("summon failed: code=%d stderr=%q", code, stderr)
 	}
@@ -139,7 +139,7 @@ func TestRunE2ELifecycleJSON(t *testing.T) {
 		t.Fatalf("unexpected registry instance after summon: %+v", inst)
 	}
 	if inst.HarnessType != "claude-code" {
-		t.Fatalf("unexpected default harness type for claude-code template: %q", inst.HarnessType)
+		t.Fatalf("unexpected default harness type for claude-code-tui template: %q", inst.HarnessType)
 	}
 
 	// summon observed the harness start working, so the idle title it reports
@@ -211,7 +211,7 @@ func TestRunE2EDelegatesInOneCall(t *testing.T) {
 
 	ctx := context.Background()
 	var stdout, stderr bytes.Buffer
-	code := Run(ctx, []string{"run", "--template", "claude-code", "--name", "one-shot", "--prompt", "do the task", "--timeout", "5s", "--json"}, &stdout, &stderr)
+	code := Run(ctx, []string{"run", "--template", "claude-code-tui", "--name", "one-shot", "--prompt", "do the task", "--timeout", "5s", "--json"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("run failed: code=%d stderr=%q", code, stderr.String())
 	}
@@ -272,7 +272,7 @@ func TestRunE2ETextModeReportsInstanceOnStderr(t *testing.T) {
 
 	ctx := context.Background()
 	var stdout, stderr bytes.Buffer
-	code := Run(ctx, []string{"run", "--template", "claude-code", "--name", "text-mode", "--prompt", "do the task", "--timeout", "5s"}, &stdout, &stderr)
+	code := Run(ctx, []string{"run", "--template", "claude-code-tui", "--name", "text-mode", "--prompt", "do the task", "--timeout", "5s"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("run failed: code=%d stderr=%q", code, stderr.String())
 	}
@@ -308,7 +308,7 @@ func TestRunE2EPromptDefaultDoesNotWaitAndReportsQueuedMS(t *testing.T) {
 
 	ctx := context.Background()
 	var stdout, stderr bytes.Buffer
-	code := Run(ctx, []string{"summon", "--template", "claude-code", "--name", "wait-flag", "--json"}, &stdout, &stderr)
+	code := Run(ctx, []string{"summon", "--template", "claude-code-tui", "--name", "wait-flag", "--json"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("summon failed: code=%d stderr=%q", code, stderr.String())
 	}

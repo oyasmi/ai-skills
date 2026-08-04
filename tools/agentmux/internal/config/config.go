@@ -11,6 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/apperr"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/harnessarg"
 )
 
 const (
@@ -35,67 +36,109 @@ defaults:
     poll_ms: 250
   max_instances: 8
 
+# 模板是「角色」，不是 harness 清单。
+#
+# description 要写清楚：什么场景用它、用它时正确的姿势是什么。编排方按角色选人，
+# 不该在选人这一步纠缠底层 CLI。
+#
+# model + effort 一起构成强度档位；harness_type 和 command 是技术细节：
+#   effort 取值 off / minimal / low / medium / high / xhigh / max，
+#   agentmux 按 harness 翻译成 claude --effort、pi --thinking、
+#   codex -c model_reasoning_effort=，并在目标 CLI 词表更窄时向下夹取。
+#   命令里已经自己写了 --model/--effort/$MODEL/$EFFORT 时，agentmux 不再注入。
 templates:
-  claude-code:
-    description: Claude Code 通用编程智能体
-    command: claude --dangerously-skip-permissions --model $MODEL
-    model: anthropic/claude-sonnet-4.5
-    harness_type: claude-code
-    system_prompt: ""
-    prompt: ""
-    cwd: .
-
-  claude-code-ndjson:
-    description: Claude Code 通用编程智能体（NDJSON 结构化模式）
-    command: claude --dangerously-skip-permissions --model $MODEL
-    model: anthropic/claude-sonnet-4.5
-    harness_type: claude-code-ndjson
-    system_prompt: ""
-    prompt: ""
-    cwd: .
-
-  codex-cli:
-    description: Codex CLI 通用编程智能体
-    command: codex --model $MODEL
-    model: openai/gpt-5.4
-    harness_type: codex-cli
-    system_prompt: ""
-    prompt: ""
-    cwd: .
-
-  codex-cli-execjson:
-    description: Codex CLI 通用编程智能体（execjson 结构化模式）
-    command: codex exec --sandbox workspace-write --skip-git-repo-check
+  planner:
+    description: |
+      规划者。用于复杂、模糊或高风险的改动：先要方案，再动手。
+      正确用法：只授权调查和规划，要求返回实现方案、影响范围、关键假设、风险
+      和验证方法；方案审查通过后再交给 builder 实现。read-only sandbox 是硬约束，
+      它改不了工作树，可以和 builder 共享同一个 cwd。
+    command: codex exec --sandbox read-only --skip-git-repo-check
     model: ""
+    effort: max
     harness_type: codex-cli-execjson
     system_prompt: ""
     prompt: ""
     cwd: .
 
-  gemini-cli:
-    description: Gemini CLI 通用编程智能体
-    command: gemini
-    model: ""
-    harness_type: gemini-cli
+  builder:
+    description: |
+      实现者。用于边界清楚、可验证的常规编码任务：同一轮要求实现、测试和自查。
+      正确用法：给出目标、相关路径、必须保持的行为和可判真假的完成标准；
+      它会写文件，因此并行时必须每个实例一个独立 worktree 和不同的 --cwd。
+    command: claude --dangerously-skip-permissions
+    model: sonnet
+    effort: medium
+    harness_type: claude-code-ndjson
     system_prompt: ""
     prompt: ""
     cwd: .
 
-  pi-rpc:
-    description: pi 通用编程智能体（RPC 结构化模式）
-    command: pi --model $MODEL
-    model: anthropic/claude-sonnet-4.5
+  builder-hard:
+    description: |
+      硬骨头实现者。用于 builder 已经连续纠偏失败、或改动跨模块且约束复杂的任务。
+      正确用法：与 builder 相同，但要附上前一次失败的具体证据和已确认的约束，
+      不要让它从零重新调查。比 builder 慢且贵，不要作为默认入口。
+    command: claude --dangerously-skip-permissions
+    model: opus
+    effort: xhigh
+    harness_type: claude-code-ndjson
+    system_prompt: ""
+    prompt: ""
+    cwd: .
+
+  reviewer:
+    description: |
+      独立审查者。用于高风险改动或长时间自主执行之后的验收，刻意与 builder 用
+      不同的模型家族，避免同源盲区。
+      正确用法：给出原始完成标准和变更范围，要求只报告影响正确性、明确需求或
+      安全性的缺口，不追逐风格偏好。read-only sandbox 保证它不会顺手"修好"问题。
+    command: codex exec --sandbox read-only --skip-git-repo-check
+    model: ""
+    effort: xhigh
+    harness_type: codex-cli-execjson
+    system_prompt: ""
+    prompt: ""
+    cwd: .
+
+  scout:
+    description: |
+      侦察兵。用于便宜快速的事实查询：某个符号定义在哪、某个配置当前是什么值、
+      某个命令的实际输出。
+      正确用法：一次只问一个能被单一事实回答的问题，不要交给它需要判断的任务；
+      它的价值是省 token 和时间，一旦需要推理就换 planner。
+    command: pi
+    model: ""
+    effort: low
     harness_type: pi-rpc
     system_prompt: ""
     prompt: ""
     cwd: .
 
-  文档专家:
-    description: 面向需求梳理、设计说明、使用文档和交付说明的专家
-    command: codex --model $MODEL
-    model: openai/gpt-5.4
-    harness_type: codex-cli
+  documenter:
+    description: |
+      文档作者。用于需求梳理、设计说明、使用文档和交付说明。
+      正确用法：指明读者、文档要回答的问题和落地路径；要求结构稳定、边界清楚、
+      示例可直接执行，而不是复述代码。
+    command: claude --dangerously-skip-permissions
+    model: sonnet
+    effort: medium
+    harness_type: claude-code-ndjson
     system_prompt: 你负责生成结构稳定、边界清楚、可执行的技术文档。
+    prompt: ""
+    cwd: .
+
+  # 唯一一个按 harness 而不是按角色命名的模板：人要旁观、接管或调试终端时用它，
+  # 只有这种场景值得付 TUI 的代价（启动提示、按键、状态推断都更脆弱）。
+  claude-code-tui:
+    description: |
+      可 attach 的终端实例。仅用于人工旁观、接管或调试；不要用于批量委派。
+      正确用法：先 summon，再 capture 确认启动页/升级提示已经过去，最后才 prompt。
+    command: claude --dangerously-skip-permissions
+    model: sonnet
+    effort: medium
+    harness_type: claude-code
+    system_prompt: ""
     prompt: ""
     cwd: .
 `
@@ -151,9 +194,15 @@ type CaptureDefaults struct {
 }
 
 type Template struct {
-	Description  string            `yaml:"description"`
-	Command      string            `yaml:"command"`
-	Model        string            `yaml:"model"`
+	Description string `yaml:"description"`
+	Command     string `yaml:"command"`
+	Model       string `yaml:"model"`
+	// Effort is how hard the model should think, in agentmux's own vocabulary
+	// (see harnessarg.Levels). It pairs with Model to make a template a role
+	// rather than a harness listing: a reviewer can be the strongest model at
+	// the highest effort while a builder stays mid-range. Which flag carries it
+	// is a per-harness detail resolved by harnessarg.
+	Effort       string            `yaml:"effort"`
 	SystemPrompt string            `yaml:"system_prompt"`
 	Prompt       string            `yaml:"prompt"`
 	CWD          string            `yaml:"cwd"`
@@ -286,7 +335,12 @@ func (c Config) Validate() error {
 		if strings.TrimSpace(tpl.Command) == "" {
 			return apperr.New("config_invalid", fmt.Sprintf("template %q command must not be empty", name))
 		}
-
+		// A misspelled effort is a typo worth failing the load over: it would
+		// otherwise resolve to "whatever the harness defaults to", which looks
+		// like the role working and is invisible in every later command.
+		if effort := strings.TrimSpace(tpl.Effort); effort != "" && !harnessarg.ValidLevel(effort) {
+			return apperr.New("config_invalid", fmt.Sprintf("template %q effort %q is unknown; valid levels are %s", name, effort, harnessarg.LevelList()))
+		}
 	}
 	return nil
 }
@@ -318,6 +372,7 @@ type ResolvedTemplate struct {
 	Description  string
 	Command      string
 	Model        string
+	Effort       string
 	SystemPrompt string
 	Prompt       string
 	CWD          string
@@ -329,6 +384,7 @@ type ResolvedTemplate struct {
 type Override struct {
 	CWD          *string
 	Model        *string
+	Effort       *string
 	Command      *string
 	SystemPrompt *string
 	Prompt       *string
@@ -344,6 +400,7 @@ func Resolve(cfg Config, templateName string, override Override) (ResolvedTempla
 		Description:  tpl.Description,
 		Command:      firstNonEmpty(tpl.Command),
 		Model:        firstNonEmpty(tpl.Model),
+		Effort:       strings.TrimSpace(tpl.Effort),
 		SystemPrompt: tpl.SystemPrompt,
 		Prompt:       tpl.Prompt,
 		CWD:          firstNonEmpty(tpl.CWD, cfg.Defaults.CWD),
@@ -362,6 +419,9 @@ func Resolve(cfg Config, templateName string, override Override) (ResolvedTempla
 	}
 	if override.Model != nil {
 		rt.Model = *override.Model
+	}
+	if override.Effort != nil {
+		rt.Effort = strings.TrimSpace(*override.Effort)
 	}
 	if override.Command != nil {
 		rt.Command = *override.Command

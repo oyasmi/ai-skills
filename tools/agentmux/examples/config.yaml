@@ -22,64 +22,135 @@ defaults:
     poll_ms: 250
   max_instances: 8
 
+# 模板是「角色」，不是 harness 清单。
+#
+# 编排方按角色选人：description 要写清楚「什么场景用它」和「用它时正确的姿势」，
+# 因为这是 `template list --json` 唯一能让调用方判断该不该用这个角色的依据。
+# harness_type 和 command 是实现这个角色的技术细节，不该出现在选人这一步的判断里。
+#
+# model + effort 一起构成角色的强度档位：
+#
+#   effort 取值（由弱到强）：off / minimal / low / medium / high / xhigh / max
+#
+#   agentmux 把它翻译成各 harness 自己的写法，并在目标 CLI 词表更窄时向下夹取：
+#
+#   | agentmux | claude --effort | pi --thinking | codex -c model_reasoning_effort= |
+#   | ---      | ---             | ---           | ---                              |
+#   | off      | low（夹取）      | off           | none                             |
+#   | minimal  | low（夹取）      | minimal       | low（夹取，见下）                  |
+#   | low      | low             | low           | low                              |
+#   | medium   | medium          | medium        | medium                           |
+#   | high     | high            | high          | high                             |
+#   | xhigh    | xhigh           | xhigh         | xhigh                            |
+#   | max      | max             | max           | max                              |
+#
+#   claude 只有 low..max，没有比 low 更弱的档；codex 虽然有 minimal，但哪些模型
+#   支持 minimal 是逐模型的，不支持时直接返回 400，因此统一夹取到 low。
+#   gemini-cli 没有 thinking 开关，给它设 effort 会直接报错，而不是被静默忽略。
+#   `agentmux doctor` 会把发生夹取的模板标出来。
+#
+#   model 同理：agentmux 按 harness 追加 --model。命令里已经自己写了
+#   --model/-m/--effort/--thinking/-c model_reasoning_effort= 时不再注入；
+#   写了 $MODEL/$EFFORT 占位符时按占位符的位置展开。
+#   `agentmux inspect <名称>` 显示实际启动的命令，用它确认注入结果。
+#
+# 想临时调档不必改配置：`summon`/`run --model <model> --effort <level>`。
 templates:
-  claude-code:
-    description: Claude Code 通用编程智能体
-    command: claude --dangerously-skip-permissions --model $MODEL
-    model: anthropic/claude-sonnet-4.5
-    harness_type: claude-code
-    system_prompt: ""
-    prompt: ""
-    cwd: .
-
-  claude-code-ndjson:
-    description: Claude Code 通用编程智能体（NDJSON 结构化模式）
-    command: claude --dangerously-skip-permissions --model $MODEL
-    model: anthropic/claude-sonnet-4.5
-    harness_type: claude-code-ndjson
-    system_prompt: ""
-    prompt: ""
-    cwd: .
-
-  codex-cli:
-    description: Codex CLI 通用编程智能体
-    command: codex --model $MODEL
-    model: openai/gpt-5.4
-    harness_type: codex-cli
-    system_prompt: ""
-    prompt: ""
-    cwd: .
-
-  # command 必须是一个 `codex exec` 前缀，只带父级 flag。
-  # agentmux 会自行追加 `resume <thread_id>`、`--json` 和 `-`。
-  #
-  # 默认不传 --model，交给 codex 自己的配置决定；可用的 model 取决于账号与套餐。
-  # 想固定模型时改成：
-  #   command: codex exec --sandbox workspace-write --skip-git-repo-check --model $MODEL
-  #   model: gpt-5.5
-  codex-cli-execjson:
-    description: Codex CLI 通用编程智能体（execjson 结构化模式）
-    command: codex exec --sandbox workspace-write --skip-git-repo-check
+  planner:
+    description: |
+      规划者。用于复杂、模糊或高风险的改动：先出方案，再动手。
+      正确用法：只授权调查和规划，要求返回实现方案、影响范围、关键假设、风险
+      和验证方法；方案审查通过后再交给 builder 实现。read-only sandbox 是硬约束，
+      它改不了工作树，可以和 builder 共享同一个 cwd。
+    command: codex exec --sandbox read-only --skip-git-repo-check
+    # 留空表示交给 codex 自己的配置决定；想固定就写成 model: gpt-5.6-luna。
     model: ""
+    effort: max
     harness_type: codex-cli-execjson
     system_prompt: ""
     prompt: ""
     cwd: .
 
-  gemini-cli:
-    description: Gemini CLI 通用编程智能体
-    command: gemini
-    model: ""
-    harness_type: gemini-cli
+  builder:
+    description: |
+      实现者。默认入口，用于边界清楚、可验证的常规编码任务：同一轮要求实现、
+      测试和自查。
+      正确用法：给出目标、相关路径、必须保持的行为和可判真假的完成标准；
+      它会写文件，因此并行时必须每个实例一个独立 worktree 和不同的 --cwd。
+    command: claude --dangerously-skip-permissions
+    model: sonnet
+    effort: medium
+    harness_type: claude-code-ndjson
     system_prompt: ""
     prompt: ""
     cwd: .
 
-  文档专家:
-    description: 面向需求梳理、设计说明、使用文档和交付说明的专家
-    command: codex --model $MODEL
-    model: openai/gpt-5.4
-    harness_type: codex-cli
+  builder-hard:
+    description: |
+      硬骨头实现者。用于 builder 已经连续纠偏失败、或改动跨模块且约束复杂的任务。
+      正确用法：与 builder 相同，但要附上前一次失败的具体证据和已确认的约束，
+      不要让它从零重新调查。比 builder 慢且贵，不要作为默认入口。
+    command: claude --dangerously-skip-permissions
+    model: opus
+    effort: xhigh
+    harness_type: claude-code-ndjson
+    system_prompt: ""
+    prompt: ""
+    cwd: .
+
+  reviewer:
+    description: |
+      独立审查者。用于高风险改动或长时间自主执行之后的验收，刻意与 builder 用
+      不同的模型家族，避免同源盲区。
+      正确用法：给出原始完成标准和变更范围，要求只报告影响正确性、明确需求或
+      安全性的缺口，不追逐风格偏好。read-only sandbox 保证它不会顺手"修好"问题。
+    command: codex exec --sandbox read-only --skip-git-repo-check
+    model: ""
+    effort: xhigh
+    harness_type: codex-cli-execjson
+    system_prompt: ""
+    prompt: ""
+    cwd: .
+
+  scout:
+    description: |
+      侦察兵。用于便宜快速的事实查询：某个符号定义在哪、某个配置当前是什么值、
+      某个命令的实际输出。
+      正确用法：一次只问一个能被单一事实回答的问题，不要交给它需要判断的任务；
+      它的价值是省 token 和时间，一旦需要推理就换 planner。
+    command: pi
+    # pi 的 model 用 "provider/id" 形式，例如 zai-coding-cn/glm-4.7；
+    # `pi --list-models` 列出本机可用的组合。
+    model: ""
+    effort: low
+    harness_type: pi-rpc
+    system_prompt: ""
+    prompt: ""
+    cwd: .
+
+  documenter:
+    description: |
+      文档作者。用于需求梳理、设计说明、使用文档和交付说明。
+      正确用法：指明读者、文档要回答的问题和落地路径；要求结构稳定、边界清楚、
+      示例可直接执行，而不是复述代码。
+    command: claude --dangerously-skip-permissions
+    model: sonnet
+    effort: medium
+    harness_type: claude-code-ndjson
     system_prompt: 你负责生成结构稳定、边界清楚、可执行的技术文档。
+    prompt: ""
+    cwd: .
+
+  # 唯一一个按 harness 而不是按角色命名的模板：人要旁观、接管或调试终端时用它，
+  # 只有这种场景值得付 TUI 的代价（启动提示、按键、状态推断都更脆弱）。
+  claude-code-tui:
+    description: |
+      可 attach 的终端实例。仅用于人工旁观、接管或调试；不要用于批量委派。
+      正确用法：先 summon，再 capture 确认启动页/升级提示已经过去，最后才 prompt。
+    command: claude --dangerously-skip-permissions
+    model: sonnet
+    effort: medium
+    harness_type: claude-code
+    system_prompt: ""
     prompt: ""
     cwd: .

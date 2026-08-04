@@ -13,6 +13,7 @@ import (
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/capture"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/config"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/execjsonctl"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/harnessarg"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/instance"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/logx"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/naming"
@@ -70,6 +71,7 @@ type SummonInput struct {
 	Name         string
 	CWD          *string
 	Model        *string
+	Effort       *string
 	Command      *string
 	SystemPrompt *string
 	Prompt       *string
@@ -116,6 +118,7 @@ func (s Service) TemplateList() []map[string]string {
 		out = append(out, map[string]string{
 			"name":         name,
 			"model":        tpl.Model,
+			"effort":       tpl.Effort,
 			"cwd":          tpl.CWD,
 			"description":  tpl.Description,
 			"harness_type": firstNonBlank(tpl.HarnessType, s.Config.Defaults.HarnessType),
@@ -185,10 +188,14 @@ func (s Service) resumeStructured(ctx context.Context, h harness, old instance.I
 		return instance.Instance{}, err
 	}
 	now := time.Now()
-	command := expandCommand(resolved.Command, resolved.Model, cwd, name, resolved.Name)
+	command, err := buildCommand(resolved, cwd, name)
+	if err != nil {
+		return instance.Instance{}, err
+	}
 	inst := old
 	inst.SessionID = sessionID
 	inst.Model = resolved.Model
+	inst.Effort = resolved.Effort
 	inst.HarnessType = resolved.HarnessType
 	inst.SystemPrompt = resolved.SystemPrompt
 	inst.CWD = cwd
@@ -208,15 +215,13 @@ func (s Service) Summon(ctx context.Context, in SummonInput) (SummonResult, erro
 	resolved, err := config.Resolve(s.Config, in.TemplateName, config.Override{
 		CWD:          in.CWD,
 		Model:        in.Model,
+		Effort:       in.Effort,
 		Command:      in.Command,
 		SystemPrompt: in.SystemPrompt,
 		Prompt:       in.Prompt,
 	})
 	if err != nil {
 		return SummonResult{}, err
-	}
-	if in.Model != nil && resolved.HarnessType == execjsonctl.HarnessType && !strings.Contains(resolved.Command, "$MODEL") {
-		return SummonResult{}, apperr.New("invalid_arguments", "summon --model has no effect for codex-cli-execjson unless the template command contains $MODEL")
 	}
 	cwd, err := config.ExpandPath(resolved.CWD)
 	if err != nil {
@@ -271,13 +276,17 @@ func (s Service) Summon(ctx context.Context, in SummonInput) (SummonResult, erro
 		if err != nil {
 			return err
 		}
-		command := expandCommand(resolved.Command, resolved.Model, cwd, name, resolved.Name)
+		command, err := buildCommand(resolved, cwd, name)
+		if err != nil {
+			return err
+		}
 		now := time.Now()
 		inst := instance.Instance{
 			Name:            name,
 			Template:        resolved.Name,
 			SessionID:       sessionID,
 			Model:           resolved.Model,
+			Effort:          resolved.Effort,
 			HarnessType:     resolved.HarnessType,
 			SystemPrompt:    resolved.SystemPrompt,
 			CWD:             cwd,
@@ -1256,9 +1265,36 @@ func quote(v string) string {
 	return "'" + strings.ReplaceAll(v, "'", "'\"'\"'") + "'"
 }
 
-func expandCommand(command, model, cwd, instanceName, templateName string) string {
+// buildCommand turns a template's command into the argv a harness is actually
+// launched with: placeholders expanded, and the role's model and effort added in
+// whatever spelling this harness understands.
+//
+// Injection is what makes `model:` and `effort:` mean something on their own. It
+// used to be that only a `$MODEL` placeholder had any effect, so a template that
+// named a model without one silently ran the CLI's default -- a role that looked
+// configured and was not.
+func buildCommand(resolved config.ResolvedTemplate, cwd, instanceName string) (string, error) {
+	extra, err := harnessarg.Flags(resolved.HarnessType, resolved.Command, resolved.Model, resolved.Effort)
+	if err != nil {
+		return "", err
+	}
+	command := strings.TrimSpace(resolved.Command)
+	if len(extra) > 0 {
+		command += " " + strings.Join(extra, " ")
+	}
+	return expandCommand(command, resolved.HarnessType, resolved.Model, resolved.Effort, cwd, instanceName, resolved.Name), nil
+}
+
+func expandCommand(command, harnessType, model, effort, cwd, instanceName, templateName string) string {
+	// $EFFORT expands to the harness's own spelling, so a hand-placed
+	// placeholder and an injected flag carry the same value.
+	effortValue := effort
+	if mapped, ok := harnessarg.EffortValue(harnessType, effort); ok {
+		effortValue = mapped
+	}
 	r := strings.NewReplacer(
 		"$MODEL", model,
+		"$EFFORT", effortValue,
 		"$CWD", cwd,
 		"$INSTANCE", instanceName,
 		"$TEMPLATE", templateName,

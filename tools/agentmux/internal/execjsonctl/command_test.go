@@ -14,7 +14,7 @@ func TestValidateCommandAcceptsPlainExecPrefix(t *testing.T) {
 		"codex exec --sandbox=workspace-write -C /tmp --add-dir /tmp/shared",
 		"/usr/local/bin/codex exec -s read-only",
 	} {
-		if err := validateCommand(cmd); err != nil {
+		if err := ValidateCommand(cmd); err != nil {
 			t.Fatalf("expected %q to be valid, got %v", cmd, err)
 		}
 	}
@@ -41,7 +41,7 @@ func TestValidateCommandRejectsUnsupportedInput(t *testing.T) {
 	}
 	for name, cmd := range cases {
 		t.Run(name, func(t *testing.T) {
-			err := validateCommand(cmd)
+			err := ValidateCommand(cmd)
 			if err == nil {
 				t.Fatalf("expected %q to be rejected", cmd)
 			}

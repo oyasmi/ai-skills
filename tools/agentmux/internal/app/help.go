@@ -7,7 +7,7 @@ func usage() string {
 usage:
   agentmux template list [--json]
   agentmux list [--all] [--json]
-  agentmux summon --template <template-name> [--name <instance-name>] [--cwd <path>] [--model <model>] [--command <shell-command>] [--system-prompt <text>] [--prompt <text>] [--json]
+  agentmux summon --template <template-name> [--name <instance-name>] [--cwd <path>] [--model <model>] [--effort <level>] [--command <shell-command>] [--system-prompt <text>] [--prompt <text>] [--json]
   agentmux inspect <instance-name> [--json]
   agentmux prompt <instance-name> [--text <text> | --stdin] [--key <key>] [--json]
   agentmux run --template <template-name> [--name <instance-name>] [--cwd <path>] (--prompt <text> | --prompt-file <path> | --stdin) [--timeout <duration-or-ms>] [--history <limit>] [--trace] [--raw] [--detach] [--json]
@@ -107,9 +107,10 @@ Global flags:
 Examples:
   agentmux doctor --json
   agentmux template list --json
-  agentmux run --template codex-cli-execjson --cwd ~/work/project --prompt "..." --json
-  agentmux summon --template claude-code --name 编码助手-A --cwd ~/work/project
-  agentmux summon --template claude-code --name 编码助手-A --prompt "先阅读项目并总结结构" --json
+  agentmux run --template builder --cwd ~/work/project --prompt "..." --json
+  agentmux run --template planner --cwd ~/work/project --prompt "..." --timeout 15m --json
+  agentmux summon --template builder --name 编码助手-A --cwd ~/work/project
+  agentmux summon --template builder --name 编码助手-A --prompt "先阅读项目并总结结构" --json
   agentmux capture 编码助手-A --history 120 --json
   echo "补充两行说明" | agentmux prompt 编码助手-A --stdin --json
   agentmux prompt 编码助手-A --text "继续" --json
@@ -150,8 +151,13 @@ Usage:
   agentmux template list [--json]
 
 Output:
-  Text mode prints a table with template name, model, harness type, cwd, and description.
-  JSON mode returns {"ok", "command", "data.templates"}.
+  Text mode prints a table with template name, model, effort, harness type, cwd, and the first line of the description.
+  JSON mode returns {"ok", "command", "data.templates"}, with the full multi-line description.
+
+Notes:
+  A template is a role, not a harness: its description says which situations it is for and how to drive it correctly, while harness_type and command are the technical detail behind it.
+  model and effort together are the role's strength dial. effort is one of low, medium, high, xhigh, max, plus minimal and off where the harness has them; agentmux translates it per harness (claude --effort, pi --thinking, codex -c model_reasoning_effort=) and clamps into a narrower vocabulary rather than refusing the role.
+  Read the full description before delegating: text mode truncates it to one line, so use --json when choosing a role.
 
 Examples:
   agentmux template list
@@ -198,6 +204,7 @@ Flags:
   --name <instance-name>    Instance name; generated when omitted
   --cwd <path>              Working directory for the agent
   --model <model>           Override the template model
+  --effort <level>          Override how hard the model thinks: low, medium, high, xhigh, max, plus minimal and off where the harness has them
   --command <shell-command> Override the template command
   --system-prompt <text>    Override the template system prompt
   --prompt <text>           The task to send
@@ -223,10 +230,11 @@ Behavior:
   If another active instance already points at the same cwd, data.warnings includes "cwd_shared:<that-instance-name>"; see agentmux help summon.
 
 Examples:
-  agentmux run --template codex-cli-execjson --cwd ~/work/project --prompt "修复登录重试" --json
-  agentmux run --template claude-code-ndjson --name 审查-A --prompt-file ./task.md --timeout 10m --json
-  cat task.md | agentmux run --template pi-rpc --stdin --json
-  agentmux run --template codex-cli-execjson --name 分片-A --cwd /wt/a --prompt "..." --detach --json
+  agentmux run --template builder --cwd ~/work/project --prompt "修复登录重试" --json
+  agentmux run --template reviewer --name 审查-A --prompt-file ./task.md --timeout 10m --json
+  agentmux run --template builder --name 硬骨头-A --effort xhigh --model opus --prompt-file ./task.md --timeout 20m --json
+  cat task.md | agentmux run --template scout --stdin --json
+  agentmux run --template builder --name 分片-A --cwd /wt/a --prompt "..." --detach --json
 `)
 }
 
@@ -244,6 +252,7 @@ Optional flags:
   --name <instance-name>    Reuse or create a specific instance name
   --cwd <path>              Override working directory
   --model <model>           Override template model
+  --effort <level>          Override how hard the model thinks: low, medium, high, xhigh, max, plus minimal and off where the harness has them
   --command <command>       Override template command
   --system-prompt <text>    Override template system prompt
   --prompt <text>           Send a prompt in this summon call
@@ -254,13 +263,14 @@ Behavior:
   If the named instance exists with the same template, summon reuses it.
   If the named instance exists with a different template, summon returns an error and you must use a new name.
   If --prompt is provided, summon sends the prompt for both new and reused instances.
-  Reusing an instance does not mutate its stored config.
+  Reusing an instance does not mutate its stored config, so --model and --effort are ignored on reuse; use a new name to change a role's strength.
+  --model and --effort become the harness's own flags, appended to the template command: claude and pi take --model, codex takes --model plus -c model_reasoning_effort=<level>, and effort is claude --effort or pi --thinking. A command that already sets one of those itself, or positions $MODEL or $EFFORT by hand, is left alone. inspect shows the command that was actually launched.
   If another active instance already points at the same cwd, data.warnings includes "cwd_shared:<that-instance-name>". This does not block the summon: agentmux isolates agent processes, not files, so two writers sharing a checkout will race on the same working tree and Git state, but a read-only reviewer sharing a cwd with a writer is legitimate. Give parallel writers their own worktree and --cwd instead.
 
 Examples:
-  agentmux summon --template claude-code
-  agentmux summon --template claude-code --name 编码助手-A --cwd ~/work/project
-  agentmux summon --template claude-code --name 编码助手-A --prompt "继续修复测试" --json
+  agentmux summon --template builder
+  agentmux summon --template builder --name 编码助手-A --cwd ~/work/project
+  agentmux summon --template builder --name 编码助手-A --effort high --prompt "继续修复测试" --json
 `)
 }
 

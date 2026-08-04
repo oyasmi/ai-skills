@@ -26,6 +26,14 @@
 
 命令疑似不存在时：运行 `agentmux version --json` 和 `agentmux help <command>`；`version --json` 的 `features` 列出这个二进制实际支持什么，不要靠试命令看报错来猜。
 
-`codex-cli-execjson` 出现 `config_invalid` 时，把模板命令改成只带受支持父级 flag 的普通 `codex exec` 前缀，例如 `--sandbox`、`--cd`、`--add-dir`、`--color`、`--skip-git-repo-check` 或 `--model`。移除 `--json`、`-o`、`resume`、`review`、`--ask-for-approval`、`--ephemeral`、位置参数、管道和重定向；turn 参数由 agentmux 注入。
+`codex-cli-execjson` 出现 `config_invalid` 时，把模板命令改成只带受支持父级 flag 的普通 `codex exec` 前缀，例如 `--sandbox`、`--cd`、`--add-dir`、`--color`、`--skip-git-repo-check`、`--model` 或 `-c key=value`。移除 `--json`、`-o`、`resume`、`review`、`--ask-for-approval`、`--ephemeral`、位置参数、管道和重定向；turn 参数由 agentmux 注入。
 
-`summon --model` 在 `codex-cli-execjson` 上失败时，检查模板命令是否包含 `$MODEL`。没有占位符时，使用 Codex 的默认模型，或修改模板命令加入 `--model $MODEL`。
+`config_invalid` 提到 effort 时，是模板里的 `effort` 不在 `off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max` 之内——这在配置加载阶段就会失败，所有命令都会受影响，必须先改配置。
+
+`invalid_arguments` 提到 model 或 effort 时，说明这个角色的强度设置落不到它的 harness 上：
+
+- `harness "gemini-cli" cannot be told how hard to think`：`gemini-cli` 没有 thinking 开关，去掉这个模板的 `effort`。
+- `harness "<x>" has no known model flag`（或 effort 同类信息）：这个 `harness_type` 不在 agentmux 的 flag 映射表里。要么改成已支持的 harness，要么在模板命令里自己写 `$MODEL`/`$EFFORT` 占位符指定位置。
+- `invalid value for --effort`：取值拼错了，按提示里列出的档位改。
+
+档位在目标 CLI 词表更窄时会被向下夹取（例如 claude 的 `off`/`minimal` 都变成 `low`），这不是错误：`agentmux doctor` 会标出发生夹取的模板，`agentmux inspect <名称>` 的 `command` 显示实际启动的命令。

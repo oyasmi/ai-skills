@@ -122,8 +122,10 @@ agentmux template list [--json]
 
 1. `NAME`
 2. `MODEL`
-3. `CWD`
-4. `DESCRIPTION`
+3. `EFFORT`
+4. `HARNESS`
+5. `CWD`
+6. `DESCRIPTION`
 
 JSON 示例：
 
@@ -134,15 +136,23 @@ JSON 示例：
   "data": {
     "templates": [
       {
-        "name": "claude-code",
-        "model": "openai/gpt-5.4",
+        "name": "builder",
+        "model": "sonnet",
+        "effort": "medium",
+        "harness_type": "claude-code-ndjson",
         "cwd": ".",
-        "description": "面向复杂编码与调试任务的通用专家"
+        "description": "实现者。用于边界清楚、可验证的常规编码任务……\n正确用法：……\n"
       }
     ]
   }
 }
 ```
+
+说明：
+
+1. 模板是角色，`description` 要回答「什么场景用它」和「用它时正确的姿势」，因此通常是多行
+2. 文本表格只显示 `description` 的第一行以保持表格形状；选角色时用 `--json` 读完整内容
+3. `model` + `effort` 是角色的强度档位，`harness_type` 是实现它的技术细节
 
 ---
 
@@ -204,9 +214,9 @@ JSON 示例：
     "instances": [
       {
         "name": "编码助手-A",
-        "template": "claude-code",
+        "template": "builder",
         "status": "idle",
-        "model": "openai/gpt-5.4",
+        "model": "sonnet",
         "cwd": "/Users/me/work/project",
         "updated_at": "2026-03-20T10:00:00+08:00"
       }
@@ -234,11 +244,12 @@ agentmux summon --template <template-name> [flags]
 1. `--template <name>`
 2. `--name <instance-name>`
 3. `--cwd <path>`
-4. `--model <provider/model>`
-5. `--command <shell-command>`
-6. `--system-prompt <text>`
-7. `--prompt <text>`
-8. `--json`
+4. `--model <model>`
+5. `--effort <level>`
+6. `--command <shell-command>`
+7. `--system-prompt <text>`
+8. `--prompt <text>`
+9. `--json`
 
 参数原则：
 
@@ -250,7 +261,7 @@ agentmux summon --template <template-name> [flags]
 
 1. 实例名未提供时自动生成
 2. 若同名实例已存在，则直接复用
-3. 复用时不修改既有实例配置
+3. 复用时不修改既有实例配置，因此 `--model` 和 `--effort` 对复用到的实例无效；要换强度档位就换一个实例名
 4. 若本次指定了 `--prompt` 且实例是新建的，则发送首次消息
 5. 若本次指定了 `--prompt` 且实例是复用的，则也发送该次消息
 6. 复用实例时不重复发送既有 `system_prompt`
@@ -270,8 +281,10 @@ agentmux summon --template <template-name> [flags]
 3. `status`
 4. `data.template`
 5. `data.model`
-6. `data.cwd`
-7. `data.warnings`（仅当存在时出现）
+6. `data.effort`
+7. `data.harness_type`
+8. `data.cwd`
+9. `data.warnings`（仅当存在时出现）
 
 JSON 示例：
 
@@ -283,12 +296,40 @@ JSON 示例：
   "reused": false,
   "status": "idle",
   "data": {
-    "template": "claude-code",
-    "model": "openai/gpt-5.4",
+    "template": "builder",
+    "model": "sonnet",
+    "effort": "medium",
+    "harness_type": "claude-code-ndjson",
     "cwd": "/Users/me/work/project"
   }
 }
 ```
+
+### 4.3.2 `--model` 与 `--effort` 如何落到 harness 上
+
+`--model` 和 `--effort`（以及模板里的 `model:`/`effort:`）不是元数据，agentmux 会把它们
+翻译成目标 harness 自己的 flag 追加到 `command` 后面：
+
+| harness | model | effort |
+| --- | --- | --- |
+| `claude-code`、`claude-code-ndjson` | `--model <值>` | `--effort <值>` |
+| `codex-cli`、`codex-cli-execjson` | `--model <值>` | `-c model_reasoning_effort=<值>` |
+| `pi-rpc` | `--model <值>` | `--thinking <值>` |
+| `gemini-cli` | `--model <值>` | 不支持，设置即报 `invalid_arguments` |
+
+`--effort` 取值为 `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`；目标 CLI 词表更窄时
+向下夹取（`claude` 没有比 `low` 更弱的档；`codex` 的 `minimal` 逐模型可用，因此统一夹到 `low`）。
+非法取值在参数解析阶段就报错，不会退化成 harness 默认值。
+
+不注入的三种情况：
+
+1. `command` 里已经写了对应 flag（`--model`/`-m`/`--effort`/`--thinking`/`-c model_reasoning_effort=`）
+2. `command` 里写了 `$MODEL`/`$EFFORT` 占位符——按占位符的位置展开，`$EFFORT` 展开为
+   harness 自己的档位写法
+3. `pi-rpc` 的 model 形如 `<id>:<thinking>`，thinking 已经在 model pattern 里
+
+用 `agentmux inspect <名称>` 的 `command` 字段确认实际启动的命令；`effort` 字段是角色声明的
+原始档位，两者不一致即说明发生了夹取。`agentmux doctor` 会提前把发生夹取的模板标出来。
 
 ---
 
@@ -309,16 +350,17 @@ agentmux run --template <template-name> (--prompt <text> | --prompt-file <path> 
 1. `--template <name>`（必填）
 2. `--name <instance-name>`
 3. `--cwd <path>`
-4. `--model <provider/model>`
-5. `--command <shell-command>`
-6. `--system-prompt <text>`
-7. `--prompt <text>` / `--prompt-file <path>` / `--stdin`（三选一，必填）
-8. `--timeout <duration-or-ms>`，默认 `5m`
-9. `--history <limit>`（结构化 harness 上隐含 `--trace`）
-10. `--trace`
-11. `--raw`（隐含 `--trace`）
-12. `--detach`：发送 prompt 后立即返回，不等待也不读取输出；不能与 `--history`/`--trace`/`--raw` 同时使用
-13. `--json`
+4. `--model <model>`
+5. `--effort <level>`
+6. `--command <shell-command>`
+7. `--system-prompt <text>`
+8. `--prompt <text>` / `--prompt-file <path>` / `--stdin`（三选一，必填）
+9. `--timeout <duration-or-ms>`，默认 `5m`
+10. `--history <limit>`（结构化 harness 上隐含 `--trace`）
+11. `--trace`
+12. `--raw`（隐含 `--trace`）
+13. `--detach`：发送 prompt 后立即返回，不等待也不读取输出；不能与 `--history`/`--trace`/`--raw` 同时使用
+14. `--json`
 
 行为：
 
@@ -334,7 +376,7 @@ agentmux run --template <template-name> (--prompt <text> | --prompt-file <path> 
 
 1. `instance`、`reused`、`status`
 2. `data.elapsed_ms`、`data.queued_ms`
-3. `data.template`、`data.harness_type`、`data.cwd`
+3. `data.template`、`data.model`、`data.effort`、`data.harness_type`、`data.cwd`
 4. 非 `--detach`：`data.content`（agent 的产出）、`data.timed_out`；结构化 harness 默认只含状态字段（`usage`、`turn_state`、`last_error`、`next_cursor` 等），`messages` 需要 `--trace`/`--raw`/`--history`
 5. `--detach`：`data.detached: true`，不产生 `data.content`/`data.timed_out`
 6. 若目标 `cwd` 已有其他存活实例，`data.warnings` 含 `cwd_shared:<name>`
@@ -349,14 +391,15 @@ JSON 示例：
   "reused": false,
   "status": "idle",
   "data": {
-    "template": "codex-cli-execjson",
-    "harness_type": "codex-cli-execjson",
+    "template": "builder",
+    "model": "sonnet",
+    "effort": "medium",
+    "harness_type": "claude-code-ndjson",
     "cwd": "/Users/me/work/project",
     "content": "已修复重试逻辑，go test ./internal/auth/... 通过。",
     "timed_out": false,
     "elapsed_ms": 42137,
     "queued_ms": 0,
-    "turn_state": "completed",
     "last_error": "",
     "next_cursor": "18422"
   }
@@ -383,18 +426,20 @@ agentmux inspect <instance-name> [--json]
 2. `template`
 3. `status`
 4. `model`
-5. `cwd`
-6. `command`
-7. `session_id`
-8. `created_at`
-9. `updated_at`
-10. `last_activity_at`
-11. `first_prompt_sent`
+5. `effort`
+6. `cwd`
+7. `command`
+8. `session_id`
+9. `created_at`
+10. `updated_at`
+11. `last_activity_at`
+12. `first_prompt_sent`
 
 说明：
 
 1. `inspect` 是单实例状态查询接口
 2. 若调用方只想知道当前 `idle/busy/exited/lost` 与相关元数据，优先使用 `inspect`
+3. `command` 是实际启动的命令，已经包含 agentmux 为 `model`/`effort` 注入的 flag；`effort` 是角色声明的原始档位。两者不一致说明该 harness 的档位词表更窄，发生了夹取（见 4.3.2）
 
 JSON 示例：
 
@@ -406,10 +451,11 @@ JSON 示例：
   "status": "idle",
   "data": {
     "name": "编码助手-A",
-    "template": "claude-code",
-    "model": "openai/gpt-5.4",
+    "template": "builder",
+    "model": "sonnet",
+    "effort": "medium",
     "cwd": "/Users/me/work/project",
-    "command": "codex --model openai/gpt-5.4",
+    "command": "claude --dangerously-skip-permissions --model 'sonnet' --effort medium -p --input-format stream-json ...",
     "session_id": "i_3f8ab2c1",
     "first_prompt_sent": true,
     "created_at": "2026-03-20T09:58:00+08:00",
@@ -797,7 +843,7 @@ JSON 示例：
     "binary_path": "/home/me/.local/bin/agentmux",
     "commands": ["template list", "list", "summon", "run", "inspect", "prompt", "capture", "wait", "attach", "halt", "doctor", "version"],
     "harness_types": ["claude-code", "codex-cli", "gemini-cli", "claude-code-ndjson", "codex-cli-execjson", "pi-rpc"],
-    "features": ["run", "doctor", "version-provenance", "run-wait-if-busy", "wait-multi", "wait-timeout-ok", "wait-observability", "prompt-ack", "capture-since", "capture-raw", "lean-capture", "capture-new-cursor", "run-detach", "wait-collect", "cwd-shared-warning", "tombstones"]
+    "features": ["run", "doctor", "version-provenance", "run-wait-if-busy", "wait-multi", "wait-timeout-ok", "wait-observability", "prompt-ack", "capture-since", "capture-raw", "lean-capture", "capture-new-cursor", "run-detach", "wait-collect", "cwd-shared-warning", "tombstones", "role-effort"]
   }
 }
 ```
@@ -818,7 +864,7 @@ agentmux doctor [--json]
 
 行为：
 
-1. 依次检查：`binary`（这次调用实际运行的版本/构建时间/路径）、`path`（PATH 上是否有另一份 `agentmux` 在遮蔽当前运行的这个）、`paths`（解析出的配置和状态目录）、`state_dir`（可写性）、`registry`（注册表锁可获取）、`config`（配置文件可解析且合法）、每个模板的 `template:<name>`（解析后的命令首个词是否在 PATH 上）、`tmux`（仅当存在需要它的模板时才检查）
+1. 依次检查：`binary`（这次调用实际运行的版本/构建时间/路径）、`path`（PATH 上是否有另一份 `agentmux` 在遮蔽当前运行的这个）、`paths`（解析出的配置和状态目录）、`state_dir`（可写性）、`registry`（注册表锁可获取）、`config`（配置文件可解析且合法）、每个模板的 `template:<name>`（解析后的命令首个词是否在 PATH 上，以及这个 harness 能否表达模板声明的 `model`/`effort`；发生档位夹取时在 detail 里注明）、`tmux`（仅当存在需要它的模板时才检查）
 2. 每项结果是 `ok`、`warn`、`fail` 或 `skip`；只有 `fail` 影响整体结果和退出码
 3. 遇到会阻断后续检查的失败（例如配置解析失败）时提前结束，已收集的结果仍会全部返回
 4. 环境异常导致的疑难问题应先跑 `doctor` 而不是先怀疑是 agentmux 的 bug——多数"文档说的行为和实际不一致"最终会定位到 PATH 上的旧二进制或缺失的外部 CLI，这两者 `doctor` 都能直接指出来

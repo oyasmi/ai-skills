@@ -73,5 +73,10 @@ func featureNames() []string {
 		// Stopped instances stay queryable as tombstones, and `list --all`
 		// shows them.
 		"tombstones",
+		// A template's `model:` and `effort:` are turned into whatever flags the
+		// harness actually accepts, so a role's strength is portable across
+		// harnesses instead of needing a hand-written $MODEL placeholder.
+		// `summon`/`run --effort <level>` override it per call.
+		"role-effort",
 	}
 }

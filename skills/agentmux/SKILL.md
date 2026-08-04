@@ -1,6 +1,6 @@
 ---
 name: agentmux
-description: 通过 `agentmux` CLI 委派和管理外部 AI coding agent：选择 harness、创建或复用实例、编写首次与追加任务指令、等待和读取输出、纠偏、验证交付物以及停止实例。覆盖 `claude-code-ndjson`、`codex-cli-execjson`、`pi-rpc` 等 headless 结构化 harness，也覆盖基于 tmux 的 TUI harness。用户提到 `agentmux`、需要调用其他 CLI coding agent，或需要复用外部 Agent 完成任务时使用。
+description: 通过 `agentmux` CLI 委派和管理外部 AI coding agent：按角色选模板（planner/builder/reviewer 等）、创建或复用实例、编写首次与追加任务指令、等待和读取输出、纠偏、验证交付物以及停止实例。模板声明 model 与 effort（thinking level）档位，agentmux 翻译到 `claude-code-ndjson`、`codex-cli-execjson`、`pi-rpc` 等 headless 结构化 harness 以及基于 tmux 的 TUI harness。用户提到 `agentmux`、需要调用其他 CLI coding agent，或需要复用外部 Agent 完成任务时使用。
 ---
 
 # Agentmux
@@ -10,16 +10,16 @@ description: 通过 `agentmux` CLI 委派和管理外部 AI coding agent：选�
 单个任务，一条命令就够：
 
 ```bash
-agentmux run --template <模板> --cwd <路径> --prompt "<任务契约>" --timeout 10m --json
+agentmux run --template <角色> --cwd <路径> --prompt "<任务契约>" --timeout 10m --json
 ```
 
 `run` = summon + prompt + wait + capture，复用到忙实例时还会先在预算内等它收尾。默认从它开始；只有需要分步控制（中途观察、纠偏）时才拆开用：
 
 ```bash
 agentmux doctor --json                                           # 环境自检：二进制、PATH、配置、模板命令是否都就绪
-agentmux template list --json                                    # 有哪些模板和 harness
+agentmux template list --json                                    # 有哪些角色：读 description 判断该不该用它
 agentmux list --json                                             # 有哪些实例、分别什么状态（--all 含已停止的墓碑）
-agentmux summon --template <模板> --name <名称> --cwd <路径> --prompt "..." --json  # 发出去但不等待
+agentmux summon --template <角色> --name <名称> --cwd <路径> --prompt "..." --json  # 发出去但不等待
 agentmux prompt <名称> --text "..." --json                        # 追加指令
 agentmux wait <名称> --timeout 3m --json                          # 等待；timed_out=true 表示仍在工作
 agentmux wait <A> <B> <C> --mode any --timeout 5m --collect --json  # 并行：谁先完成就带回谁的内容
@@ -28,32 +28,55 @@ agentmux capture <名称> --new --json                              # 只读新�
 agentmux halt <名称> --json                                       # 停止实例
 ```
 
-五条硬规则：
+六条硬规则：
 
 1. 只通过 `agentmux` 管理外部 Agent 实例。不要直接调用 `tmux`，也不要读取 harness 原始日志，除非用户明确要求调试底层实现。
-2. `run` 是默认入口：单路任务直接 `run`；并行时用 `run --detach` 逐个发出（各自独立 `--cwd`），再统一 `wait --mode any --collect`。
-3. `capture --json` 默认已经精简（不含逐条消息轨迹）；只要目的是"看外部 Agent 说了什么"，优先用不带 `--json` 的 `capture`；需要消息轨迹时才加 `--trace`。
-4. `wait` 超时（`timed_out: true`）是「还在工作」，不是失败；继续等即可。
-5. `idle`、`wait` 成功、`capture` 中自信的完成声明，都不能证明交付正确。必须自己读文件、diff、跑验证。
+2. **按角色选模板，不要按 harness 选**。先 `template list --json` 读 `description`（它写明了什么场景用、怎么用才对），再决定用谁。
+3. `run` 是默认入口：单路任务直接 `run`；并行时用 `run --detach` 逐个发出（各自独立 `--cwd`），再统一 `wait --mode any --collect`。
+4. `capture --json` 默认已经精简（不含逐条消息轨迹）；只要目的是"看外部 Agent 说了什么"，优先用不带 `--json` 的 `capture`；需要消息轨迹时才加 `--trace`。
+5. `wait` 超时（`timed_out: true`）是「还在工作」，不是失败；继续等即可。
+6. `idle`、`wait` 成功、`capture` 中自信的完成声明，都不能证明交付正确。必须自己读文件、diff、跑验证。
 
 ## 安装依赖
 
 命令不存在时先看[安装参考](references/install.md)。命令存在但行为可疑时，先跑 `agentmux doctor --json` 而不是怀疑 agentmux 有 bug——多数"文档说的和实际不一致"最终会定位到 PATH 上的旧二进制或缺失的外部 CLI，`doctor` 直接指出来。
 
-## Harness 模型
+## 选角色
 
-先从 `template list --json`、`list --json` 或 `inspect --json` 读取 `harness_type`，再判断实例的输入和完成语义。
+模板是**角色**，不是 harness。选人只看两件事：这个角色适合当前场景吗，用它的正确姿势是什么。两者都写在 `description` 里，因此选人前必须读它：
 
-选择 harness：
+```bash
+agentmux template list --json     # description 是多行的，文本表格只显示第一行，选人要用 --json
+```
 
-| 场景 | 选择 | 理由 |
+角色由 `model` + `effort` 定强度档位（`effort` 由弱到强：`off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`）。一份典型的角色配置长这样，但**以本机 `template list --json` 的实际内容为准，不要假设某个角色一定存在**：
+
+| 角色 | 典型场景 | 典型档位 |
 | --- | --- | --- |
-| 默认：委派可验证的编码任务 | 结构化 harness（`claude-code-ndjson`、`codex-cli-execjson`、`pi-rpc`） | 无终端界面竞态，不需要补 `Enter`，输出可结构化读取 |
-| 多轮追问、需要共享上下文 | `claude-code-ndjson` 或 `pi-rpc` | 长驻进程，`run`/`prompt --wait-if-busy` 会先等当前工作收尾再发送新任务 |
-| 独立 turn、易于并行分片 | `codex-cli-execjson` | 每个 turn 一个进程，turn 之间无进程 |
-| 用户要旁观、接管或调试终端 | `claude-code`、`codex-cli`、`gemini-cli` | 可 `attach`；代价是启动提示、按键和状态推断都更脆弱 |
+| `planner` | 复杂、模糊或高风险改动：先出方案再动手 | 最强模型 + `max`，只读 sandbox |
+| `builder` | 边界清楚、可验证的常规编码任务（默认入口） | 中档模型 + `medium` |
+| `builder-hard` | `builder` 连续纠偏失败、或跨模块的复杂约束 | 最强模型 + `xhigh` |
+| `reviewer` | 高风险改动或长时间自主执行之后的独立验收 | 与 builder 不同的模型家族 + `xhigh`，只读 sandbox |
+| `scout` | 便宜快速的单点事实查询 | 廉价模型 + `low` |
+| `documenter` | 需求梳理、设计说明、使用文档 | 中档模型 + `medium` |
 
-没有特殊理由时优先结构化 harness。只有需要人工 attach，或环境只提供 TUI 时才用 TUI harness。TUI harness 的启动提示处理、按键规则等细节见[harness 内部差异参考](references/harness.md)；三种结构化 harness 各自的进程模型、busy 语义和协议字段差异也在同一份参考里，日常委派不需要展开。
+选人原则：
+
+1. **默认 `builder`**。任务边界清楚、可验证时不要升档，`xhigh`/`max` 只是更慢更贵。
+2. **先规划再实现**：任务复杂、模糊或高风险时先用 `planner` 拿方案，审查通过后把结论作为 `builder` 的任务契约。不要让 `planner` 直接改代码。
+3. **审查要换家族**：`reviewer` 刻意与 `builder` 用不同的模型家族，避免同源盲区。只读角色可以和写入型角色共享 `cwd`。
+4. **纠偏两次仍失败就升档**，而不是继续在同一个实例上重试：换 `builder-hard`，并把已确认的证据和约束带过去。
+5. 只有"人要旁观、接管或调试终端"时才用可 `attach` 的 TUI 角色（通常叫 `claude-code-tui` 之类）；它启动提示多、按键和状态推断都更脆弱。
+
+临时调档不用改配置，也不要为此新建模板：
+
+```bash
+agentmux run --template builder --effort xhigh --model opus --prompt-file ./task.md --timeout 20m --json
+```
+
+`--model`/`--effort` 只在**新建**实例时生效；复用到既有实例时不会改它的配置，要换档位就换一个实例名。
+
+需要判断某个实例的输入和完成语义时，再从 `template list --json`、`list --json` 或 `inspect --json` 读 `harness_type`：结构化 harness（`claude-code-ndjson`、`codex-cli-execjson`、`pi-rpc`）没有终端界面竞态，不需要补 `Enter`；TUI harness（`claude-code`、`codex-cli`、`gemini-cli`）可以 `attach`。它们各自的进程模型、busy 语义、协议字段差异，以及 `model`/`effort` 具体翻译成哪个 flag，见[harness 内部差异参考](references/harness.md)。日常委派不需要展开这一层。
 
 ## 编写任务指令
 
@@ -111,7 +134,7 @@ agentmux halt <名称> --json                                       # 停止实�
 按意图选择命令：
 
 1. `run`：一次性委派一个任务并拿回结果（默认入口）；`--detach` 让它发出即返回，用于并行分片。
-2. `template list`：发现可用模板和角色。
+2. `template list --json`：发现可用角色，并从 `description` 判断该用谁、怎么用。
 3. `list`：查找或扫描现有实例；`--all` 包含已停止的墓碑。
 4. `summon`：创建或复用实例；带 `--prompt` 时发出任务但不等待。
 5. `inspect`：低成本读取单个实例的状态和元数据，对墓碑同样有效。
@@ -126,12 +149,12 @@ agentmux halt <名称> --json                                       # 停止实�
 较长的任务契约写入文件，用 `--prompt-file` 传入，不要塞进命令行：
 
 ```bash
-agentmux run --template claude-code-ndjson --name 审查-A --cwd /path/to/repo --prompt-file /abs/path/task.md --timeout 15m --json
+agentmux run --template reviewer --name 审查-A --cwd /path/to/repo --prompt-file /abs/path/task.md --timeout 15m --json
 ```
 
 遵循以下最小循环：
 
-1. 先 `list --json`；必要时再 `template list --json`。
+1. 先 `list --json` 看有没有能复用的实例；要新建就先 `template list --json` 选角色。
 2. 复用合适的既有实例，否则用明确的名称和 `cwd` 创建实例。
 3. 根据任务目标、上下文、边界和完成定义编写任务指令。
 4. 发送任务指令并耐心 `wait`；需要了解细节时再 `capture`。
@@ -234,7 +257,7 @@ agentmux halt 编码助手-A --immediately --json
 | `process_not_running` / `session_not_found` | 实例已停止或会话缺失 | `inspect --json` 读墓碑的 `end_reason`、`last_error`，再决定是否同名 `summon` 重建 |
 | `instance_busy` | `run`/`prompt --wait-if-busy` 在预算内等到实例仍然忙 | 加大超时预算，或换一个实例名 |
 | `execjson_instance_busy` | 不带 `--wait-if-busy` 直接 `prompt` 撞上正在跑的 turn | 改用 `run` 或 `prompt --wait-if-busy`；不要立即重试，也不要用 `halt` 解锁 |
-| `invalid_arguments` | 参数错误 | 按提示修正；实例名必须写在所有 flag 之前 |
+| `invalid_arguments` | 参数错误；也包括角色的 `model`/`effort` 与它的 harness 不匹配（例如给 `gemini-cli` 设 effort） | 按提示修正；实例名必须写在所有 flag 之前；`--effort` 只接受 `off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max` |
 | `tmux_unavailable` / `config_*` / `registry_*` | 环境或配置问题 | 先跑 `agentmux doctor --json` 定位 |
 
 ## 复用、并行与审查
@@ -244,18 +267,18 @@ agentmux halt 编码助手-A --immediately --json
 并行的标准形态是「`run --detach` 逐个发出，再统一 `wait --collect`」：
 
 ```bash
-agentmux run --template codex-cli-execjson --name wiki审核-Q1to5 --cwd /wt/a --prompt "..." --detach --json
-agentmux run --template codex-cli-execjson --name wiki审核-Q6to10 --cwd /wt/b --prompt "..." --detach --json
+agentmux run --template builder --name wiki审核-Q1to5 --cwd /wt/a --prompt "..." --detach --json
+agentmux run --template builder --name wiki审核-Q6to10 --cwd /wt/b --prompt "..." --detach --json
 agentmux wait wiki审核-Q1to5 wiki审核-Q6to10 --mode any --timeout 5m --collect --json
 ```
 
 用 `--mode any` 先拿到最先完成的分片并开始验收，剩下的继续等；`--collect` 让完成的分片直接带回内容，不用再单独 `capture`。
 
-同一目标且历史仍然相关时复用实例。切换到无关任务，或同一问题连续两次纠偏仍失败时，创建新实例，并在新的首次任务指令中吸收已经确认的证据和约束。
+同一目标且历史仍然相关时复用实例。切换到无关任务，或同一问题连续两次纠偏仍失败时，创建新实例，并在新的首次任务指令中吸收已经确认的证据和约束。连续纠偏失败往往说明档位不够而不是指令不够：换更强的角色（例如 `builder-hard`），或对同一角色加 `--effort xhigh`/更强的 `--model` 新建实例。注意 `--model`/`--effort` 对复用到的实例无效，必须用新的实例名。
 
 Agentmux 隔离的是 Agent 运行实例，不是仓库文件。相同 `cwd` 的实例会共享工作树、Git 状态和构建产物；`summon`/`run` 在目标 `cwd` 已有其他存活实例时会在 `data.warnings` 里给出 `cwd_shared:<name>`（不阻断，只提醒）。不要让多个写入型 Agent 同时修改同一个 checkout；并行写入时为每个实例创建独立 worktree，并传入不同的 `--cwd`。无法隔离工作目录时只保留一个写入者，其他实例只基于稳定快照进行调查或审查。
 
-对高风险改动或长时间自主执行的任务，使用新实例独立审查稳定的 diff。向审查者提供原始完成标准和变更范围，要求只报告影响正确性、明确需求或安全性的缺口，不追逐纯风格偏好。
+对高风险改动或长时间自主执行的任务，用 `reviewer` 角色的新实例独立审查稳定的 diff——它刻意与实现者用不同的模型家族，避免同源盲区。向审查者提供原始完成标准和变更范围，要求只报告影响正确性、明确需求或安全性的缺口，不追逐纯风格偏好。只读角色（`planner`、`reviewer`）通常带 harness 级别的只读约束，因此可以和写入者共享 `cwd`；`cwd_shared` 警告在这种组合下是预期的。
 
 ## 交付验收
 

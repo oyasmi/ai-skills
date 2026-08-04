@@ -13,6 +13,7 @@ import (
 
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/apperr"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/config"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/harnessarg"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/instance"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/output"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/service"
@@ -197,7 +198,20 @@ func checkTemplates(cfg config.Config) []doctorCheck {
 			checks = append(checks, doctorCheck{"template:" + name, "fail", fmt.Sprintf("command %q not found on PATH (harness=%s)", bin, rt.HarnessType)})
 			continue
 		}
-		checks = append(checks, doctorCheck{"template:" + name, "ok", fmt.Sprintf("%s (harness=%s)", bin, rt.HarnessType)})
+		// A role whose model or effort its harness cannot express would run at
+		// the CLI's default and look configured. Say so here rather than letting
+		// the first summon discover it.
+		if _, err := harnessarg.Flags(rt.HarnessType, rt.Command, rt.Model, rt.Effort); err != nil {
+			checks = append(checks, doctorCheck{"template:" + name, "fail", err.Error()})
+			continue
+		}
+		detail := fmt.Sprintf("%s (harness=%s)", bin, rt.HarnessType)
+		if rt.Effort != "" {
+			if value, ok := harnessarg.EffortValue(rt.HarnessType, rt.Effort); ok && value != rt.Effort {
+				detail += fmt.Sprintf("; effort %s clamps to %q on this harness", rt.Effort, value)
+			}
+		}
+		checks = append(checks, doctorCheck{"template:" + name, "ok", detail})
 	}
 	return checks
 }

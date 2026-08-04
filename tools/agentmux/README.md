@@ -56,6 +56,7 @@ Windows 不是首要目标。
 29. `capture --json` 的消息数组默认不返回（见第 19 条）；新增 `capture --new`：像 `--since` 一样只读新增内容，但游标由 agentmux 自己记在实例上并每次前移，调用方不用来回传游标
 30. 新增 `run --detach`：发出任务立即返回，不等待也不读取输出，用于并行分片；新增 `wait --collect`（单实例和多实例都支持）：等到完成后顺带把精简后的输出带回来，并行场景不再需要每个分片单独调一次 `capture`
 31. `summon`/`run` 在目标 `cwd` 已有其他存活实例时，`data.warnings` 会给出 `cwd_shared:<name>`（不阻断）；agentmux 隔离的是 Agent 进程而不是文件，多个写入型实例共享同一个工作目录会在 Git 状态和构建产物上互相竞争
+32. 模板新增 `effort`（`off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`），并且 `model`/`effort` 现在会被翻译成各 harness 自己的 flag 注入到命令里（`claude --effort`、`pi --thinking`、`codex -c model_reasoning_effort=`），不再需要手写 `$MODEL` 占位符；`summon`/`run --effort <level>` 可临时调档，`doctor` 会标出发生档位夹取的模板。配合它把模板从「harness 清单」改成「角色清单」：默认配置提供 planner / builder / builder-hard / reviewer / scout / documenter
 
 命令职责上建议这样理解：
 
@@ -249,32 +250,73 @@ defaults:
     poll_ms: 250
 
 templates:
-  claude-code:
-    description: Claude Code 通用编程智能体
-    command: claude --dangerously-skip-permissions --model $MODEL
-    model: anthropic/claude-sonnet-4.5
-    harness_type: claude-code
+  builder:
+    description: |
+      实现者。默认入口，用于边界清楚、可验证的常规编码任务。
+      正确用法：给出目标、相关路径、必须保持的行为和可判真假的完成标准。
+    command: claude --dangerously-skip-permissions
+    model: sonnet
+    effort: medium
+    harness_type: claude-code-ndjson
     system_prompt: ""
     prompt: ""
     cwd: .
 
-  claude-code-ndjson:
-    description: Claude Code 通用编程智能体（NDJSON 结构化模式）
-    command: claude --dangerously-skip-permissions --model $MODEL
-    model: anthropic/claude-sonnet-4.5
-    harness_type: claude-code-ndjson
+  reviewer:
+    description: |
+      独立审查者。用于高风险改动的验收，刻意与 builder 用不同的模型家族。
+      正确用法：给出原始完成标准和变更范围，只报告影响正确性和安全性的缺口。
+    command: codex exec --sandbox read-only --skip-git-repo-check
+    model: ""
+    effort: xhigh
+    harness_type: codex-cli-execjson
     system_prompt: ""
     prompt: ""
     cwd: .
 ```
 
-Codex CLI 模板建议显式声明 `harness_type`，这样 `busy -> idle` 检测会更精确：
+## 模板是角色，不是 harness 清单
+
+一个模板要回答的是「什么场景用它、用它时正确的姿势是什么」，而不是「它跑哪个 CLI」。
+所以 `description` 写用法（多行没问题，`template list --json` 返回完整内容），
+`model` + `effort` 定强度档位，`harness_type` 和 `command` 是实现细节。
+
+`effort` 取值由弱到强：`off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`。
+agentmux 把它和 `model` 一起翻译成目标 harness 自己的 flag：
+
+| harness | model | effort |
+| --- | --- | --- |
+| `claude-code`、`claude-code-ndjson` | `--model` | `--effort` |
+| `codex-cli`、`codex-cli-execjson` | `--model` | `-c model_reasoning_effort=` |
+| `pi-rpc` | `--model` | `--thinking` |
+| `gemini-cli` | `--model` | 不支持，设置即报错 |
+
+目标 CLI 的档位词表更窄时向下夹取：`claude --effort` 只有 `low..max`，所以 `off`/`minimal`
+都变成 `low`；`codex` 虽然有 `minimal`，但支持它的模型是逐个的，不支持时直接返回 400，
+所以也夹到 `low`。`agentmux doctor` 会把发生夹取的模板标出来，`agentmux inspect <名称>`
+显示实际启动的命令。
+
+命令里已经写了对应 flag（`--model`/`-m`/`--effort`/`--thinking`/`-c model_reasoning_effort=`），
+或者写了 `$MODEL`/`$EFFORT` 占位符时，agentmux 不再注入——手写的命令永远优先。
+占位符也是给 agentmux 还不认识的 harness 留的逃生门。
+
+临时调档不用改配置：
+
+```bash
+agentmux run --template builder --effort xhigh --model opus --prompt-file ./task.md --json
+```
+
+一份完整的角色配置（planner / builder / builder-hard / reviewer / scout / documenter，
+以及唯一按 harness 命名的 `claude-code-tui`）见 [examples/config.yaml](examples/config.yaml)。
+
+## harness 特有的配置约束
+
+Codex CLI 的 TUI 模板建议显式声明 `harness_type`，这样 `busy -> idle` 检测会更精确：
 
 ```yaml
 templates:
-  codex-cli:
-    command: codex --model $MODEL
-    model: openai/gpt-5.4
+  codex-cli-tui:
+    command: codex
     harness_type: codex-cli
 ```
 
@@ -282,9 +324,10 @@ Claude Code NDJSON 模板适合上层编排器使用。它不启动 TUI，不使
 
 ```yaml
 templates:
-  claude-code-ndjson:
-    command: claude --dangerously-skip-permissions --model $MODEL
-    model: anthropic/claude-sonnet-4.5
+  builder:
+    command: claude --dangerously-skip-permissions
+    model: sonnet
+    effort: medium
     harness_type: claude-code-ndjson
 ```
 
@@ -294,9 +337,10 @@ Codex CLI execjson 模板同样不启动 TUI、不使用 tmux，而是每个 tur
 
 ```yaml
 templates:
-  codex-cli-execjson:
-    command: codex exec --sandbox workspace-write --skip-git-repo-check
+  reviewer:
+    command: codex exec --sandbox read-only --skip-git-repo-check
     model: ""
+    effort: xhigh
     harness_type: codex-cli-execjson
 ```
 
@@ -310,7 +354,12 @@ templates:
 4. 含 `--ephemeral`：不落盘 session，会使多轮 `resume` 永久不可用
 5. 含管道、重定向、`&&` 或命令替换
 
-默认模板不传 `--model`，交由 codex 自身配置决定，因为可用模型取决于账号与套餐。需要固定模型时自行加上 `--model $MODEL` 并设置 `model`。
+`model` 留空表示交由 codex 自身配置决定，因为可用模型取决于账号与套餐；写上就会变成 `--model <值>`。
+`effort` 会变成 `-c model_reasoning_effort=<值>`，因此 `-c` 和 `--config` 也在允许的父级 flag 之内——
+想自己指定档位就直接写 `-c model_reasoning_effort=minimal`，注入会让位。
+
+只读角色（`planner`、`reviewer`）用 `--sandbox read-only` 而不是只在 `system_prompt` 里叮嘱：
+那是进程级约束，因此只读角色可以和写入型角色共享同一个 `cwd`。
 
 ## 常用命令
 
@@ -324,31 +373,32 @@ agentmux template list --json
 创建或复用实例：
 
 ```bash
-agentmux summon --template claude-code --name 编码助手-A --cwd ~/work/project
-agentmux summon --template claude-code-ndjson --name 编码助手-N --cwd ~/work/project
+agentmux summon --template builder --name 编码助手-A --cwd ~/work/project
+agentmux summon --template reviewer --name 审查-A --cwd ~/work/project
 ```
 
 一次性委派一个任务（默认入口）：
 
 ```bash
-agentmux run --template codex-cli-execjson --cwd ~/work/project --prompt "修复登录重试" --timeout 10m --json
-agentmux run --template claude-code-ndjson --name 审查-A --prompt-file ./task.md --json
-cat task.md | agentmux run --template pi-rpc --stdin --json
+agentmux run --template builder --cwd ~/work/project --prompt "修复登录重试" --timeout 10m --json
+agentmux run --template reviewer --name 审查-A --prompt-file ./task.md --json
+agentmux run --template builder --effort xhigh --model opus --prompt-file ./hard-task.md --timeout 20m --json
+cat question.md | agentmux run --template scout --stdin --json
 ```
 
 `run` 结束后实例保留，可以继续追加指令或检查；重复 `run` 同一个名字会在同一会话里继续。单路阻塞式的 `run` 不适合并行——它会阻塞到自己这一路结束；并行场景改用 `run --detach`（发出即返回）逐个分片调用，再统一 `wait --mode any --collect`：
 
 ```bash
-agentmux run --template codex-cli-execjson --name 分片-A --cwd /wt/a --prompt "..." --detach --json
-agentmux run --template codex-cli-execjson --name 分片-B --cwd /wt/b --prompt "..." --detach --json
+agentmux run --template builder --name 分片-A --cwd /wt/a --prompt "..." --detach --json
+agentmux run --template builder --name 分片-B --cwd /wt/b --prompt "..." --detach --json
 agentmux wait 分片-A 分片-B --mode any --timeout 5m --collect --json
 ```
 
 创建并发送首条消息：
 
 ```bash
-agentmux summon --template claude-code --name 编码助手-A --prompt "先阅读项目并总结结构" --json
-agentmux summon --template claude-code-ndjson --name 编码助手-N --prompt "先阅读项目并总结结构" --json
+agentmux summon --template builder --name 编码助手-A --prompt "先阅读项目并总结结构" --json
+agentmux summon --template planner --name 方案-A --prompt-file ./investigate.md --json
 ```
 
 查看实例详情：

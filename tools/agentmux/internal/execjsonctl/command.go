@@ -38,15 +38,20 @@ var allowedValueFlags = map[string]bool{
 	"--color":   true,
 	"-m":        true,
 	"--model":   true,
+	// codex has no reasoning-effort flag, so a config override is the only way
+	// to set one; agentmux emits `-c model_reasoning_effort=<level>` itself when
+	// a template declares an effort.
+	"-c":       true,
+	"--config": true,
 }
 
-// validateCommand enforces that the template command is a plain `codex exec`
+// ValidateCommand enforces that the template command is a plain `codex exec`
 // prefix carrying only parent-level flags. Everything after it -- the `resume`
 // subcommand, `--json`, and the `-` stdin marker -- is appended by agentmux.
 //
 // The scan is deliberately token-based rather than a real shell parse: it is
 // better to reject an exotic-but-valid command than to silently mis-handle one.
-func validateCommand(command string) error {
+func ValidateCommand(command string) error {
 	trimmed := strings.TrimSpace(command)
 	if trimmed == "" {
 		return apperr.New("config_invalid", "codex-cli-execjson command must not be empty")

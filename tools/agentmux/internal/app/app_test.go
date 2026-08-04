@@ -237,6 +237,39 @@ func TestParseRunArgsDetach(t *testing.T) {
 	}
 }
 
+func TestParseEffortOverride(t *testing.T) {
+	in, err := parseSummonArgs([]string{"--template", "builder", "--effort", "xhigh"})
+	if err != nil {
+		t.Fatalf("parseSummonArgs: %v", err)
+	}
+	if in.Effort == nil || *in.Effort != "xhigh" {
+		t.Fatalf("expected --effort to reach the summon input, got %v", in.Effort)
+	}
+
+	// run forwards every summon flag, so a role's strength is adjustable in the
+	// one-shot path too.
+	runIn, _, err := parseRunArgs([]string{"--template", "builder", "--prompt", "x", "--effort", "max", "--model", "opus"})
+	if err != nil {
+		t.Fatalf("parseRunArgs: %v", err)
+	}
+	if runIn.Summon.Effort == nil || *runIn.Summon.Effort != "max" {
+		t.Fatalf("expected run to forward --effort, got %v", runIn.Summon.Effort)
+	}
+	if runIn.Summon.Model == nil || *runIn.Summon.Model != "opus" {
+		t.Fatalf("expected run to forward --model, got %v", runIn.Summon.Model)
+	}
+
+	// An unrecognised level would otherwise fall through to the harness default
+	// and read as a working override.
+	_, err = parseSummonArgs([]string{"--template", "builder", "--effort", "ultra"})
+	if err == nil || !strings.Contains(err.Error(), "must be one of") {
+		t.Fatalf("expected an unknown effort to be rejected with the valid list, got %v", err)
+	}
+	if _, err := parseSummonArgs([]string{"--template", "builder", "--effort"}); err == nil {
+		t.Fatal("expected a missing --effort value to fail")
+	}
+}
+
 func TestParseListArgsAcceptsAll(t *testing.T) {
 	includeEnded, err := parseListArgs([]string{"--all"})
 	if err != nil || !includeEnded {

@@ -67,7 +67,7 @@ SKILL.md 中应明确写出以下规则：
 1. 优先使用 `agentmux ... --json`
 2. 不直接调用 `tmux`
 3. 不假设实例不存在，先 `list`
-4. 不假设模板存在，必要时先 `template list`
+4. 不假设某个角色模板存在，必要时先 `template list --json` 并读 `description`
 5. 人类要求实时查看时才使用 `attach`
 6. `capture` 默认读取当前可观测输出；TUI 返回屏幕文本，结构化 harness 返回聚合内容
 7. 使用 `summon` 时，要明确区分“新建”与“复用”
@@ -83,11 +83,13 @@ SKILL.md 中应明确写出以下规则：
 
 skill 应把 `agentmux` 的典型使用流程压缩成固定套路：
 
-### 5.1 查看可用模板
+### 5.1 按角色选模板
 
 ```bash
 agentmux template list --json
 ```
+
+模板是角色而不是 harness：`description` 写明什么场景用它、用它时正确的姿势，`model` + `effort` 是它的强度档位。选人只读这些，不必先关心 `harness_type`。需要临时升降档时用 `summon`/`run --model --effort`，不要为此新建模板。
 
 ### 5.2 查看现有实例
 
@@ -98,19 +100,19 @@ agentmux list --json
 ### 5.3 创建或复用实例
 
 ```bash
-agentmux summon --template claude-code --name 编码助手-A --cwd /path --json
+agentmux summon --template builder --name 编码助手-A --cwd /path --json
 ```
 
 首次任务：
 
 ```bash
-agentmux summon --template codex-cli-execjson --name 登录修复-A --cwd /path --prompt "工作模式：实现。修复登录超时后的错误重试；先阅读 AGENTS.md 和 internal/auth/；不要改动公开 API；完成后运行 go test ./internal/auth/... 并报告证据。" --json
+agentmux summon --template builder --name 登录修复-A --cwd /path --prompt "工作模式：实现。修复登录超时后的错误重试；先阅读 AGENTS.md 和 internal/auth/；不要改动公开 API；完成后运行 go test ./internal/auth/... 并报告证据。" --json
 ```
 
 复用并顺手发送一条消息：
 
 ```bash
-agentmux summon --template codex-cli-execjson --name 登录修复-A --prompt "观察到：go test ./internal/auth/... 中 TestRetryTimeout 仍失败。需要修正：超时后只重试一次。保持公开 API 不变，并重新运行该测试。" --json
+agentmux summon --template builder --name 登录修复-A --prompt "观察到：go test ./internal/auth/... 中 TestRetryTimeout 仍失败。需要修正：超时后只重试一次。保持公开 API 不变，并重新运行该测试。" --json
 ```
 
 ### 5.4 获取实例详情
@@ -268,7 +270,7 @@ skill 应提醒使用它的 Agent：
 
 SKILL.md 应包含这些部分：
 
-1. 基本规则和 harness 模型
+1. 基本规则和角色选择（模板是角色，不是 harness 清单）
 2. 标准编排循环
 3. 首次与追加任务指令的核心契约
 4. 启动、观察、等待和中断规则
@@ -298,7 +300,7 @@ SKILL.md 不应包含：
 
 1. `display_name`: `AgentMux`
 2. `short_description`: 简洁表达“委派并管理外部 CLI coding agent”
-3. `default_prompt`: 用一句中文说明选择 harness、创建或复用实例、发送有完成标准的任务指令并直接验收
+3. `default_prompt`: 用一句中文说明按角色选模板、创建或复用实例、发送有完成标准的任务指令并直接验收
 
 `default_prompt` 必须明确提及 `$agentmux`。详细协议差异留在 `SKILL.md`，不要把 UI 元数据扩写成第二份操作手册。
 

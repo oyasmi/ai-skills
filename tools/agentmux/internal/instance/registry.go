@@ -22,10 +22,15 @@ const (
 )
 
 type Instance struct {
-	Name            string            `json:"name"`
-	Template        string            `json:"template"`
-	SessionID       string            `json:"session_id"`
-	Model           string            `json:"model"`
+	Name      string `json:"name"`
+	Template  string `json:"template"`
+	SessionID string `json:"session_id"`
+	Model     string `json:"model"`
+	// Effort is the role's thinking level in agentmux's own vocabulary. The
+	// harness's translated spelling lives in Command, so a reader can tell a
+	// clamped level ("max" recorded, `--effort high` launched) from an honored
+	// one without re-deriving the mapping.
+	Effort          string            `json:"effort,omitempty"`
 	HarnessType     string            `json:"harness_type,omitempty"`
 	SystemPrompt    string            `json:"system_prompt"`
 	CWD             string            `json:"cwd"`

@@ -80,9 +80,12 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 			return 0
 		}
 		w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "NAME\tMODEL\tHARNESS\tCWD\tDESCRIPTION")
+		fmt.Fprintln(w, "NAME\tMODEL\tEFFORT\tHARNESS\tCWD\tDESCRIPTION")
 		for _, item := range items {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", item["name"], item["model"], item["harness_type"], item["cwd"], item["description"])
+			// A role's description explains when to use it and how, so it is
+			// routinely several lines. The table shows the first line to stay a
+			// table; `template list --json` carries the whole thing.
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", item["name"], item["model"], item["effort"], item["harness_type"], item["cwd"], firstLine(item["description"]))
 		}
 		_ = w.Flush()
 		return 0
@@ -119,6 +122,7 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 			data := map[string]any{
 				"template":     res.Instance.Template,
 				"model":        res.Instance.Model,
+				"effort":       res.Instance.Effort,
 				"cwd":          res.Instance.CWD,
 				"harness_type": res.Instance.HarnessType,
 			}
@@ -158,6 +162,8 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 		if jsonMode {
 			data := map[string]any{
 				"template":     res.Instance.Template,
+				"model":        res.Instance.Model,
+				"effort":       res.Instance.Effort,
 				"harness_type": res.Instance.HarnessType,
 				"cwd":          res.Instance.CWD,
 				"elapsed_ms":   res.ElapsedMS,
@@ -220,6 +226,7 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 		fmt.Fprintf(stdout, "template: %s\n", inst.Template)
 		fmt.Fprintf(stdout, "status: %s\n", inst.Status)
 		fmt.Fprintf(stdout, "model: %s\n", inst.Model)
+		fmt.Fprintf(stdout, "effort: %s\n", inst.Effort)
 		fmt.Fprintf(stdout, "cwd: %s\n", inst.CWD)
 		fmt.Fprintf(stdout, "command: %s\n", inst.Command)
 		fmt.Fprintf(stdout, "session_id: %s\n", inst.SessionID)
@@ -396,3 +403,11 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 }
 
 func boolPtr(v bool) *bool { return &v }
+
+// firstLine keeps a multi-line value printable inside a tab-separated table.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return strings.TrimSpace(s[:i])
+	}
+	return strings.TrimSpace(s)
+}

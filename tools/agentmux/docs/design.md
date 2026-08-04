@@ -117,17 +117,20 @@ tools/agentmux/
 因此模板包含两类信息：
 
 1. 角色配置
-   - 模板名
+   - 模板名（角色名，例如 `planner`、`builder`、`reviewer`）
+   - 说明：什么场景用它、用它时正确的姿势
+   - 强度档位：model + effort
    - 默认 system prompt
    - 默认首次 prompt
    - 默认工作目录策略
 2. harness 配置
    - 启动命令
-   - model
+   - harness type
    - shell
    - env
 
-这比把模板直接命名成 `codex` 或 `claude` 更符合使用场景。
+这比把模板直接命名成 `codex` 或 `claude` 更符合使用场景：调用方按角色选人，用哪个 CLI、
+档位落到哪个 flag 上都是实现细节，由 agentmux 负责翻译。
 
 ---
 
@@ -172,19 +175,22 @@ tools/agentmux/
 - `description`
 - `command`
 - `model`
+- `effort`
 - `system_prompt`
 - `prompt`
 - `cwd`
 - `shell`
 - `env`
+- `harness_type`
 
 说明：
 
-1. `command` 是 harness 启动命令，例如 `codex --model $MODEL`
-2. `model` 是 `<provider>/<model_name>`
-3. `system_prompt` 是首次消息前缀
-4. `prompt` 是 `summon --prompt` 未显式覆盖时使用的首次任务文本
-5. `cwd` 是默认工作目录
+1. `command` 是 harness 启动命令，例如 `claude --dangerously-skip-permissions`
+2. `model` 的取值格式由目标 harness 决定，不做统一约定
+3. `effort` 是 harness 中立的思考档位（`off`..`max`），由 agentmux 翻译成各 harness 自己的 flag
+4. `system_prompt` 是首次消息前缀
+5. `prompt` 是 `summon --prompt` 未显式覆盖时使用的首次任务文本
+6. `cwd` 是默认工作目录
 
 ### 6.2 AgentInstance
 
@@ -194,6 +200,7 @@ tools/agentmux/
 - `template`
 - `session_id`
 - `model`
+- `effort`
 - `system_prompt`
 - `cwd`
 - `command`
@@ -432,7 +439,7 @@ agentmux halt 编码助手-A --json
 同名复用规则：
 
 1. 默认复用
-2. 若调用时额外传入 `cwd/model/command/system_prompt` 等覆盖参数，而实例已存在，则不修改现有实例配置
+2. 若调用时额外传入 `cwd/model/effort/command/system_prompt` 等覆盖参数，而实例已存在，则不修改现有实例配置
 3. 若复用时传入 `--prompt`，也要发送该消息
 4. 返回结果中需明确标记 `reused: true|false`
 
@@ -609,26 +616,35 @@ defaults:
     poll_ms: 250
 
 templates:
-  claude-code:
-    description: Claude Code 通用编程智能体
-    command: claude --dangerously-skip-permissions --model $MODEL
-    model: anthropic/claude-sonnet-4.5
+  builder:
+    description: |
+      实现者。边界清楚、可验证的常规编码任务，同一轮实现 + 测试 + 自查。
+    command: claude --dangerously-skip-permissions
+    model: sonnet
+    effort: medium
+    harness_type: claude-code-ndjson
     system_prompt: ""
     prompt: ""
     cwd: .
 
-  codex-cli:
-    description: Codex CLI 通用编程智能体
-    command: codex --model $MODEL
-    model: openai/gpt-5.4
+  reviewer:
+    description: |
+      独立审查者。高风险改动的验收，刻意与 builder 用不同的模型家族。
+    command: codex exec --sandbox read-only --skip-git-repo-check
+    model: ""
+    effort: xhigh
+    harness_type: codex-cli-execjson
     system_prompt: ""
     prompt: ""
     cwd: .
 
   文档专家:
-    description: 面向需求梳理、设计文档与说明文档的专家
-    command: codex --model $MODEL
-    model: openai/gpt-5.4
+    description: |
+      文档作者。需求梳理、设计说明、使用文档和交付说明。
+    command: claude --dangerously-skip-permissions
+    model: sonnet
+    effort: medium
+    harness_type: claude-code-ndjson
     system_prompt: 你负责生成清晰、可执行、结构稳定的技术文档。
     prompt: ""
     cwd: .

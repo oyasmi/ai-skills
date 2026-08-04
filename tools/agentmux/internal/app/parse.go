@@ -9,6 +9,7 @@ import (
 
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/apperr"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/capture"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/harnessarg"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/service"
 )
 
@@ -40,6 +41,18 @@ func parseSummonArgs(args []string) (service.SummonInput, error) {
 				return in, apperr.New("invalid_arguments", "missing value for --model")
 			}
 			in.Model = &args[i]
+		case "--effort":
+			i++
+			if i >= len(args) {
+				return in, apperr.New("invalid_arguments", "missing value for --effort")
+			}
+			// Reject a bad level here rather than at launch: an unknown level
+			// would otherwise fall through to the harness default, which looks
+			// like the override worked.
+			if !harnessarg.ValidLevel(args[i]) {
+				return in, apperr.New("invalid_arguments", "invalid value for --effort: must be one of "+harnessarg.LevelList())
+			}
+			in.Effort = &args[i]
 		case "--command":
 			i++
 			if i >= len(args) {

@@ -1,6 +1,36 @@
 # Harness 内部差异参考
 
-只在需要理解某个 harness 的具体行为差异时读这里。日常选型看 SKILL.md 的选择表就够。
+只在需要理解某个 harness 的具体行为差异时读这里。日常按角色选模板，不需要展开这一层。
+
+## model 与 effort 落到各 harness 上的方式
+
+模板里的 `model:`/`effort:`（以及 `summon`/`run --model --effort`）不是元数据：agentmux 把它们
+翻译成目标 harness 自己的 flag，追加在模板 `command` 后面。
+
+| harness | model | effort |
+| --- | --- | --- |
+| `claude-code`、`claude-code-ndjson` | `--model <值>` | `--effort <值>` |
+| `codex-cli`、`codex-cli-execjson` | `--model <值>` | `-c model_reasoning_effort=<值>` |
+| `pi-rpc` | `--model <值>` | `--thinking <值>` |
+| `gemini-cli` | `--model <值>` | 不支持，设置即报 `invalid_arguments` |
+
+档位取值由弱到强是 `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`，目标 CLI 词表更窄时向下夹取：
+
+| agentmux | claude | pi | codex |
+| --- | --- | --- | --- |
+| `off` | `low` | `off` | `none` |
+| `minimal` | `low` | `minimal` | `low` |
+| `low` / `medium` / `high` / `xhigh` / `max` | 同名 | 同名 | 同名 |
+
+`claude --effort` 没有比 `low` 更弱的档；`codex` 虽然有 `minimal`，但支持它的模型是逐个的，
+不支持时直接返回 400，因此统一夹到 `low`。
+
+不注入的三种情况：模板 `command` 里已经写了对应 flag；写了 `$MODEL`/`$EFFORT` 占位符
+（按占位符位置展开，`$EFFORT` 展开为 harness 自己的写法）；`pi-rpc` 的 model 形如 `<id>:<thinking>`。
+
+排查时：`inspect` 的 `command` 是实际启动的命令，`effort` 是角色声明的原始档位，两者不一致
+即说明发生了夹取；`doctor` 会提前把发生夹取的模板标出来。model 值的合法性由目标 CLI 决定，
+写错了通常表现为 harness 启动即失败或 `last_error` 里的 400。
 
 ## 三种结构化 harness
 
@@ -29,7 +59,7 @@
 - 对新建的 TUI harness，尤其是 Claude Code，优先分开执行 `summon -> capture/inspect -> prompt`，避免启动页或升级提示截获任务指令：
 
   ```bash
-  agentmux summon --template claude-code --name wiki审核-A --cwd /path/to/repo --json
+  agentmux summon --template claude-code-tui --name wiki审核-A --cwd /path/to/repo --json
   agentmux capture wiki审核-A --history 10
   agentmux prompt wiki审核-A --text "请阅读 /absolute/path/to/task.md 并按其中的范围和完成标准执行" --json
   ```

@@ -14,8 +14,10 @@ import (
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/capture"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/config"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/execjsonctl"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/harnessarg"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/instance"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/ndjsonctl"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/rpcctl"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/tmuxctl"
 )
 
@@ -915,27 +917,207 @@ func TestSummonRejectsReuseAcrossTemplates(t *testing.T) {
 	}
 }
 
-func TestSummonRejectsModelOverrideWhenExecJSONCommandHasNoPlaceholder(t *testing.T) {
+// A role's model and effort must reach the harness without the template author
+// having to know where the flag goes. Before injection existed, a template that
+// named a model without a $MODEL placeholder ran the CLI's default while every
+// command still reported the configured model.
+func TestBuildCommandInjectsModelAndEffortPerHarness(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		harnessType string
+		command     string
+		model       string
+		effort      string
+		want        string
+	}{
+		{
+			name:        "claude ndjson takes --model and --effort",
+			harnessType: ndjsonctl.HarnessType,
+			command:     "claude --dangerously-skip-permissions",
+			model:       "opus",
+			effort:      "max",
+			want:        "claude --dangerously-skip-permissions --model 'opus' --effort max",
+		},
+		{
+			name:        "claude clamps a level it does not have",
+			harnessType: claudeCodeHarnessType,
+			command:     "claude",
+			effort:      "minimal",
+			want:        "claude --effort low",
+		},
+		{
+			name:        "codex effort is a config override, not a flag",
+			harnessType: execjsonctl.HarnessType,
+			command:     "codex exec --sandbox read-only --skip-git-repo-check",
+			model:       "gpt-5.6-luna",
+			effort:      "xhigh",
+			want:        "codex exec --sandbox read-only --skip-git-repo-check --model 'gpt-5.6-luna' -c model_reasoning_effort=xhigh",
+		},
+		{
+			name:        "codex spells off as none",
+			harnessType: execjsonctl.HarnessType,
+			command:     "codex exec",
+			effort:      "off",
+			want:        "codex exec -c model_reasoning_effort=none",
+		},
+		{
+			name:        "pi calls it --thinking",
+			harnessType: rpcctl.HarnessType,
+			command:     "pi",
+			model:       "zai-coding-cn/glm-5.2",
+			effort:      "high",
+			want:        "pi --model 'zai-coding-cn/glm-5.2' --thinking high",
+		},
+		{
+			name:        "a hand-written flag wins over injection",
+			harnessType: ndjsonctl.HarnessType,
+			command:     "claude --model haiku --effort low",
+			model:       "opus",
+			effort:      "max",
+			want:        "claude --model haiku --effort low",
+		},
+		{
+			name:        "a $MODEL placeholder is honored where it sits",
+			harnessType: ndjsonctl.HarnessType,
+			command:     "claude --model $MODEL --verbose",
+			model:       "sonnet",
+			effort:      "high",
+			want:        "claude --model sonnet --verbose --effort high",
+		},
+		{
+			name:        "a $EFFORT placeholder is honored where it sits",
+			harnessType: rpcctl.HarnessType,
+			command:     "pi --thinking $EFFORT",
+			effort:      "max",
+			want:        "pi --thinking max",
+		},
+		{
+			name:        "pi thinking folded into the model pattern is left alone",
+			harnessType: rpcctl.HarnessType,
+			command:     "pi",
+			model:       "zai-coding-cn/glm-5.2:high",
+			effort:      "max",
+			want:        "pi --model 'zai-coding-cn/glm-5.2:high'",
+		},
+		{
+			name:        "a codex config override already in the command wins",
+			harnessType: execjsonctl.HarnessType,
+			command:     "codex exec -c model_reasoning_effort=medium",
+			effort:      "max",
+			want:        "codex exec -c model_reasoning_effort=medium",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := buildCommand(config.ResolvedTemplate{
+				Name:        "role",
+				Command:     tc.command,
+				Model:       tc.model,
+				Effort:      tc.effort,
+				HarnessType: tc.harnessType,
+			}, "/tmp/work", "role-a")
+			if err != nil {
+				t.Fatalf("buildCommand: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("command mismatch\n got: %s\nwant: %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// An injected effort has to survive codex exec's command-prefix validation,
+// which rejects flags it does not recognise. Building the command in the
+// service and validating it in the controller are far enough apart that only an
+// end-to-end assertion catches a mismatch.
+func TestInjectedCodexEffortPassesExecJSONCommandValidation(t *testing.T) {
+	t.Parallel()
+
+	command, err := buildCommand(config.ResolvedTemplate{
+		Name:        "reviewer",
+		Command:     "codex exec --sandbox read-only --skip-git-repo-check",
+		Model:       "gpt-5.6-luna",
+		Effort:      "max",
+		HarnessType: execjsonctl.HarnessType,
+	}, "/tmp/work", "reviewer-a")
+	if err != nil {
+		t.Fatalf("buildCommand: %v", err)
+	}
+	if err := execjsonctl.ValidateCommand(command); err != nil {
+		t.Fatalf("codex rejected its own injected flags: %v", err)
+	}
+}
+
+// A harness agentmux has no flag table for cannot honor a role's strength. The
+// error names the escape hatch instead of leaving the setting silently inert.
+func TestSummonRejectsModelOnAHarnessWithNoKnownFlag(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
 	svc, _ := newTestService(t, &fakeTmux{sessions: map[string]bool{}})
-	svc.Config.Templates["codex-headless"] = config.Template{
-		Command:     "codex exec --sandbox workspace-write --skip-git-repo-check",
-		HarnessType: execjsonctl.HarnessType,
+	svc.Config.Templates["exotic"] = config.Template{
+		Command:     "some-agent --run",
+		HarnessType: "some-agent",
+		Model:       "whatever",
 		CWD:         svc.Config.Defaults.CWD,
 	}
 
-	_, err := svc.Summon(ctx, SummonInput{
-		TemplateName: "codex-headless",
-		Name:         "codex",
-		Model:        strPtr("gpt-5.1-codex"),
-	})
+	_, err := svc.Summon(ctx, SummonInput{TemplateName: "exotic", Name: "exotic-a"})
 	if err == nil {
-		t.Fatal("expected --model override to be rejected without $MODEL")
+		t.Fatal("expected a model on an unknown harness to be rejected")
 	}
 	if code := apperr.Code(err); code != "invalid_arguments" {
 		t.Fatalf("expected invalid_arguments, got %s", code)
+	}
+	if !strings.Contains(err.Error(), "$MODEL") {
+		t.Fatalf("error must point at the escape hatch, got: %v", err)
+	}
+}
+
+// gemini has a model flag but no thinking knob, so a role must not be able to
+// ask it for one and believe it happened.
+func TestSummonRejectsEffortOnAHarnessThatCannotThinkHarder(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	svc, _ := newTestService(t, &fakeTmux{sessions: map[string]bool{}})
+	svc.Config.Templates["gemini"] = config.Template{
+		Command:     "gemini",
+		HarnessType: geminiCLIHarnessType,
+		Effort:      "high",
+		CWD:         svc.Config.Defaults.CWD,
+	}
+
+	_, err := svc.Summon(ctx, SummonInput{TemplateName: "gemini", Name: "gemini-a"})
+	if err == nil {
+		t.Fatal("expected effort on gemini-cli to be rejected")
+	}
+	if code := apperr.Code(err); code != "invalid_arguments" {
+		t.Fatalf("expected invalid_arguments, got %s", code)
+	}
+}
+
+// Every harness this binary can drive must be in the flag table; otherwise a
+// role pointed at it silently loses its model and effort.
+func TestEveryHarnessTypeHasAModelAndEffortMapping(t *testing.T) {
+	t.Parallel()
+
+	for _, harnessType := range HarnessTypes() {
+		if !harnessarg.SupportsModel(harnessType) {
+			t.Errorf("harness %q has no model mapping", harnessType)
+		}
+		// gemini-cli genuinely has no thinking knob; every other harness does.
+		if harnessType == geminiCLIHarnessType {
+			continue
+		}
+		for _, level := range harnessarg.Levels() {
+			if _, ok := harnessarg.EffortValue(harnessType, level); !ok {
+				t.Errorf("harness %q cannot express effort %q", harnessType, level)
+			}
+		}
 	}
 }
 
@@ -1611,11 +1793,12 @@ func newTestService(t *testing.T, tmux tmuxClient) (Service, string) {
 		},
 		Templates: map[string]config.Template{
 			"worker": {
-				Command: "echo test",
-				Model:   "openai/gpt-5.4",
-				CWD:     dir,
-				Shell:   "/bin/bash -lc",
-				Env:     map[string]string{},
+				Command:     "echo test",
+				Model:       "sonnet",
+				HarnessType: claudeCodeHarnessType,
+				CWD:         dir,
+				Shell:       "/bin/bash -lc",
+				Env:         map[string]string{},
 			},
 		},
 	}
