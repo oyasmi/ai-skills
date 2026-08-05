@@ -14,7 +14,8 @@ description: 使用 `agentmux` CLI 把任务委派给一个或多个外部 AI co
 3. 只委派可与当前工作分离、且能独立验收的任务。默认只用一个最小足够角色；只有任务确实需要独立判断、并行分片或多阶段交付时才组合多个角色。
 4. 单路任务优先使用 `run`；只有需要异步并行或分步观察、纠偏时才拆成 `summon`、`prompt`、`wait` 和 `capture`。
 5. 等待超时表示实例仍在工作，不表示失败。不要仅因耗时长或状态仍为 `busy` 就中断。
-6. 外部 Agent 的完成声明不是验收证据。直接检查文件、diff 和产物，并亲自运行与风险相称的验证。
+6. 多实例 `wait` 中，真正超时仍是 `ok: true`；但任一实例失败会使顶层 `ok: false` 和退出码非零，不能把失败当成超时处理。
+7. 外部 Agent 的完成声明不是验收证据。直接检查文件、diff 和产物，并亲自运行与风险相称的验证。
 
 ## 标准流程
 
@@ -30,7 +31,10 @@ agentmux list --json
 
 - `doctor` 检查当前二进制、PATH、配置、模板命令和外部依赖。
 - `template list --json` 返回完整角色说明；不要假设某个模板一定存在。
-- `list --json` 显示可复用实例；`--all` 还显示已停止的墓碑。
+- `template list` 在配置文件尚不存在时也能读取内置模板，且不会为这次只读查询创建配置或 state 文件。
+- `list --json` 返回稳定的精简实例摘要，不包含 prompt、环境变量或 transport 内部字段；`--all` 还显示已停止的墓碑。
+- `inspect --json` 返回诊断所需的稳定字段，但不暴露 `system_prompt` 和 `env`。
+- JSON 和详细文本中的时间使用运行机器的本地时区；面向 Agent 时优先解析 JSON，不要假设时间是 UTC。
 
 命令不存在时读取[安装与环境自检](references/install.md)。
 
@@ -121,7 +125,7 @@ agentmux run --template builder --name 分片-B --cwd /worktree/b --prompt-file 
 agentmux wait 分片-A 分片-B --mode any --timeout 5m --collect --json
 ```
 
-用 `--mode any` 先验收最先完成的分片；需要等全部完成时用 `--mode all`。实例名必须写在 `wait` 的 flags 之前。
+用 `--mode any` 先验收最先完成的分片；需要等全部完成时用 `--mode all`。`wait` 的实例名和 flags 可以混排。
 
 ### 5. 观察、等待和纠偏
 
@@ -131,6 +135,10 @@ agentmux wait <名称> --timeout 3m --json
 agentmux capture <名称>               # 聚合文本，默认首选
 agentmux capture <名称> --new --json  # 只读结构化 harness 的新增消息
 ```
+
+`wait` 的实例名和 flags 可以按常见命令行习惯混排，例如
+`agentmux wait --timeout 3m <名称> --json`。`attach` 是交互式命令：TUI
+实例连接 tmux，结构化 harness 跟随输出事件流，且不支持 `--json`。
 
 读取 `wait` 结果时：
 

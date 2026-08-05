@@ -12,7 +12,7 @@
 | `instance_busy` | `run` 或 `prompt --wait-if-busy` 在给定预算内等到实例仍然忙 | 加大 `--timeout`/`--wait-if-busy`，或换一个实例名；不要立即重试 |
 | `execjson_instance_busy` | 直接用 `prompt`（不带 `--wait-if-busy`）撞上正在跑的 turn，任务指令没有发出 | 用 `prompt --wait-if-busy <duration>` 重发，或先 `wait` 再原样重发；不要用 `halt` 解锁 |
 | `invalid_key` | 按键不在白名单 | 改用 `Enter`、`C-c`、`Escape`、`Up`、`Down`、`Tab` |
-| `invalid_arguments` | 参数错误 | 按提示修正；注意实例名必须写在所有 flag 之前；`--new` 与 `--since` 互斥；`--detach` 不能与 `--history`/`--trace`/`--raw` 同时使用 |
+| `invalid_arguments` | 参数错误 | 按提示修正；实例名和 flag 可以混排；`attach` 不支持 `--json`；`--new` 与 `--since` 互斥；`--detach` 不能与 `--history`/`--trace`/`--raw` 同时使用 |
 | `tmux_unavailable` | tmux 不可用或命令失败 | 报告环境问题；先跑 `agentmux doctor --json` 确认 |
 | `config_invalid` / `config_parse_error` / `config_io_error` | 配置问题 | 见下面的模板命令修复说明；必要时请用户检查配置 |
 | `registry_io_error` / `registry_parse_error` / `registry_lock_error` | agentmux 自身状态文件异常 | 重试一次；仍失败则报告给用户，不要反复重试 |
@@ -20,7 +20,7 @@
 | `instance_changed` | 发送期间实例被其他进程替换 | 重新 `inspect --json` 后再决定 |
 | `internal_error` | 未归类错误 | 报告给用户，不要静默重试 |
 
-`wait` 超时不表现为错误：它返回 `ok: true` 和 `data.timed_out: true`，按"仍在工作"处理。
+`wait` 真正到达 deadline 时不表现为错误：它返回 `ok: true` 和 `data.timed_out: true`，按"仍在工作"处理。多实例 `wait` 中，失败项仍会和其他实例结果一起返回，但顶层 `ok` 为 `false`、退出码非零；只有真正到达 deadline 才设置 `data.timed_out: true`。
 
 实例停止后不会从记录中消失，而是保留为墓碑：`instance_not_found` 表示这个名字从来不存在（多半是名字写错），`process_not_running` 表示它确实存在过但已经停止，`inspect` 仍能读到停止原因。排查外部 Agent "消失"时先 `inspect --json`，再看 `list --all --json`。
 
