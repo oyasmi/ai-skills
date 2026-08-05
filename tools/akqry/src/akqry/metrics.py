@@ -12,6 +12,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 # A calendar gap wider than this is longer than any regular market break
@@ -21,6 +22,8 @@ GAP_WARNING_DAYS = 12
 
 def _validated_prices(prices: pd.Series) -> pd.Series:
     series = pd.to_numeric(prices.copy(), errors="coerce").dropna()
+    if not np.isfinite(series.to_numpy(dtype=float)).all():
+        raise ValueError("Prices must be finite and strictly positive.")
     if len(series) < 2:
         raise ValueError("At least two valid prices are required.")
     if not series.index.is_monotonic_increasing:
@@ -100,9 +103,10 @@ def align_price_series(series: dict[str, pd.Series]) -> pd.DataFrame:
 
 def alignment_report(series: dict[str, pd.Series]) -> dict[str, Any]:
     """Report what an inner join discarded, so a comparison can state its sample."""
+    original_counts = {name: int(len(value)) for name, value in series.items()}
     prepared = {name: _validated_prices(value) for name, value in series.items()}
     aligned = align_price_series(series)
-    dropped = {name: int(len(value) - len(aligned)) for name, value in prepared.items()}
+    dropped = {name: original_counts[name] - int(len(aligned)) for name in prepared}
     return {
         "names": list(prepared),
         "per_series_observations": {name: int(len(value)) for name, value in prepared.items()},
@@ -125,6 +129,10 @@ def performance_summary(prices: pd.Series, periods_per_year: int) -> dict[str, A
     series = _validated_prices(prices)
     returns = simple_returns(series)
     diagnostics = gap_report(prices)
+    volatility = returns.std(ddof=1) * math.sqrt(periods_per_year) if len(returns) >= 2 else None
+    warnings = list(diagnostics["warnings"])
+    if volatility is None:
+        warnings.append("Annualized volatility is unavailable with fewer than two returns.")
     return {
         "observations": int(len(series)),
         "return_observations": int(len(returns)),
@@ -136,8 +144,8 @@ def performance_summary(prices: pd.Series, periods_per_year: int) -> dict[str, A
         "start_price": float(series.iloc[0]),
         "end_price": float(series.iloc[-1]),
         "cumulative_return": float(series.iloc[-1] / series.iloc[0] - 1.0),
-        "annualized_volatility": float(returns.std(ddof=1) * math.sqrt(periods_per_year)),
+        "annualized_volatility": float(volatility) if volatility is not None else None,
         "max_drawdown": max_drawdown(series),
         "periods_per_year": periods_per_year,
-        "warnings": diagnostics["warnings"],
+        "warnings": warnings,
     }

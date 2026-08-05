@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 
 FAKE_MODULE = '''
+from __future__ import annotations
+
 import os
 import time
 
@@ -60,6 +62,19 @@ def fund_etf_spot_demo() -> pd.DataFrame:
     """
     _log("etf")
     return pd.DataFrame({"代码": ["510050"], "最新价": [3.5]})
+
+
+def typed_demo(n: int = 1, labels: list[int] | None = None, enabled: bool = False) -> pd.DataFrame:
+    """A future-annotation fixture for parameter coercion tests."""
+    values = labels if labels is not None else list(range(n))
+    if not enabled:
+        values = values[:n]
+    return pd.DataFrame({"序号": values})
+
+
+def quality_demo() -> pd.DataFrame:
+    """A fixture containing duplicate dates and a non-finite price."""
+    return pd.DataFrame({"日期": [20250101, 20250101], "代码": ["X", "X"], "收盘": [1.0, float("inf")]})
 '''
 
 
@@ -70,7 +85,7 @@ def fake_akshare(tmp_path: Path) -> str:
     package.mkdir(parents=True)
     (package / "data.py").write_text(FAKE_MODULE, encoding="utf-8")
     (package / "__init__.py").write_text(
-        "__version__ = 'test'\nfrom .data import fund_etf_spot_demo, set_demo_token, stock_demo\n",
+        "__version__ = 'test'\nfrom .data import fund_etf_spot_demo, quality_demo, set_demo_token, stock_demo, typed_demo\n",
         encoding="utf-8",
     )
     return str(package.parent)

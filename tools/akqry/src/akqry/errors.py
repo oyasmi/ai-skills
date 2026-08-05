@@ -19,6 +19,7 @@ EXIT_CODES = {
     "upstream_error": 5,
     "empty_result": 6,
     "missing_required_columns": 6,
+    "data_quality_error": 6,
     "duplicate_columns": 6,
     "unsupported_result_type": 6,
     "partial_failure": 6,

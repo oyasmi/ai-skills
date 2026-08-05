@@ -46,6 +46,7 @@ print(len(spot), "rows in;", int(values.isna().sum()), "unusable")
 - 简单收益：`P_t / P_(t-1) - 1`。
 - 累计收益：`P_end / P_start - 1`。
 - 年化波动率：日收益样本标准差 × `sqrt(periods_per_year)`；`periods_per_year` 必须报告。
+- 只有一个收益观测时年化波动率没有定义，`performance_summary` 返回 `null` 并在 `warnings` 说明；不要把它当作 0 或补成数字。
 - 最大回撤：价格相对运行峰值的最小跌幅。
 
 这些是价格序列指标，不自动包含分红、交易成本、税费、滑点、汇率或再平衡。

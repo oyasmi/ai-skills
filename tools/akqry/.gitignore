@@ -6,3 +6,4 @@ __pycache__/
 build/
 dist/
 src/*.egg-info/
+src/akqry/_version.py

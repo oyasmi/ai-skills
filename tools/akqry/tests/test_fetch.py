@@ -247,6 +247,89 @@ def test_expired_cache_entry_is_refetched(fake_akshare: str, tmp_path: Path, mon
     assert log.read_text(encoding="utf-8").split() == ["000001", "000001"]
 
 
+def test_preview_cache_entry_is_not_used_as_an_artifact_cache_hit(
+    fake_akshare: str, tmp_path: Path, monkeypatch
+) -> None:
+    log = tmp_path / "calls.log"
+    monkeypatch.setenv("AKQRY_TEST_CALL_LOG", str(log))
+    cache_dir = tmp_path / "cache"
+    _run(_fetch(fake_akshare, "--arg", "symbol=000001", "--cache-dir", str(cache_dir)))
+
+    output = tmp_path / "with-output.jsonl"
+    payload = _run(
+        _fetch(
+            fake_akshare,
+            "--arg",
+            "symbol=000001",
+            "--cache-dir",
+            str(cache_dir),
+            "--output",
+            str(output),
+        )
+    )
+
+    assert payload["ok"] is True
+    assert payload["provenance"]["cache"]["hit"] is False
+    assert output.is_file()
+    assert log.read_text(encoding="utf-8").split() == ["000001", "000001"]
+
+
+def test_future_annotations_and_json_parameter_values_are_coerced(fake_akshare: str) -> None:
+    payload = _run(
+        [
+            "fetch",
+            "typed_demo",
+            "--akshare-path",
+            fake_akshare,
+            "--params-json",
+            '{"n":"2", "enabled":true}',
+        ]
+    )
+
+    assert payload["ok"] is True
+    assert payload["result"]["rows"] == 2
+
+
+def test_strict_quality_fails_with_actionable_diagnostics(fake_akshare: str) -> None:
+    with pytest.raises(AkqryError) as raised:
+        _run(
+            [
+                "fetch",
+                "quality_demo",
+                "--akshare-path",
+                fake_akshare,
+                "--date-column",
+                "日期",
+                "--key-columns",
+                "代码,日期",
+                "--strict-quality",
+            ]
+        )
+
+    assert raised.value.code == "data_quality_error"
+    assert raised.value.details["quality"]["nonfinite_numeric_values"] == 1
+    assert raised.value.details["quality"]["duplicate_key_rows"] == 2
+
+
+def test_non_strict_quality_is_returned_in_the_result(fake_akshare: str) -> None:
+    payload = _run(
+        [
+            "fetch",
+            "quality_demo",
+            "--akshare-path",
+            fake_akshare,
+            "--date-column",
+            "日期",
+            "--key-columns",
+            "代码,日期",
+        ]
+    )
+
+    assert payload["ok"] is True
+    assert payload["result"]["quality"]["errors"]
+    assert payload["result"]["preview_only"] is True
+
+
 def test_describe_probe_reports_the_real_schema(fake_akshare: str) -> None:
     payload = _run(["describe", "stock_demo", "--akshare-path", fake_akshare, "--probe", "--arg", "n=2"])
     probe = payload["result"]["probe"]
@@ -287,5 +370,7 @@ def test_describe_probe_reports_upstream_failure_without_hiding_metadata(fake_ak
         ["describe", "stock_demo", "--akshare-path", fake_akshare, "--probe", "--arg", "symbol=BOOM", "--retries", "0"]
     )
     assert payload["result"]["signature"].startswith("(symbol")
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "upstream_error"
     assert payload["result"]["probe"]["ok"] is False
     assert "40001" in payload["result"]["probe"]["error"]["details"]["exception_message"]

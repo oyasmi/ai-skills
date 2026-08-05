@@ -1,6 +1,6 @@
 ---
 name: query-akshare
-description: 使用 akqry CLI 发现、检查和调用 AkShare 金融数据接口，并用 Python 分析 A 股、港股、行业与概念板块、公募基金、ETF 和指数数据。用户提到 AkShare，或需要查询、筛选、比较、统计这些中国市场金融数据并保留可追溯的数据来源、参数和时间时使用。
+description: 使用 akqry CLI 发现、检查和调用 AkShare 金融数据接口，并用 Python 分析 A 股、港股、行业与概念板块、公募基金、ETF、指数、债券、期货、期权、外汇和宏观数据。用户提到 AkShare，或需要查询、筛选、比较、统计这些金融市场数据并保留可追溯的数据来源、参数和时间时使用。
 ---
 
 # Query AkShare
@@ -34,7 +34,7 @@ akqry doctor --json
 ## 标准工作流
 
 1. 从问题明确市场、证券类型、代码、时间区间、频率、复权口径、币种和所需指标；不明确时在结论中标出假设。
-2. 用 `akqry search` 找候选接口，尽量带 `--domain` 收窄；**先看 `unmatched_terms` 和 `hints`**，确认这次检索真的覆盖了问题，再用 `akqry describe` 确认签名、参数枚举和数据源。运行时签名优先于文档记忆。
+2. 用 `akqry search` 找候选接口，尽量带 `--domain` 收窄；默认 `--match all` 要求每个查询词都得到证据，**先看 `unmatched_terms`、每条结果的 `unmatched_terms` 和 `hints`**，确认这次检索真的覆盖了问题。只有探索候选时才用 `--match any`，不能把部分命中当成完整答案；再用 `akqry describe` 确认签名、参数枚举和数据源。运行时签名优先于文档记忆。
 3. 用 `akqry describe <function> --probe` 拿到真实列名、dtype 和日期区间，再据此决定 `--require-columns`。不要凭记忆猜中文列名。
 4. 用 `--output` 写入完整原始结果；默认保留 `.meta.json` sidecar。不要只依赖终端预览做分析。
 5. 在独立 Python 脚本中读取落盘数据、显式进行日期对齐和计算；保留脚本或关键公式。
@@ -67,6 +67,10 @@ akqry fetch fund_etf_hist_em \
 | `total_matched` / `candidates` | 命中数远大于 `--limit` 说明查询太宽，加词或加 `--domain`。 |
 | `coverage` / `score` | 排序依据：`coverage` 是该结果覆盖了多少查询特异度，先按它排、再按 `score`。所以 `score` 在列表里**不是**单调下降的。 |
 
+`coverage` 已归一化到 0..1；可用 `--min-coverage 0.8` 进一步过滤弱匹配。没有本地 AkShare docs 时，结果里的 `schema_hints` 只是名称启发式提示，不是实测列名；最终字段仍以 `describe --probe` 为准。
+
+可用领域由当前 AkShare 运行时目录提供，常见值包括 `a-share`、`hk-share`、`board`、`fund`、`etf`、`index`、`bond`、`futures`、`option`、`margin`、`macro`、`currency`、`news` 和 `crypto`；不确定时先运行 `akqry search --help`，不要猜接口名。
+
 查询写成中文词组、词间留空格效果最好（`个股 资金流向` 好于 `个股资金流向`）。常见词（股票、基金、指数）会被自动降权，真正决定排序的是罕见词。
 
 ## 多标的与重复查询
@@ -84,7 +88,7 @@ akqry fetch stock_zh_a_hist \
 
 标的多于 5 个时加 `--delay 0.5`：上游对连续突发请求的限流远比对稳定节奏严格，`upstream_error` 大多是这么来的。
 
-反复调试同一个分析时加 `--cache-dir ~/.cache/akqry` 复用相同查询，避免重复打上游、触发限流；`describe --probe` 同样支持，同一接口的列名不必反复取。缓存命中时 `provenance.cache.hit` 为 `true`，`retrieved_at_utc` 仍是**原始获取时间**——报告时按它表述，不要说成刚取的数。
+反复调试同一个分析时加 `--cache-dir ~/.cache/akqry` 复用相同查询，避免重复打上游、触发限流；`describe --probe` 同样支持，同一接口的列名不必反复取。缓存命中时 `provenance.cache.hit` 为 `true`，`retrieved_at_utc` 仍是**原始获取时间**——报告时按它表述，不要说成刚取的数。需要实时数据时不要启用缓存，或使用 `--refresh` 忽略已有条目；没有 `--output` 的 fetch 明确是 `preview_only`，只能用于查看，不能拿预览行做完整统计。
 
 ## 错误码与下一步
 
@@ -94,6 +98,7 @@ akqry fetch stock_zh_a_hist \
 | --- | --- |
 | `empty_result` | 检查代码格式（是否需要 `sh`/`sz` 前缀）、日期区间、是否休市或未上市。**不要**直接加 `--allow-empty` 掩盖。 |
 | `missing_required_columns` | 读 `details.available_columns`，改用真实列名重跑；必要时先 `--probe`。 |
+| `data_quality_error` | 读 `details.quality`，修正日期列、键列、重复数据或非有限数；不确定时去掉 `--strict-quality` 但必须在结论中披露质量问题。 |
 | `invalid_parameter` | 读 `details.allowed_values` / `accepted_parameters` / `signature`。确认文档过期才用 `--allow-unknown-values`。 |
 | `missing_parameter` | 按 `details.signature` 补必填参数。 |
 | `usage_error` | 命令行用法错，`details` 指出具体参数；批量 `--output` 必须含 `{}`。 |

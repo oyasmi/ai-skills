@@ -4,7 +4,13 @@ import pandas as pd
 import pytest
 
 from akqry.errors import AkqryError
-from akqry.serializers import normalise_frame, preview, schema_fingerprint, temporal_bounds
+from akqry.serializers import (
+    normalise_frame,
+    preview,
+    quality_report,
+    schema_fingerprint,
+    temporal_bounds,
+)
 
 
 def test_normalise_frame_preserves_leading_zero_string() -> None:
@@ -36,6 +42,33 @@ def test_schema_fingerprint_is_stable() -> None:
 def test_temporal_bounds_are_inferred_without_mutation() -> None:
     frame = pd.DataFrame({"日期": ["2025-01-01", "2025-01-02"], "代码": ["000001", "000001"]})
     assert temporal_bounds(frame) == [
-        {"column": "日期", "minimum": "2025-01-01T00:00:00", "maximum": "2025-01-02T00:00:00", "parsed_rows": 2, "inferred": True}
+        {
+            "column": "日期",
+            "minimum": "2025-01-01T00:00:00",
+            "maximum": "2025-01-02T00:00:00",
+            "parsed_rows": 2,
+            "inferred": True,
+            "parse_format": "datetime",
+        }
     ]
     assert frame.loc[0, "日期"] == "2025-01-01"
+
+
+def test_temporal_bounds_do_not_treat_yyyymmdd_as_nanoseconds() -> None:
+    frame = pd.DataFrame({"日期": [20250101, 20250102]})
+
+    bounds = temporal_bounds(frame)
+
+    assert bounds[0]["minimum"] == "2025-01-01T00:00:00"
+    assert bounds[0]["parse_format"] == "yyyymmdd"
+
+
+def test_quality_report_separates_nulls_from_infinities() -> None:
+    frame = pd.DataFrame({"日期": [20250101, None], "收盘": [10.0, float("inf")]})
+
+    quality = quality_report(frame, date_column="日期", key_columns=["日期"])
+
+    assert quality["null_cells"] == 1
+    assert quality["nonfinite_numeric_values"] == 1
+    assert quality["date"]["missing_rows"] == 1
+    assert quality["errors"]

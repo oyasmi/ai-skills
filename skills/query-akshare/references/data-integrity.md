@@ -6,6 +6,8 @@
 - 确认代码格式；不同接口可能使用 `000001`、`00700` 或 `sh510050`。
 - 先 `akqry describe <function> --json`，再据实际签名和 `parameters[].enum` 传参数。
 - 列名以 `akqry describe <function> --probe` 的实际返回为准，再用 `--require-columns` 防止上游 schema 漂移。不要凭记忆写中文列名。
+- 没有 docs checkout 时，`search` 的 `schema_hints` 只是启发式候选列；不能替代 probe。需要实时数据时不用缓存，或用 `fetch --refresh`。
+- 对时间序列显式传 `fetch --date-column`；对横截面或多标的表传 `--key-columns`。先查看返回的 `quality`，只有确认异常可接受时才省略 `--strict-quality`。
 - 跨次查询比对 sidecar 里的 `schema_fingerprint`：指纹变了说明上游 schema 漂移，之前的分析脚本可能已经不适用。
 
 ## 时间序列
@@ -14,6 +16,7 @@
 - 价格收益不等于净值收益，也不等于含分红总收益。
 - 不跨非交易日 forward-fill 后再计算收益。比较序列时默认内连接共同观测日，并报告被丢弃日期。
 - 数据不足、重复日期、零/负价格或无法解析的日期必须显式处理，不要静默计算。
+- `quality.errors` 中的非有限数、缺失日期列、无法解析日期和重复键需要修复或披露；`quality.warnings` 中的空值、乱序和重复日期也要写进结论。
 
 ## 横截面数据
 

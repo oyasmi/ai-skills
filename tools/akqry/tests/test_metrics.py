@@ -74,3 +74,24 @@ def test_gap_report_flags_a_non_datetime_index() -> None:
     report = gap_report(pd.Series([1.0, 2.0, 3.0]))
     assert report["max_gap_days"] is None
     assert "not datetime-like" in report["warnings"][0]
+
+
+def test_metrics_reject_infinite_prices() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        max_drawdown(pd.Series([100.0, float("inf")]))
+
+
+def test_single_return_does_not_emit_nan_volatility() -> None:
+    summary = performance_summary(pd.Series([100.0, 110.0]), periods_per_year=252)
+
+    assert summary["annualized_volatility"] is None
+    assert any("fewer than two returns" in warning for warning in summary["warnings"])
+
+
+def test_alignment_report_counts_input_rows_dropped_before_join() -> None:
+    first = _series([1.0, None, 3.0, 4.0], ["2025-01-01", "2025-01-02", "2025-01-03", "2025-01-04"])
+    second = _series([3.0, 4.0, 5.0], ["2025-01-02", "2025-01-03", "2025-01-04"])
+
+    report = alignment_report({"a": first, "b": second})
+
+    assert report["dropped_per_series"] == {"a": 2, "b": 1}

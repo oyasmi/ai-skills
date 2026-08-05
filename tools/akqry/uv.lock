@@ -16,7 +16,6 @@ resolution-markers = [
 
 [[package]]
 name = "akqry"
-version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "akshare" },

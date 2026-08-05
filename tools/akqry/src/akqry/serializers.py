@@ -11,6 +11,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from akqry.errors import AkqryError
@@ -19,11 +20,18 @@ from akqry.errors import AkqryError
 def json_value(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, bool)):
         return value
+    if value is pd.NA:
+        return None
     if isinstance(value, float):
         return value if math.isfinite(value) else None
     if isinstance(value, (datetime, date, pd.Timestamp)):
         return value.isoformat()
-    if pd.isna(value):
+    if isinstance(value, dict):
+        return {str(key): json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [json_value(item) for item in value]
+    missing = pd.isna(value)
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
         return None
     if hasattr(value, "item"):
         try:
@@ -64,6 +72,38 @@ def preview(frame: pd.DataFrame, rows: int) -> list[dict[str, Any]]:
     ]
 
 
+def _parse_temporal(values: pd.Series) -> tuple[pd.Series, str]:
+    """Parse common market date encodings without treating YYYYMMDD as nanos."""
+    text = values.astype("string").str.strip()
+    parsed = pd.Series(pd.NaT, index=values.index, dtype="datetime64[ns]")
+    formats: list[str] = []
+
+    yyyymmdd = text.str.fullmatch(r"\d{8}").fillna(False)
+    if yyyymmdd.any():
+        parsed.loc[yyyymmdd] = pd.to_datetime(text.loc[yyyymmdd], format="%Y%m%d", errors="coerce")
+        formats.append("yyyymmdd")
+
+    remaining = parsed.isna() & text.notna()
+    numeric = pd.to_numeric(text.where(remaining), errors="coerce")
+    epoch_ms = remaining & numeric.notna() & numeric.abs().ge(10**11)
+    epoch_seconds = remaining & numeric.notna() & numeric.abs().ge(10**9) & ~epoch_ms
+    if epoch_ms.any():
+        parsed.loc[epoch_ms] = pd.to_datetime(numeric.loc[epoch_ms], unit="ms", errors="coerce")
+        formats.append("unix_ms")
+    if epoch_seconds.any():
+        parsed.loc[epoch_seconds] = pd.to_datetime(numeric.loc[epoch_seconds], unit="s", errors="coerce")
+        formats.append("unix_s")
+
+    remaining = parsed.isna() & text.notna()
+    if remaining.any():
+        try:
+            parsed.loc[remaining] = pd.to_datetime(text.loc[remaining], errors="coerce", format="mixed")
+        except (TypeError, ValueError):
+            parsed.loc[remaining] = pd.to_datetime(text.loc[remaining], errors="coerce")
+        formats.append("datetime")
+    return parsed, "+".join(dict.fromkeys(formats)) or "unknown"
+
+
 def temporal_bounds(frame: pd.DataFrame) -> list[dict[str, Any]]:
     """Report clearly inferred date bounds without mutating the source table."""
     bounds: list[dict[str, Any]] = []
@@ -71,7 +111,7 @@ def temporal_bounds(frame: pd.DataFrame) -> list[dict[str, Any]]:
         name = str(column)
         if not any(token in name.lower() for token in ("date", "time", "日期", "时间")):
             continue
-        parsed = pd.to_datetime(frame[column], errors="coerce")
+        parsed, parse_format = _parse_temporal(frame[column])
         valid = parsed.dropna()
         if not len(valid) or len(valid) / max(len(frame), 1) < 0.8:
             continue
@@ -82,9 +122,86 @@ def temporal_bounds(frame: pd.DataFrame) -> list[dict[str, Any]]:
                 "maximum": json_value(valid.max()),
                 "parsed_rows": int(len(valid)),
                 "inferred": True,
+                "parse_format": parse_format,
             }
         )
     return bounds
+
+
+def quality_report(
+    frame: pd.DataFrame,
+    date_column: str | None = None,
+    key_columns: list[str] | None = None,
+) -> dict[str, Any]:
+    """Describe common table-quality hazards without changing the returned data."""
+    rows, columns = len(frame), len(frame.columns)
+    null_cells = int(frame.isna().sum().sum()) if rows and columns else 0
+    warnings: list[str] = []
+    errors: list[str] = []
+    date_info: dict[str, Any] | None = None
+    key_columns = key_columns or []
+
+    if null_cells:
+        warnings.append(f"{null_cells} null cell(s) are present in the returned table.")
+
+    numeric = frame.select_dtypes(include=["number"])
+    if numeric.empty:
+        nonfinite = 0
+    else:
+        try:
+            numeric_values = numeric.to_numpy(dtype=float, na_value=np.nan)
+        except TypeError:
+            numeric_values = numeric.astype(float).to_numpy()
+        # Missing numeric cells are reported by null_cells; only infinities are
+        # a non-finite numeric value that can silently poison calculations.
+        nonfinite = int(np.isinf(numeric_values).sum())
+    if nonfinite:
+        errors.append(f"{nonfinite} non-finite numeric value(s) are present.")
+
+    if date_column:
+        if date_column not in frame.columns:
+            errors.append(f"Date column {date_column!r} is absent from the returned table.")
+        else:
+            parsed, parse_format = _parse_temporal(frame[date_column])
+            valid = parsed.notna()
+            invalid = int(frame[date_column].notna().sum() - valid.sum())
+            duplicate_dates = int(parsed[valid].duplicated().sum())
+            date_info = {
+                "column": date_column,
+                "parsed_rows": int(valid.sum()),
+                "missing_rows": int(frame[date_column].isna().sum()),
+                "invalid_rows": invalid,
+                "duplicate_values": duplicate_dates,
+                "monotonic_increasing": bool(parsed[valid].is_monotonic_increasing),
+                "parse_format": parse_format,
+            }
+            if invalid:
+                errors.append(f"{invalid} non-null value(s) in {date_column!r} could not be parsed as dates.")
+            if duplicate_dates:
+                message = f"{duplicate_dates} duplicate date value(s) are present in {date_column!r}."
+                (warnings if date_column in key_columns else errors).append(message)
+            if len(parsed[valid]) > 1 and not parsed[valid].is_monotonic_increasing:
+                warnings.append(f"Date column {date_column!r} is not sorted ascending.")
+
+    missing_keys = [column for column in key_columns if column not in frame.columns]
+    if missing_keys:
+        errors.append("Key column(s) are absent: " + ", ".join(missing_keys) + ".")
+    duplicate_keys = int(frame.duplicated(subset=key_columns, keep=False).sum()) if key_columns and not missing_keys else 0
+    if duplicate_keys:
+        errors.append(f"{duplicate_keys} row(s) belong to duplicate key groups.")
+
+    return {
+        "rows": int(rows),
+        "columns": int(columns),
+        "null_cells": null_cells,
+        "null_ratio": round(null_cells / max(rows * columns, 1), 6),
+        "nonfinite_numeric_values": nonfinite,
+        "date": date_info,
+        "key_columns": key_columns,
+        "duplicate_key_rows": duplicate_keys,
+        "warnings": warnings,
+        "errors": errors,
+    }
 
 
 def write_frame(frame: pd.DataFrame, path: Path, output_format: str) -> None:

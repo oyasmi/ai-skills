@@ -15,6 +15,8 @@ import argparse
 import contextlib
 import inspect
 import json
+import math
+import random
 import signal
 import time
 import traceback
@@ -22,12 +24,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-from akqry.catalog import discover
 from akqry.errors import AkqryError
-from akqry.runtime import load_akshare, runtime_provenance
+from akqry.runtime import is_safe_callable, load_akshare, runtime_provenance
 from akqry.serializers import (
     normalise_frame,
     preview,
+    quality_report,
     schema,
     schema_fingerprint,
     temporal_bounds,
@@ -45,6 +47,8 @@ RETRYABLE_EXCEPTIONS = frozenset(
         "ConnectTimeout",
         "CurlError",
         "IncompleteRead",
+        "HTTPError",
+        "MaxRetryError",
         "JSONDecodeError",
         "ProtocolError",
         "ProxyError",
@@ -94,6 +98,36 @@ def _safe_message(error: Exception) -> str | None:
     return text[:MESSAGE_LIMIT] + ("…" if len(text) > MESSAGE_LIMIT else "")
 
 
+def _http_status(error: Exception) -> int | None:
+    response = getattr(error, "response", None)
+    status = getattr(response, "status_code", None)
+    try:
+        return int(status) if status is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_retryable(error: Exception) -> bool:
+    status = _http_status(error)
+    if status is not None:
+        return status in {408, 425, 429, 500, 502, 503, 504}
+    return type(error).__name__ in RETRYABLE_EXCEPTIONS
+
+
+def _retry_delay(error: Exception, attempt: int) -> float:
+    """Use server backoff advice when available, with bounded jitter."""
+    base = min(8.0, 0.5 * (2**attempt))
+    response = getattr(error, "response", None)
+    headers = getattr(response, "headers", {}) or {}
+    try:
+        retry_after = float(headers.get("Retry-After", 0))
+    except (TypeError, ValueError):
+        retry_after = 0.0
+    if not 0 <= retry_after <= 30:
+        retry_after = 0.0
+    return min(30.0, max(base, retry_after)) * random.uniform(0.8, 1.2)
+
+
 def _error_payload(error: Exception, debug: bool) -> dict[str, Any]:
     if isinstance(error, CallTimeout):
         payload = {
@@ -111,8 +145,11 @@ def _error_payload(error: Exception, debug: bool) -> dict[str, Any]:
             "code": "upstream_error",
             "message": "AkShare callable raised an exception.",
             "details": {"exception_type": name, "exception_message": _safe_message(error)},
-            "retryable": name in RETRYABLE_EXCEPTIONS,
+            "retryable": _is_retryable(error),
         }
+        status = _http_status(error)
+        if status is not None:
+            payload["details"]["http_status"] = status
     if debug:
         payload["traceback"] = traceback.format_exc()
     return payload
@@ -156,6 +193,17 @@ def _run_call(function: Callable[..., Any], call: dict[str, Any], spec: dict[str
                 {"missing_columns": absent, "available_columns": list(frame.columns)},
             )
         frame = frame.loc[:, selected]
+    quality = quality_report(
+        frame,
+        date_column=spec.get("date_column"),
+        key_columns=spec.get("key_columns"),
+    )
+    if spec.get("strict_quality") and quality["errors"]:
+        raise AkqryError(
+            "data_quality_error",
+            "Returned data failed the requested quality checks.",
+            {"quality": quality, "available_columns": list(frame.columns)},
+        )
     output_path = call.get("temporary_output")
     if output_path:
         write_frame(frame, Path(output_path), spec["output_format"])
@@ -166,6 +214,9 @@ def _run_call(function: Callable[..., Any], call: dict[str, Any], spec: dict[str
         "schema_fingerprint": schema_fingerprint(frame),
         "preview": preview(frame, int(spec.get("preview_rows", 10))),
         "temporal_bounds": temporal_bounds(frame),
+        "quality": quality,
+        "artifact_written": bool(output_path),
+        "preview_only": not bool(output_path),
         "empty": bool(frame.empty),
         "selected_columns": selected,
         **frame_metadata,
@@ -196,7 +247,7 @@ def _attempt_call(
                     error = _error_payload(exc, debug)
                     if not error.get("retryable") or attempt >= retries:
                         return {"ok": False, "attempts": attempts, "error": error}
-                    time.sleep(0.5 * (2**attempt))
+                    time.sleep(_retry_delay(exc, attempt))
     except CallTimeout as exc:
         return {"ok": False, "attempts": attempts, "error": _error_payload(exc, debug)}
     raise AssertionError("unreachable: the retry loop always returns or raises")
@@ -204,25 +255,33 @@ def _attempt_call(
 
 def execute(spec: dict[str, Any], progress: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
     module = load_akshare(spec.get("akshare_path"))
-    catalog = discover(module, spec.get("docs_root"), include_unsafe=True)
     name = spec["function"]
-    record = catalog.get(name)
-    if record is None:
+    function = getattr(module, name, None)
+    if not callable(function):
         raise AkqryError(
             "function_not_found",
             "No public AkShare callable with that name was found.",
             {"function": name, "hint": "Use `akqry search` to find the current interface name."},
         )
-    if not record["safe_to_fetch"]:
+    safe, excluded_reason = is_safe_callable(name, function)
+    if not safe:
         raise AkqryError(
             "unsafe_callable",
             "This callable is excluded from fetch.",
-            {"function": name, "excluded_reason": record.get("excluded_reason")},
+            {"function": name, "excluded_reason": excluded_reason},
         )
-    function = getattr(module, name)
-    retries = max(int(spec.get("retries", 0)), 0)
-    call_timeout = float(spec.get("call_timeout") or 0.0)
-    delay = max(float(spec.get("delay") or 0.0), 0.0)
+    try:
+        retries = int(spec.get("retries", 0))
+        call_timeout = float(spec.get("call_timeout") or 0.0)
+        delay = float(spec.get("delay") or 0.0)
+    except (TypeError, ValueError) as exc:
+        raise AkqryError("usage_error", "Worker retry, timeout and delay values must be numeric.") from exc
+    if retries < 0:
+        raise AkqryError("usage_error", "Worker retries cannot be negative.")
+    if not math.isfinite(call_timeout) or call_timeout <= 0:
+        raise AkqryError("usage_error", "Worker call_timeout must be positive and finite.")
+    if not math.isfinite(delay) or delay < 0:
+        raise AkqryError("usage_error", "Worker delay must be finite and non-negative.")
     debug = bool(spec.get("debug"))
     payload: dict[str, Any] = {"ok": True, "provenance": runtime_provenance(module), "items": []}
     for position, call in enumerate(spec["calls"]):

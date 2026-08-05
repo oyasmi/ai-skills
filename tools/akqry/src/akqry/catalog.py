@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import re
 from pathlib import Path
@@ -37,11 +38,42 @@ DOMAIN_RULES: dict[str, dict[str, tuple[str, ...]]] = {
         "prefixes": ("index_", "stock_zh_index"),
         "segments": ("index",),
     },
+    "bond": {"prefixes": ("bond_", "stock_bond")},
+    "futures": {"prefixes": ("futures_", "future_")},
+    "option": {"prefixes": ("option_", "options_")},
+    "margin": {"prefixes": ("stock_margin", "option_margin", "macro_china_market_margin")},
+    "macro": {"prefixes": ("macro_", "fred_")},
+    "currency": {"prefixes": ("currency_", "fx_", "forex_")},
+    "news": {"prefixes": ("news_", "stock_news")},
+    "crypto": {"prefixes": ("crypto_", "bitcoin_", "eth_")},
 }
 
 # ``segments_with_prefix`` only applies to these name roots, keeping fund and
 # futures interfaces out of the board domain.
 _SEGMENT_ROOTS = ("stock_",)
+
+# Pip installations do not carry AkShare's optional documentation checkout.
+# These are deliberately labelled hints rather than observed schemas: they make
+# column-oriented searches useful while ``--probe`` remains the authority.
+_SCHEMA_HINT_RULES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    (("hist", "history", "daily"), ("日期", "开盘", "收盘", "最高", "最低", "成交量", "成交额", "涨跌幅")),
+    (("min", "minute", "tick"), ("时间", "价格", "成交量", "成交额")),
+    (("spot", "realtime"), ("代码", "名称", "最新价", "涨跌幅", "成交量", "成交额")),
+    (("financial", "balance", "profit", "cash"), ("报告期", "营业收入", "净利润", "资产", "负债")),
+    (("dividend",), ("除权除息日", "分红", "股息")),
+    (("portfolio", "hold", "cons", "constituent"), ("代码", "名称", "权重", "持仓")),
+    (("board",), ("板块名称", "涨跌幅", "上涨家数", "下跌家数")),
+    (("fund_etf_fund_info",), ("净值日期", "单位净值", "累计净值")),
+)
+
+
+def schema_hints_for(name: str) -> list[str]:
+    lowered = name.lower()
+    hints: list[str] = []
+    for tokens, columns in _SCHEMA_HINT_RULES:
+        if any(token in lowered for token in tokens):
+            hints.extend(columns)
+    return list(dict.fromkeys(hints))
 
 
 def _documentation_root(module_path: str | None, supplied: str | None) -> Path | None:
@@ -154,9 +186,8 @@ def _search_fields(record: dict[str, Any]) -> dict[str, tuple[str, str]]:
             " ".join(record.get("description_extra") or []),
             record.get("returns"),
             parameter_text,
-            record.get("module"),
             " ".join(record.get("document_columns") or []),
-            record.get("source_url"),
+            " ".join(record.get("schema_hints") or []),
         ),
     }
 
@@ -197,6 +228,8 @@ def discover(module: object, docs_root: str | None = None, include_unsafe: bool 
             "module": getattr(value, "__module__", None),
             "source_file": source,
             "domains": domain_for(name),
+            "schema_hints": schema_hints_for(name),
+            "docstring_fingerprint": hashlib.sha256(doc.encode("utf-8")).hexdigest(),
             "safe_to_fetch": safe,
             "excluded_reason": excluded_reason,
             **documented,
@@ -206,7 +239,16 @@ def discover(module: object, docs_root: str | None = None, include_unsafe: bool 
     return catalog
 
 
-SUMMARY_FIELDS = ("name", "signature", "description", "source_site", "source_url", "domains", "safe_to_fetch")
+SUMMARY_FIELDS = (
+    "name",
+    "signature",
+    "description",
+    "source_site",
+    "source_url",
+    "domains",
+    "schema_hints",
+    "safe_to_fetch",
+)
 INTERNAL_FIELDS = ("search_fields",)
 
 
@@ -217,24 +259,36 @@ def _summary(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def _search_hints(
-    domain: str | None, terms: list[str], unmatched: list[str], total: int, limit: int
+    domain: str | None,
+    terms: list[str],
+    unmatched: list[str],
+    total: int,
+    limit: int,
+    match_mode: str,
+    min_coverage: float,
 ) -> list[str]:
     hints: list[str] = []
+    if unmatched:
+        scope_hint = " Try fewer or broader terms, or drop --domain to search the whole catalog." if domain and not total else ""
+        if match_mode == "any":
+            hints.append(
+                "These terms matched no interface at all: "
+                + ", ".join(unmatched)
+                + ". Results are exploratory partial matches only."
+                + scope_hint
+            )
+        else:
+            hints.append("No complete result can cover these terms: " + ", ".join(unmatched) + "." + scope_hint)
     if not total:
-        hints.append(
-            "Nothing matched. Try fewer or broader terms"
-            + (", or drop --domain to search the whole catalog." if domain else ".")
-        )
-    elif unmatched:
-        hints.append(
-            "These terms matched no interface at all, so the results do not cover them: "
-            + ", ".join(unmatched)
-            + ". Treat the results as answering only "
-            + ", ".join(term for term in terms if term not in unmatched)
-            + "."
-        )
+        if domain and not unmatched:
+            hints.append("Try fewer or broader terms, or drop --domain to search the whole catalog.")
+        elif not unmatched:
+            prefix = "No interface covered all query terms" if match_mode == "all" else "Nothing matched"
+            hints.append(prefix + ". Try fewer or broader terms.")
     if total > limit:
         hints.append(f"{total} interfaces matched and {limit} are shown; add a term or --domain to narrow.")
+    if min_coverage:
+        hints.append(f"Results below {min_coverage:.0%} query coverage were omitted.")
     return hints
 
 
@@ -244,8 +298,12 @@ def search(
     domain: str | None,
     limit: int,
     full: bool = False,
+    match_mode: str = "all",
+    min_coverage: float = 0.0,
 ) -> dict[str, Any]:
     """Rank interfaces for a query, reporting what the ranking does not cover."""
+    if limit <= 0:
+        raise AkqryError("usage_error", "Search limit must be positive.")
     terms = matching.query_terms(query)
     if not terms:
         raise AkqryError("usage_error", "Search query must contain at least one searchable term.")
@@ -253,7 +311,7 @@ def search(
     # Rarity is measured over the candidates, so ``stock`` counts for even less
     # once a domain filter has already selected for it.
     corpus = matching.Corpus([record["search_fields"] for record in candidates])
-    ranked, unmatched = corpus.rank(terms)
+    ranked, unmatched = corpus.rank(terms, match_mode=match_mode, min_coverage=min_coverage)
     # Account for as much of the query's specificity as possible first, then
     # weight, then prefer the shorter (usually more general) interface name.
     ranked.sort(key=lambda item: (-item.coverage, -item.score, len(candidates[item.index]["name"])))
@@ -261,11 +319,14 @@ def search(
     for item in ranked[:limit]:
         record = candidates[item.index]
         payload = describe(catalog, record["name"]) if full else _summary(record)
+        matched_names = {reason["term"] for reason in item.reasons}
         results.append(
             {
                 **payload,
                 "score": item.score,
                 "matched_terms": item.matched_terms,
+                "matched_term_names": sorted(matched_names),
+                "unmatched_terms": [term for term in terms if term not in matched_names],
                 "coverage": item.coverage,
                 "match_reasons": item.reasons,
             }
@@ -274,11 +335,13 @@ def search(
         "query": query,
         "domain": domain,
         "terms": terms,
+        "match_mode": match_mode,
+        "min_coverage": min_coverage,
         "unmatched_terms": unmatched,
         "candidates": len(candidates),
         "total_matched": len(ranked),
         "results": results,
-        "hints": _search_hints(domain, terms, unmatched, len(ranked), limit),
+        "hints": _search_hints(domain, terms, unmatched, len(ranked), limit, match_mode, min_coverage),
     }
 
 

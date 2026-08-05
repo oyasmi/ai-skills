@@ -5,8 +5,8 @@ Chinese, and the two rarely share wording: the docstring of ``stock_zh_a_hist``
 says 每日行情 while a user asks for 历史行情. Whole-phrase substring matching
 therefore misses the interfaces that matter most, so a term is expanded through a
 small synonym table and, when nothing contains it verbatim, decomposed into
-character bigrams (or, for a two-character word, into single characters that must
-all appear).
+semantic two-character components (or, for a two-character word, into single
+characters that must all appear).
 
 That expansion is what makes recall possible and what would otherwise destroy
 precision: 个股 expands to ``stock``, which appears in the name of 45% of the
@@ -25,8 +25,11 @@ from __future__ import annotations
 
 import math
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Any, Sequence
+
+from akqry.errors import AkqryError
 
 _SEPARATORS = re.compile(r"[\s_\-–—/\\.,;:()\[\]{}<>|·、，。；：（）]+")
 _CJK = re.compile(r"[㐀-䶿一-鿿぀-ヿ豈-﫿]")
@@ -81,6 +84,19 @@ _SYNONYM_GROUPS: tuple[tuple[str, ...], ...] = (
     ("估值", "市盈率", "市净率", "valuation"),
     ("港股通", "沪深港通", "ggt", "hsgt"),
     ("复权", "qfq", "hfq", "adjust"),
+    ("资金流向", "主力资金", "fund flow"),
+    ("成交量", "volume"),
+    ("市值", "market cap", "market capitalization"),
+    ("市盈率", "pe", "p/e"),
+    ("市净率", "pb", "p/b"),
+    ("净利润", "net profit"),
+    ("涨停", "limit up"),
+    ("停牌", "停复牌", "suspend"),
+    ("融资融券", "margin"),
+    ("债券", "bond"),
+    ("期货", "futures", "future"),
+    ("期权", "option", "options"),
+    ("外汇", "汇率", "currency", "forex", "fx"),
 )
 
 SYNONYMS: dict[str, tuple[str, ...]] = {}
@@ -110,6 +126,11 @@ def field_text(*parts: Any) -> tuple[str, str]:
 
 def query_terms(query: str) -> list[str]:
     """Split a query into terms, dropping noise such as a lone ASCII character."""
+    query = unicodedata.normalize("NFKC", query)
+    # Analysts commonly type ``A 股`` while the useful search token is ``A股``.
+    # Only join the well-known market abbreviation; joining every CJK/ASCII edge
+    # would turn ``ETF 历史行情`` into one meaningless term.
+    query = re.sub(r"\b[aA]\s+股\b", "A股", query)
     terms: list[str] = []
     for chunk in _SEPARATORS.split(query.lower()):
         term = chunk.strip()
@@ -134,7 +155,7 @@ def _forms(term: str) -> list[tuple[str, float]]:
 def _ascii_pattern(needle: str) -> re.Pattern[str]:
     pattern = _ASCII_BOUNDARY_CACHE.get(needle)
     if pattern is None:
-        pattern = re.compile(rf"(?<![a-z0-9]){re.escape(needle)}")
+        pattern = re.compile(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])")
         _ASCII_BOUNDARY_CACHE[needle] = pattern
     return pattern
 
@@ -248,14 +269,32 @@ class Corpus:
             weight = factor * self.rarity(form)
             if weight <= 0:
                 continue
-            scaled = {index: (score * weight, field) for index, (score, field) in self._form_hits(form).items()}
+            scaled = {
+                index: (
+                    score * weight,
+                    field if factor == 1.0 else f"{field}:synonym",
+                )
+                for index, (score, field) in self._form_hits(form).items()
+            }
             _merge_best(scores, scaled)
         return scores
 
     def _parts(self, term: str) -> list[str]:
-        """The pieces a term is decomposed into when nothing contains it whole."""
+        """The semantic two-character pieces of a compound Chinese term."""
         if len(term) >= 3:
-            return bigrams(term)
+            # Overlapping bigrams let one accidental character pair satisfy a
+            # long phrase. Non-overlapping pieces preserve recall while
+            # requiring all meaningful components, e.g. 历史行情 -> 历史 + 行情.
+            parts: list[str] = []
+            index = 0
+            while index < len(term) - 1:
+                pair = term[index : index + 2]
+                if has_cjk(pair):
+                    parts.append(pair)
+                    index += 2
+                else:
+                    index += 1
+            return parts
         # A two-character word has only itself as a bigram, so its characters are
         # the only decomposition left: 停 and 牌 both appear in 停复牌.
         return [character for character in term if has_cjk(character)] if len(term) == 2 else []
@@ -266,13 +305,13 @@ class Corpus:
         if not parts:
             return {}
         if len(term) >= 3:
-            return _aggregate_any([self._direct(part) for part in parts], BIGRAM_FACTOR, "bigram")
+            return _aggregate_all([self._direct(part) for part in parts], BIGRAM_FACTOR, "bigram")
         if len(parts) < 2:
             return {}
         # One character in common is a coincidence, so both have to land.
         return _aggregate_all([self._direct(part) for part in parts], CHARACTER_FACTOR, "character")
 
-    def term_weight(self, term: str) -> float:
+    def term_weight(self, term: str, seen: set[str] | None = None) -> float:
         """How much of the query's specificity this term carries.
 
         Used to decide coverage: a record that matches only 停牌 answers more of
@@ -280,13 +319,25 @@ class Corpus:
         single term. The literal wording is trusted first, because the rarest
         synonym of a common word is not evidence that the word is specific.
         """
+        seen = set() if seen is None else seen
+        if term in seen:
+            return 0.0
+        seen.add(term)
         literal = self.rarity(term)
         if literal:
             return literal
-        for forms in ([form for form, _ in _forms(term)[1:]], self._parts(term)):
-            live = [rarity for rarity in map(self.rarity, forms) if rarity]
-            if live:
-                return sum(live) / len(live)
+        live: list[float] = []
+        for form, _ in _forms(term)[1:]:
+            rarity = self.rarity(form)
+            if rarity:
+                live.append(rarity)
+        if live:
+            return sum(live) / len(live)
+        parts = self._parts(term)
+        live = [self.term_weight(form, seen.copy()) for form in parts]
+        live = [rarity for rarity in live if rarity]
+        if live:
+            return sum(live) / len(live)
         return 0.0
 
     def _term_scores(self, term: str) -> Contribution:
@@ -295,31 +346,64 @@ class Corpus:
         scores.update({index: item for index, item in self._partial(term).items() if index not in scores})
         exact = self._exact.get(compact(term))
         if exact is not None:
-            scores[exact] = (EXACT_NAME_SCORE, "name")
+            scores[exact] = (EXACT_NAME_SCORE, "name:exact")
         return scores
 
-    def rank(self, terms: Sequence[str]) -> tuple[list[Match], list[str]]:
-        """Rank every record that matched, and report the terms nothing matched.
+    @staticmethod
+    def _evidence_strength(reason: str) -> float:
+        if reason.endswith(":character"):
+            return CHARACTER_FACTOR
+        if reason.endswith(":bigram"):
+            return BIGRAM_FACTOR
+        if ":synonym" in reason:
+            return SYNONYM_FACTOR
+        return 1.0
 
-        A term that matched nothing anywhere is returned separately: results that
-        silently ignore the most specific word of a query are worse than no
-        results, because nothing signals that they are off-topic.
+    def rank(
+        self,
+        terms: Sequence[str],
+        match_mode: str = "all",
+        min_coverage: float = 0.0,
+    ) -> tuple[list[Match], list[str]]:
+        """Rank records while making partial query coverage explicit.
+
+        ``all`` is the safe default for agent use: every term must have some
+        evidence in a record. ``any`` is useful for exploratory discovery, but
+        callers must inspect the per-result coverage before using a candidate.
         """
+        if match_mode not in {"all", "any"}:
+            raise AkqryError("usage_error", "match_mode must be 'all' or 'any'.")
+        if not 0 <= min_coverage <= 1:
+            raise AkqryError("usage_error", "min_coverage must be between 0 and 1.")
+
         reasons: dict[int, list[dict[str, Any]]] = {}
         totals: dict[int, float] = {}
         covered: dict[int, float] = {}
+        matched_by_term: dict[int, set[str]] = {}
         unmatched: list[str] = []
+        weights = {term: self.term_weight(term) for term in terms}
+        total_weight = sum(weights.values()) or float(len(terms) or 1)
         for term in terms:
             scores = self._term_scores(term)
             if not scores:
                 unmatched.append(term)
                 continue
-            weight = self.term_weight(term)
+            weight = weights[term] or 1.0
             for index, (score, field) in scores.items():
-                reasons.setdefault(index, []).append({"term": term, "matched_in": field, "score": round(score, 1)})
+                reasons.setdefault(index, []).append(
+                    {"term": term, "matched_in": field, "score": round(score, 1)}
+                )
                 totals[index] = totals.get(index, 0.0) + score
-                covered[index] = covered.get(index, 0.0) + weight
-        return [
-            Match(index, len(items), round(covered[index], 4), round(totals[index], 1), items)
-            for index, items in reasons.items()
-        ], unmatched
+                covered[index] = covered.get(index, 0.0) + weight * self._evidence_strength(field)
+                matched_by_term.setdefault(index, set()).add(term)
+
+        matches: list[Match] = []
+        for index, items in reasons.items():
+            matched_names = matched_by_term[index]
+            coverage = min(1.0, covered[index] / total_weight)
+            if match_mode == "all" and len(matched_names) != len(terms):
+                continue
+            if coverage < min_coverage:
+                continue
+            matches.append(Match(index, len(matched_names), round(coverage, 4), round(totals[index], 1), items))
+        return matches, unmatched

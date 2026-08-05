@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import inspect
 import json
+import math
 import os
 import re
 import shutil
@@ -12,13 +13,14 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
 
 from akqry import __version__, cache
-from akqry.catalog import describe, discover, search
+from akqry.catalog import DOMAIN_RULES, describe, discover, search
 from akqry.errors import AkqryError
 from akqry.runtime import load_akshare, runtime_provenance
 from akqry.serializers import ensure_format_available, infer_format, sha256
@@ -27,6 +29,39 @@ _UNSAFE_LABEL = re.compile(r"[^0-9A-Za-z._一-鿿-]+")
 # Head-room for the worker's own start-up and AkShare import, on top of the
 # per-call budgets it enforces internally.
 WORKER_GRACE_SECONDS = 30.0
+
+
+class AkqryArgumentParser(argparse.ArgumentParser):
+    """Emit the same machine-readable envelope for argparse failures."""
+
+    json_mode = False
+
+    def error(self, message: str) -> None:
+        if self.json_mode:
+            print(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "error": {
+                            "code": "usage_error",
+                            "message": message,
+                            "details": {},
+                            "retryable": False,
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            self.exit(2)
+        super().error(message)
+
+
+def _set_json_mode(parser: argparse.ArgumentParser, enabled: bool) -> None:
+    parser.json_mode = enabled  # type: ignore[attr-defined]
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            for child in action.choices.values():
+                _set_json_mode(child, enabled)
 
 
 @dataclass
@@ -79,7 +114,11 @@ def _human(payload: dict[str, Any]) -> None:
         print(f"succeeded={result['succeeded']} failed={result['failed']}")
     elif isinstance(result, dict) and "preview" in result:
         print(json.dumps(result["preview"], ensure_ascii=False, indent=2, default=str))
-        print(f"rows={result['rows']} columns={len(result['columns'])}")
+        mode = "preview-only" if result.get("preview_only") else "artifact-written"
+        print(f"rows={result['rows']} columns={len(result['columns'])} mode={mode}")
+        quality = result.get("quality") or {}
+        for warning in quality.get("warnings") or []:
+            print(f"warning: {warning}", file=sys.stderr)
     else:
         print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
 
@@ -112,8 +151,8 @@ def _add_runtime_options(parser: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="akqry", description="Auditable discovery and retrieval for AkShare")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    parser = AkqryArgumentParser(prog="akqry", description="Auditable discovery and retrieval for AkShare")
+    subparsers = parser.add_subparsers(dest="command", required=True, parser_class=AkqryArgumentParser)
 
     version = subparsers.add_parser("version", help="Show akqry version")
     version.add_argument("--json", action="store_true")
@@ -125,10 +164,23 @@ def build_parser() -> argparse.ArgumentParser:
     search_parser = subparsers.add_parser("search", help="Search public AkShare data interfaces")
     _add_runtime_options(search_parser)
     search_parser.add_argument("query")
-    search_parser.add_argument("--domain", choices=["a-share", "hk-share", "board", "fund", "etf", "index"])
+    search_parser.add_argument("--domain", choices=sorted(DOMAIN_RULES))
     search_parser.add_argument("--limit", type=int, default=10)
     search_parser.add_argument("--full", action="store_true", help="Return complete records instead of summaries")
     search_parser.add_argument("--all", action="store_true", help="Include excluded non-fetchable callables")
+    search_parser.add_argument(
+        "--match",
+        dest="match_mode",
+        choices=["all", "any"],
+        default="all",
+        help="Require every query term (default) or return exploratory partial matches",
+    )
+    search_parser.add_argument(
+        "--min-coverage",
+        type=float,
+        default=0.0,
+        help="Omit candidates below this normalized query coverage (0..1)",
+    )
 
     describe_parser = subparsers.add_parser("describe", help="Show signature and documentation for one interface")
     _add_runtime_options(describe_parser)
@@ -145,6 +197,7 @@ def build_parser() -> argparse.ArgumentParser:
     describe_parser.add_argument("--retries", type=int, default=1)
     describe_parser.add_argument("--cache-dir", help="Reuse an identical probe from this directory (or AKQRY_CACHE_DIR)")
     describe_parser.add_argument("--cache-ttl", type=float, default=cache.DEFAULT_TTL_SECONDS)
+    describe_parser.add_argument("--refresh", action="store_true", help="Ignore an existing cached probe")
 
     fetch = subparsers.add_parser("fetch", help="Execute a safe AkShare data interface")
     _add_runtime_options(fetch)
@@ -172,6 +225,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fetch.add_argument("--cache-dir", help="Reuse identical queries from this directory (or AKQRY_CACHE_DIR)")
     fetch.add_argument("--cache-ttl", type=float, default=cache.DEFAULT_TTL_SECONDS)
+    fetch.add_argument("--refresh", action="store_true", help="Ignore existing cached data")
     fetch.add_argument("--timeout", type=float, default=120.0, help="Per-call budget, retries included")
     fetch.add_argument("--retries", type=int, default=2)
     fetch.add_argument(
@@ -181,34 +235,155 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="SECONDS",
         help="Pause between the calls of a batch; upstream sites throttle bursts",
     )
+    fetch.add_argument("--date-column", help="Column to validate as the observation date/time")
+    fetch.add_argument("--key-columns", default="", help="Comma-separated columns that should form a unique key")
+    fetch.add_argument(
+        "--strict-quality",
+        action="store_true",
+        help="Fail when date/key/non-finite quality checks report errors",
+    )
     return parser
 
 
 def _split_columns(value: str) -> list[str]:
-    return [item.strip() for item in value.split(",") if item.strip()]
+    return list(dict.fromkeys(item.strip() for item in value.split(",") if item.strip()))
 
 
-def _typed_value(raw: str, parameter: inspect.Parameter) -> Any:
-    annotation = parameter.annotation
-    expected = annotation if annotation is not inspect.Parameter.empty else type(parameter.default)
+def _strict_json_loads(text: str) -> Any:
+    def reject_constant(value: str) -> None:
+        raise ValueError(f"non-finite JSON constant {value!r} is not allowed")
+
+    return json.loads(text, parse_constant=reject_constant)
+
+
+def _coerce_value(raw: Any, parameter: inspect.Parameter, annotation: Any = inspect.Parameter.empty) -> Any:
+    """Coerce CLI and JSON values using resolved annotations, including unions and lists."""
+    expected = annotation if annotation is not inspect.Parameter.empty else parameter.annotation
+    if expected is inspect.Parameter.empty:
+        expected = type(parameter.default) if parameter.default is not inspect.Parameter.empty else str
+    origin = get_origin(expected)
+    args = get_args(expected)
+
+    if origin in (types.UnionType,):
+        union_types = args
+    elif origin is Union:
+        union_types = args
+    else:
+        union_types = ()
+    if union_types:
+        if (raw is None or raw == "") and type(None) in union_types:
+            return None
+        # A JSON value already has a useful runtime type. Prefer that exact
+        # branch so ``str | int`` never turns a stock code into an integer.
+        ordered = list(union_types)
+        if isinstance(raw, str) and str in ordered:
+            ordered.remove(str)
+            ordered.insert(0, str)
+        elif isinstance(raw, bool) and bool in ordered:
+            ordered.remove(bool)
+            ordered.insert(0, bool)
+        elif isinstance(raw, int) and not isinstance(raw, bool) and int in ordered:
+            ordered.remove(int)
+            ordered.insert(0, int)
+        last_error: AkqryError | None = None
+        for candidate in ordered:
+            if candidate is type(None):
+                continue
+            try:
+                return _coerce_value(raw, parameter, candidate)
+            except AkqryError as exc:
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+
+    if origin is Literal:
+        literals = list(args)
+        for literal in literals:
+            if isinstance(literal, str) and raw == literal:
+                return literal
+            if not isinstance(literal, str):
+                try:
+                    if _coerce_value(raw, parameter, type(literal)) == literal:
+                        return literal
+                except AkqryError:
+                    continue
+        raise AkqryError(
+            "invalid_parameter",
+            "Value is not one of the accepted literal values.",
+            {"parameter": parameter.name, "allowed_values": literals},
+        )
+
+    if expected in (list, tuple, set) or origin in (list, tuple, set):
+        if isinstance(raw, str) and raw.strip().startswith("["):
+            try:
+                values = _strict_json_loads(raw.strip())
+            except (json.JSONDecodeError, ValueError) as exc:
+                raise AkqryError("invalid_parameter", "List parameters must be valid JSON arrays.", {"parameter": parameter.name}) from exc
+        elif isinstance(raw, (list, tuple, set)):
+            values = list(raw)
+        else:
+            values = [item.strip() for item in str(raw).split(",") if item.strip()]
+        if not isinstance(values, list):
+            raise AkqryError("invalid_parameter", "List parameters need a JSON array.", {"parameter": parameter.name})
+        item_type = args[0] if args and args[0] is not Ellipsis else str
+        converted = [_coerce_value(item, parameter, item_type) for item in values]
+        return tuple(converted) if expected is tuple or origin is tuple else set(converted) if expected is set or origin is set else converted
+
+    if expected is dict or origin is dict:
+        try:
+            value = _strict_json_loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise AkqryError("invalid_parameter", "Mapping parameters must be valid JSON objects.", {"parameter": parameter.name}) from exc
+        if not isinstance(value, dict):
+            raise AkqryError("invalid_parameter", "Mapping parameters need a JSON object.", {"parameter": parameter.name})
+        key_type = args[0] if args and args[0] is not Ellipsis else str
+        value_type = args[1] if len(args) > 1 and args[1] is not Ellipsis else Any
+        return {
+            _coerce_value(key, parameter, key_type): _coerce_value(item, parameter, value_type)
+            for key, item in value.items()
+        }
+
     if expected is bool:
-        normalized = raw.lower()
-        if normalized in {"true", "1", "yes"}:
+        if isinstance(raw, bool):
+            return raw
+        normalized = str(raw).strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
             return True
-        if normalized in {"false", "0", "no"}:
+        if normalized in {"false", "0", "no", "off"}:
             return False
         raise AkqryError("invalid_parameter", "Boolean parameters accept true/false.", {"parameter": parameter.name})
     if expected is int:
-        try:
+        if isinstance(raw, bool):
+            raise AkqryError("invalid_parameter", "Expected an integer parameter.", {"parameter": parameter.name})
+        if isinstance(raw, int):
+            return raw
+        if isinstance(raw, float) and raw.is_integer() and math.isfinite(raw):
             return int(raw)
-        except ValueError as exc:
+        try:
+            return int(str(raw).strip())
+        except (TypeError, ValueError) as exc:
             raise AkqryError("invalid_parameter", "Expected an integer parameter.", {"parameter": parameter.name}) from exc
     if expected is float:
+        if isinstance(raw, bool):
+            raise AkqryError("invalid_parameter", "Expected a numeric parameter.", {"parameter": parameter.name})
         try:
-            return float(raw)
-        except ValueError as exc:
+            value = float(raw)
+        except (TypeError, ValueError) as exc:
             raise AkqryError("invalid_parameter", "Expected a numeric parameter.", {"parameter": parameter.name}) from exc
+        if not math.isfinite(value):
+            raise AkqryError("invalid_parameter", "Numeric parameters must be finite.", {"parameter": parameter.name})
+        return value
+    if expected is str:
+        if isinstance(raw, str):
+            return raw.strip()
+        raise AkqryError("invalid_parameter", "Expected a text parameter.", {"parameter": parameter.name})
+    if expected is Any or expected is inspect.Parameter.empty:
+        return raw
     return raw
+
+
+def _typed_value(raw: str, parameter: inspect.Parameter, annotation: Any = inspect.Parameter.empty) -> Any:
+    return _coerce_value(raw.strip(), parameter, annotation)
 
 
 def _parameter(signature: inspect.Signature, name: str) -> inspect.Parameter:
@@ -223,32 +398,43 @@ def _parameter(signature: inspect.Signature, name: str) -> inspect.Parameter:
 
 
 def _parse_parameters(args: argparse.Namespace, function: Any) -> dict[str, Any]:
-    supplied: dict[str, Any] = {}
+    raw_supplied: dict[str, Any] = {}
     if getattr(args, "params_json", None):
         try:
-            parsed = json.loads(args.params_json)
-        except json.JSONDecodeError as exc:
+            parsed = _strict_json_loads(args.params_json)
+        except (json.JSONDecodeError, ValueError) as exc:
             raise AkqryError("invalid_parameter", "--params-json must be a JSON object.") from exc
         if not isinstance(parsed, dict):
             raise AkqryError("invalid_parameter", "--params-json must be a JSON object.")
-        supplied.update(parsed)
+        raw_supplied.update(parsed)
     if getattr(args, "params_file", None):
-        content = sys.stdin.read() if args.params_file == "-" else Path(args.params_file).read_text(encoding="utf-8")
         try:
-            parsed = json.loads(content)
-        except json.JSONDecodeError as exc:
+            content = sys.stdin.read() if args.params_file == "-" else Path(args.params_file).read_text(encoding="utf-8")
+        except OSError as exc:
+            raise AkqryError("invalid_parameter", "Unable to read --params-file.", {"path": args.params_file}) from exc
+        try:
+            parsed = _strict_json_loads(content)
+        except (json.JSONDecodeError, ValueError) as exc:
             raise AkqryError("invalid_parameter", "--params-file must contain a JSON object.") from exc
-        if not isinstance(parsed, dict) or set(supplied).intersection(parsed):
+        if not isinstance(parsed, dict) or set(raw_supplied).intersection(parsed):
             raise AkqryError("invalid_parameter", "Parameter sources must be objects with no duplicate keys.")
-        supplied.update(parsed)
+        raw_supplied.update(parsed)
     signature = inspect.signature(function)
+    try:
+        annotations = get_type_hints(function)
+    except (NameError, TypeError, ValueError):
+        annotations = {}
     for item in args.arg:
         if "=" not in item:
             raise AkqryError("invalid_parameter", "--arg must use NAME=VALUE.", {"argument": item})
         name, raw = item.split("=", 1)
-        if name in supplied:
+        if name in raw_supplied:
             raise AkqryError("invalid_parameter", "A parameter was supplied more than once.", {"parameter": name})
-        supplied[name] = _typed_value(raw, _parameter(signature, name))
+        raw_supplied[name] = raw
+    supplied: dict[str, Any] = {}
+    for name, raw in raw_supplied.items():
+        parameter = _parameter(signature, name)
+        supplied[name] = _coerce_value(raw, parameter, annotations.get(name, inspect.Parameter.empty))
     try:
         signature.bind(**supplied)
     except TypeError as exc:
@@ -308,7 +494,10 @@ def _worker_run(spec: dict[str, Any], timeout: float) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="akqry-") as tempdir:
         root = Path(tempdir)
         request, response = root / "request.json", root / "response.json"
-        request.write_text(json.dumps(spec, ensure_ascii=False, default=str), encoding="utf-8")
+        request.write_text(
+            json.dumps(spec, ensure_ascii=False, default=str, allow_nan=False),
+            encoding="utf-8",
+        )
         timed_out, returncode = False, None
         try:
             process = subprocess.run(
@@ -355,7 +544,12 @@ def _label_for_path(value: Any) -> str:
     return _UNSAFE_LABEL.sub("_", str(value)) or "value"
 
 
-def _plan_calls(args: argparse.Namespace, signature: inspect.Signature, base: dict[str, Any]) -> list[PlannedCall]:
+def _plan_calls(
+    args: argparse.Namespace,
+    signature: inspect.Signature,
+    base: dict[str, Any],
+    annotations: dict[str, Any] | None = None,
+) -> list[PlannedCall]:
     template = args.output
     if not args.for_each:
         destination = Path(template).expanduser().resolve() if template else None
@@ -370,7 +564,9 @@ def _plan_calls(args: argparse.Namespace, signature: inspect.Signature, base: di
             "A parameter cannot be both fixed and iterated over.",
             {"parameter": name, "fixed_value": base[name]},
         )
-    values = raw_values.split(",")
+    values = [value.strip() for value in raw_values.split(",")]
+    if any(not value for value in values):
+        raise AkqryError("usage_error", "--for-each values cannot be empty.", {"parameter": name})
     if len(values) < 2:
         raise AkqryError("usage_error", "--for-each needs at least two comma-separated values.", {"parameter": name})
     if len(set(values)) != len(values):
@@ -389,7 +585,10 @@ def _plan_calls(args: argparse.Namespace, signature: inspect.Signature, base: di
         calls.append(
             PlannedCall(
                 index=index,
-                parameters={**base, name: _typed_value(raw, parameter)},
+                parameters={
+                    **base,
+                    name: _typed_value(raw, parameter, (annotations or {}).get(name, inspect.Parameter.empty)),
+                },
                 label=raw,
                 destination=destination,
             )
@@ -438,6 +637,9 @@ def _fetch_options(args: argparse.Namespace, output_format: str | None) -> dict[
         "timeout_seconds": args.timeout,
         "retries": args.retries,
         "delay_seconds": args.delay,
+        "date_column": args.date_column,
+        "key_columns": _split_columns(args.key_columns),
+        "strict_quality": bool(args.strict_quality),
     }
 
 
@@ -446,10 +648,17 @@ def _batch_budget(args: argparse.Namespace, calls: int) -> float:
     return args.timeout * calls + args.delay * max(calls - 1, 0) + WORKER_GRACE_SECONDS
 
 
-def _cache_material(function: str, call: PlannedCall, options: dict[str, Any], akshare_version: str | None) -> dict[str, Any]:
+def _cache_material(
+    function: str,
+    call: PlannedCall,
+    options: dict[str, Any],
+    runtime: dict[str, Any],
+) -> dict[str, Any]:
     return {
+        "cache_schema_version": 2,
         "akqry_version": __version__,
-        "akshare_version": akshare_version,
+        "akshare_version": runtime.get("akshare_version"),
+        "akshare_module_path": runtime.get("akshare_module_path"),
         "function": function,
         "parameters": call.parameters,
         "require_columns": options["require_columns"],
@@ -457,6 +666,9 @@ def _cache_material(function: str, call: PlannedCall, options: dict[str, Any], a
         "preview_rows": options["preview_rows"],
         "allow_empty": options["allow_empty"],
         "output_format": options["output_format"],
+        "date_column": options["date_column"],
+        "key_columns": options["key_columns"],
+        "strict_quality": options["strict_quality"],
     }
 
 
@@ -487,22 +699,43 @@ def _write_sidecar(call: PlannedCall, payload: dict[str, Any], no_sidecar: bool)
         if call.sidecar.exists():
             call.sidecar.unlink()
         return
-    temporary = _temporary_path(call.sidecar)
-    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    os.replace(temporary, call.sidecar)
     payload["result"]["metadata"] = str(call.sidecar)
+    temporary = _temporary_path(call.sidecar)
+    try:
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, default=str, allow_nan=False),
+            encoding="utf-8",
+        )
+        os.replace(temporary, call.sidecar)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
-def _handle_fetch(args: argparse.Namespace) -> dict[str, Any]:
-    if args.timeout <= 0 or args.preview_rows < 0 or args.retries < 0 or args.delay < 0:
+def _handle_fetch(
+    args: argparse.Namespace,
+    module: Any | None = None,
+    catalog: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    if (
+        not math.isfinite(args.timeout)
+        or args.timeout <= 0
+        or args.preview_rows < 0
+        or args.retries < 0
+        or not math.isfinite(args.delay)
+        or args.delay < 0
+        or not math.isfinite(args.cache_ttl)
+    ):
         raise AkqryError(
             "usage_error",
             "--timeout must be positive; --preview-rows, --retries and --delay cannot be negative.",
         )
-    module = load_akshare(args.akshare_path)
+    if module is None:
+        module = load_akshare(args.akshare_path)
     # Include excluded callables so that asking for one reports why it is excluded
     # rather than claiming the name does not exist.
-    catalog = discover(module, args.docs_root, include_unsafe=True)
+    if catalog is None:
+        catalog = discover(module, args.docs_root, include_unsafe=True)
     record = catalog.get(args.function)
     if record is None:
         raise AkqryError(
@@ -518,13 +751,20 @@ def _handle_fetch(args: argparse.Namespace) -> dict[str, Any]:
         )
     function = getattr(module, args.function)
     signature = inspect.signature(function)
+    try:
+        annotations = get_type_hints(function)
+    except (NameError, TypeError, ValueError):
+        annotations = {}
     base_parameters = _parse_parameters(args, function)
     output_format = infer_format(args.output, args.format)
     ensure_format_available(output_format)
-    calls = _plan_calls(args, signature, base_parameters)
+    calls = _plan_calls(args, signature, base_parameters, annotations)
     warnings: list[str] = []
     for call in calls:
         warnings.extend(_check_enums(record, call.parameters, args.allow_unknown_values))
+    warnings = list(dict.fromkeys(warnings))
+    if not args.output:
+        warnings.append("No --output was supplied; the returned table is preview-only.")
     _prepare_destinations(calls, args, output_format)
 
     options = _fetch_options(args, output_format)
@@ -532,8 +772,14 @@ def _handle_fetch(args: argparse.Namespace) -> dict[str, Any]:
     cache_root = cache.resolve_root(args.cache_dir)
     if cache_root is not None:
         for call in calls:
-            call.cache_key = cache.cache_key(_cache_material(args.function, call, options, runtime["akshare_version"]))
-            call.cached = cache.load(cache_root, call.cache_key, args.cache_ttl)
+            call.cache_key = cache.cache_key(_cache_material(args.function, call, options, runtime))
+            if not args.refresh:
+                call.cached = cache.load(
+                    cache_root,
+                    call.cache_key,
+                    args.cache_ttl,
+                    require_data=call.destination is not None,
+                )
 
     pending = [call for call in calls if call.cached is None]
     started = time.monotonic()
@@ -552,6 +798,9 @@ def _handle_fetch(args: argparse.Namespace) -> dict[str, Any]:
                     "select": options["select"],
                     "preview_rows": options["preview_rows"],
                     "allow_empty": options["allow_empty"],
+                    "date_column": options["date_column"],
+                    "key_columns": options["key_columns"],
+                    "strict_quality": options["strict_quality"],
                     "output_format": output_format,
                     "retries": args.retries,
                     "call_timeout": args.timeout,
@@ -613,6 +862,11 @@ def _item_provenance(
         "label": call.label,
         "source_url": record.get("source_url"),
         "source_site": record.get("source_site"),
+        "signature": record.get("signature"),
+        "module": record.get("module"),
+        "source_file": record.get("source_file"),
+        "docstring_fingerprint": record.get("docstring_fingerprint"),
+        "schema_hints": record.get("schema_hints"),
         "options": options,
     }
     if call.cached is not None:
@@ -718,10 +972,12 @@ def _assemble(
                     "label": call.label,
                     "ok": True,
                     "rows": result["rows"],
+                    "preview_only": result.get("preview_only", False),
                     "output": result.get("output"),
                     "metadata": result.get("metadata"),
                     "schema_fingerprint": result["schema_fingerprint"],
                     "temporal_bounds": result["temporal_bounds"],
+                    "quality": result.get("quality"),
                     "cache_hit": payload["provenance"]["cache"]["hit"],
                 }
             )
@@ -765,6 +1021,17 @@ def _assemble(
 
 
 def _handle_describe(args: argparse.Namespace, module: Any, catalog: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    if (
+        not math.isfinite(args.timeout)
+        or args.timeout <= 0
+        or args.preview_rows < 0
+        or args.retries < 0
+        or not math.isfinite(args.cache_ttl)
+    ):
+        raise AkqryError(
+            "usage_error",
+            "--timeout must be positive; --preview-rows and --retries cannot be negative; --cache-ttl must be finite.",
+        )
     record = describe(catalog, args.function)
     payload = {"ok": True, "command": "describe", "result": record, "provenance": runtime_provenance(module)}
     if not args.probe:
@@ -778,6 +1045,7 @@ def _handle_describe(args: argparse.Namespace, module: Any, catalog: dict[str, d
     function = getattr(module, args.function)
     parameters = _parse_parameters(args, function)
     probe: dict[str, Any] = {"parameters": _redacted_parameters(parameters)}
+    runtime = runtime_provenance(module)
 
     # The workflow asks for a probe before every analysis, so the same schema
     # question is asked over and over; serve it from the cache when there is one.
@@ -786,8 +1054,10 @@ def _handle_describe(args: argparse.Namespace, module: Any, catalog: dict[str, d
         cache.cache_key(
             {
                 "kind": "probe",
+                "cache_schema_version": 2,
                 "akqry_version": __version__,
-                "akshare_version": runtime_provenance(module)["akshare_version"],
+                "akshare_version": runtime["akshare_version"],
+                "akshare_module_path": runtime["akshare_module_path"],
                 "function": args.function,
                 "parameters": parameters,
                 "preview_rows": max(args.preview_rows, 0),
@@ -796,13 +1066,19 @@ def _handle_describe(args: argparse.Namespace, module: Any, catalog: dict[str, d
         if cache_root is not None
         else None
     )
-    if cache_root is not None and key is not None:
+    if cache_root is not None and key is not None and not args.refresh:
         entry = cache.load(cache_root, key, args.cache_ttl)
         if entry is not None:
             record["probe"] = {
                 **probe,
                 **entry["probe"],
-                "cache": {"hit": True, "key": key, "age_seconds": entry.get("age_seconds")},
+                "cache": {
+                    "hit": True,
+                    "key": key,
+                    "age_seconds": entry.get("age_seconds"),
+                    "ttl_seconds": args.cache_ttl,
+                },
+                "served_at_utc": datetime.now(timezone.utc).isoformat(),
             }
             return payload
 
@@ -815,6 +1091,9 @@ def _handle_describe(args: argparse.Namespace, module: Any, catalog: dict[str, d
             "select": None,
             "preview_rows": max(args.preview_rows, 0),
             "allow_empty": True,
+            "date_column": None,
+            "key_columns": [],
+            "strict_quality": False,
             "output_format": None,
             "retries": max(args.retries, 0),
             "call_timeout": args.timeout,
@@ -826,8 +1105,20 @@ def _handle_describe(args: argparse.Namespace, module: Any, catalog: dict[str, d
     if not worker_payload["ok"]:
         probe.update({"ok": False, "error": worker_payload["error"]})
     else:
-        item = worker_payload["items"][0]
-        if item["ok"]:
+        item = worker_payload.get("items", [None])[0]
+        if item is None:
+            probe.update(
+                {
+                    "ok": False,
+                    "error": {
+                        "code": "upstream_error",
+                        "message": "Probe worker returned no call result.",
+                        "details": {},
+                        "retryable": False,
+                    },
+                }
+            )
+        elif item["ok"]:
             result = item["result"]
             probe.update(
                 {
@@ -837,16 +1128,22 @@ def _handle_describe(args: argparse.Namespace, module: Any, catalog: dict[str, d
                     "schema_fingerprint": result["schema_fingerprint"],
                     "temporal_bounds": result["temporal_bounds"],
                     "preview": result["preview"],
+                    "quality": result.get("quality"),
                     "attempts": item["attempts"],
                 }
             )
         else:
             probe.update({"ok": False, "error": item["error"], "attempts": item["attempts"]})
-    probe["retrieved_at_utc"] = datetime.now(timezone.utc).isoformat()
+    retrieved = datetime.now(timezone.utc)
+    probe["retrieved_at_utc"] = retrieved.isoformat()
+    probe["retrieved_at_local"] = retrieved.astimezone().isoformat()
     if cache_root is not None and key is not None and probe.get("ok"):
         # Only a schema that was actually observed is worth replaying.
         cache.store(cache_root, key, {"probe": {key_: probe[key_] for key_ in probe if key_ != "parameters"}}, None)
     record["probe"] = {**probe, "cache": {"hit": False, "key": key, "enabled": cache_root is not None}}
+    if not probe.get("ok"):
+        payload["ok"] = False
+        payload["error"] = probe["error"]
     return payload
 
 
@@ -872,20 +1169,31 @@ def _handle(args: argparse.Namespace) -> dict[str, Any]:
             },
         }
     module = load_akshare(args.akshare_path)
-    catalog = discover(module, args.docs_root, getattr(args, "all", False))
+    include_unsafe = bool(getattr(args, "all", False) or args.command == "fetch")
+    catalog = discover(module, args.docs_root, include_unsafe)
     if args.command == "search":
         if args.limit <= 0:
             raise AkqryError("usage_error", "--limit must be positive.")
+        if not math.isfinite(args.min_coverage) or not 0 <= args.min_coverage <= 1:
+            raise AkqryError("usage_error", "--min-coverage must be a finite number between 0 and 1.")
         return {
             "ok": True,
             "command": "search",
-            "result": search(catalog, args.query, args.domain, args.limit, args.full),
+            "result": search(
+                catalog,
+                args.query,
+                args.domain,
+                args.limit,
+                args.full,
+                args.match_mode,
+                args.min_coverage,
+            ),
             "provenance": runtime_provenance(module),
         }
     if args.command == "describe":
         return _handle_describe(args, module, catalog)
     if args.command == "fetch":
-        return _handle_fetch(args)
+        return _handle_fetch(args, module=module, catalog=catalog)
     raise AkqryError("usage_error", "Unknown command.")
 
 
@@ -899,7 +1207,9 @@ def _format_available(output_format: str) -> bool:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    _set_json_mode(parser, "--json" in raw_argv)
+    args = parser.parse_args(raw_argv)
     try:
         payload = _handle(args)
     except Exception as exc:
