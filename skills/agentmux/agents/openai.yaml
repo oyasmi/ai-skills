@@ -1,4 +1,4 @@
 interface:
   display_name: "AgentMux"
-  short_description: "按角色委派、编排、管理并验收外部 CLI 智能体任务"
-  default_prompt: "使用 $agentmux 从 template list 的 description 中选择最小足够角色，通过 run 委派任务并独立检查交付；只有复杂或高风险任务才按需组合 planner、builder、reviewer、verifier、worker、documenter 与 scout。"
+  short_description: "按角色委派、协调、持续跟进并独立验收外部 CLI 智能体任务"
+  default_prompt: "使用 $agentmux 选择合适的外部 Agent 角色来完成这项任务，持续跟进并独立验收交付结果。"
