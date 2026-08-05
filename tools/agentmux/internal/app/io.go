@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/apperr"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/logx"
@@ -56,7 +58,7 @@ func attachSelect(ctx context.Context, svc service.Service, stderr io.Writer) in
 	return attach(ctx, svc, items[choice-1].Name, stderr)
 }
 
-func extractJSON(args []string) (bool, []string) {
+func extractJSON(args []string) (bool, []string, error) {
 	out := make([]string, 0, len(args))
 	jsonMode := false
 	for _, arg := range args {
@@ -64,17 +66,26 @@ func extractJSON(args []string) (bool, []string) {
 			jsonMode = true
 			continue
 		}
+		if strings.HasPrefix(arg, "--json=") {
+			value, err := strconv.ParseBool(strings.TrimPrefix(arg, "--json="))
+			if err != nil {
+				return false, nil, apperr.New("invalid_arguments", "invalid value for --json: expected true or false")
+			}
+			jsonMode = value
+			continue
+		}
 		out = append(out, arg)
 	}
-	return jsonMode, out
+	return jsonMode, out, nil
 }
 
 func writeErr(stdout, stderr io.Writer, jsonMode bool, command, instance string, err error) int {
+	message := shortError(err)
 	logx.Debug("command_error", map[string]any{
 		"command":    command,
 		"instance":   instance,
 		"error_code": apperr.Code(err),
-		"error":      err.Error(),
+		"error":      message,
 	})
 	if jsonMode {
 		_ = output.WriteJSON(stdout, output.Failure{
@@ -82,10 +93,21 @@ func writeErr(stdout, stderr io.Writer, jsonMode bool, command, instance string,
 			Command:   command,
 			Instance:  instance,
 			ErrorCode: apperr.Code(err),
-			Error:     err.Error(),
+			Error:     message,
 		})
 		return 1
 	}
 	fmt.Fprintln(stderr, err.Error())
 	return 1
+}
+
+func shortError(err error) string {
+	message := strings.TrimSpace(err.Error())
+	if index := strings.Index(message, "\n\n"); index >= 0 {
+		message = strings.TrimSpace(message[:index])
+	}
+	if index := strings.IndexByte(message, '\n'); index >= 0 {
+		message = strings.TrimSpace(message[:index])
+	}
+	return message
 }

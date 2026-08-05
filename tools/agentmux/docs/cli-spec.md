@@ -48,6 +48,8 @@ agentmux <subcommand> [flags]
 1. 输出 JSON 到 stdout
 2. 错误也输出 JSON
 3. 非 JSON 模式下输出简洁文本或表格
+4. 所有 agentmux CLI 对外生成的时间字段（包括 JSON）使用本地机器时区；JSON 和详细文本字段采用 RFC3339，摘要表格可使用紧凑的本地日期时间格式
+5. `attach` 是交互式命令，不支持 `--json`；传入后返回 `invalid_arguments`
 
 ### 2.3 名称约定
 
@@ -120,12 +122,12 @@ agentmux template list [--json]
 
 文本输出建议列：
 
-1. `NAME`
-2. `MODEL`
-3. `EFFORT`
-4. `HARNESS`
+1. `Name`
+2. `Model`
+3. `Effort`
+4. `Harness`
 5. `CWD`
-6. `DESCRIPTION`
+6. `Description`
 
 JSON 示例：
 
@@ -151,8 +153,10 @@ JSON 示例：
 说明：
 
 1. 模板是角色，`description` 要回答「什么场景用它」和「用它时正确的姿势」，因此通常是多行
-2. 文本表格只显示 `description` 的第一行以保持表格形状；选角色时用 `--json` 读完整内容
+2. 文本表格显示第一段的一行摘要，并按终端显示宽度截断；选角色时用 `--json` 读完整内容
 3. `model` + `effort` 是角色的强度档位，`harness_type` 是实现它的技术细节
+4. 未设置的 `model` 或 `effort` 在文本和 JSON 中显示为 `default`；`cwd` 和 `harness_type` 展示解析后的默认值
+5. 配置文件不存在时使用内置模板，但不会因为这个只读查询创建配置或 state 文件
 
 ---
 
@@ -170,19 +174,28 @@ agentmux list [--all] [--json]
 
 文本输出建议列：
 
-1. `NAME`
-2. `TEMPLATE`
-3. `STATUS`
-4. `MODEL`
+默认文本列：
+
+1. `Name`
+2. `Template`
+3. `Status`
+4. `Model`
 5. `CWD`
-6. `UPDATED`
-7. `ENDED`
+6. `Created`
+7. `Last activity`
+
+`--all` 额外增加：
+
+8. `Ended`
+9. `Reason`
 
 说明：
 
 1. `list` 是多实例状态查询接口
 2. 当调用方还不确定实例名，或想批量扫描状态时，优先使用 `list`
 3. 默认只返回存活实例；`--all` 额外返回墓碑
+4. `Ended` 是结束时间，`Reason` 是 `end_reason`；活动实例默认不显示这两列
+5. JSON 中保留 `updated_at` 作为注册表最近一次观察时间；判断 agent 是否有实际工作应使用 `last_activity_at`
 
 ### 4.2.1 墓碑
 
@@ -218,7 +231,9 @@ JSON 示例：
         "status": "idle",
         "model": "sonnet",
         "cwd": "/Users/me/work/project",
-        "updated_at": "2026-03-20T10:00:00+08:00"
+        "created_at": "2026-03-20T09:58:00+08:00",
+        "updated_at": "2026-03-20T10:00:00+08:00",
+        "last_activity_at": "2026-03-20T10:00:00+08:00"
       }
     ]
   }
@@ -430,16 +445,25 @@ agentmux inspect <instance-name> [--json]
 6. `cwd`
 7. `command`
 8. `session_id`
-9. `created_at`
-10. `updated_at`
-11. `last_activity_at`
-12. `first_prompt_sent`
+9. `harness_type`
+10. `shell`
+11. `created_at`
+12. `updated_at`
+13. `last_activity_at`
+14. `ended_at`（墓碑）
+15. `end_reason`（墓碑）
+16. `last_error`（墓碑）
+17. `first_prompt_sent`
+
+`inspect --json` 不返回 `system_prompt`、`env` 等敏感或内部大字段。
 
 说明：
 
 1. `inspect` 是单实例状态查询接口
 2. 若调用方只想知道当前 `idle/busy/exited/lost` 与相关元数据，优先使用 `inspect`
 3. `command` 是实际启动的命令，已经包含 agentmux 为 `model`/`effort` 注入的 flag；`effort` 是角色声明的原始档位。两者不一致说明该 harness 的档位词表更窄，发生了夹取（见 4.3.2）
+4. JSON 返回稳定的诊断字段，不返回 `system_prompt` 或 `env`
+5. tombstone 额外返回 `ended_at`、`end_reason` 和 `last_error`
 
 JSON 示例：
 
@@ -631,7 +655,7 @@ agentmux wait <instance-name>... [--mode all|any] [--stable <duration-or-ms>] [-
 
 参数：
 
-1. 一个或多个实例名，必须写在所有 flag 之前
+1. 一个或多个实例名；实例名和 flag 可以按常见命令行习惯混排
 2. `--mode all|any`，默认 `all`
 3. `--stable <duration-or-ms>`
 4. `--timeout <duration-or-ms>`
@@ -643,7 +667,7 @@ agentmux wait <instance-name>... [--mode all|any] [--stable <duration-or-ms>] [-
 1. `--mode all`：全部完成或超时才返回
 2. `--mode any`：任意一个完成即返回，其余等待被取消并报告为 pending。并行分片靠它才可用：先处理最先完成的分片，而不是被最慢的挡住
 3. 单个实例名时返回原有单实例结构；多个实例名时返回 `data.instances` 数组
-4. 多实例下某个实例失败只记在该实例上（`error_code`），不影响其他实例的结果；`--collect` 对某个已完成实例读取失败时，同样只记在该实例上，不影响其他实例
+4. 多实例下某个实例失败只记在该实例上（`error_code`），其他实例的结果仍然返回；只要存在失败项，命令顶层 `ok` 为 `false` 且退出码非零
 5. `data.satisfied` 表示是否满足了 `--mode`；`data.done`、`data.pending`、`data.failed` 给出分组
 6. 并行分片的推荐形态：`run --detach` × N（各自独立 `--cwd`），再一次 `wait --mode any --collect`，不必对每个分片单独 `capture`
 
@@ -654,7 +678,8 @@ agentmux wait <instance-name>... [--mode all|any] [--stable <duration-or-ms>] [-
 3. 其他 harness 回退到基于屏幕静止的通用启发式
 4. `wait` 不返回屏幕文本
 5. **超时不是错误**：到 `--timeout` 仍未完成时返回 `ok: true`、退出码 `0`、`status: busy`、`data.timed_out: true`
-6. 只有实例损坏、丢失或进程异常才返回 `ok: false`
+6. `data.timed_out` 只表示确实到达等待 deadline；实例失败不会伪装成超时
+7. 只有实例损坏、丢失或进程异常才返回 `ok: false`
 
 完成判定的可信度：
 
@@ -665,7 +690,7 @@ agentmux wait <instance-name>... [--mode all|any] [--stable <duration-or-ms>] [-
 
 返回字段：
 
-1. `timed_out`：是否因超时返回
+1. `timed_out`：是否确实因 deadline 返回
 2. `saw_busy`：等待期间是否观察到 busy
 3. `elapsed_ms`：本次等待实际耗时
 4. `stable_for_ms`：通用启发式下的屏幕静止时长
@@ -763,6 +788,8 @@ agentmux attach [<instance-name>]
 
 1. `attach` 主要服务人类调试
 2. Agent 编排流程不应依赖它
+3. TUI harness attach 到 tmux；结构化 harness 跟随 `output.jsonl` 事件流
+4. `attach` 不支持 `--json`
 
 ---
 
@@ -839,7 +866,7 @@ JSON 示例：
   "command": "version",
   "data": {
     "version": "v0.4.0",
-    "build_time": "2026-04-01T08:00:00Z",
+    "build_time": "2026-04-01T08:00:00+08:00",
     "binary_path": "/home/me/.local/bin/agentmux",
     "commands": ["template list", "list", "summon", "run", "inspect", "prompt", "capture", "wait", "attach", "halt", "doctor", "version"],
     "harness_types": ["claude-code", "codex-cli", "gemini-cli", "claude-code-ndjson", "codex-cli-execjson", "pi-rpc"],
@@ -877,7 +904,7 @@ JSON 示例：
   "command": "doctor",
   "data": {
     "checks": [
-      {"name": "binary", "status": "ok", "detail": "version=v0.4.2 build_time=2026-04-01T08:00:00Z path=/home/me/.local/bin/agentmux"},
+      {"name": "binary", "status": "ok", "detail": "version=v0.4.2 build_time=2026-04-01T08:00:00+08:00 path=/home/me/.local/bin/agentmux"},
       {"name": "path", "status": "ok", "detail": "PATH resolves to the running binary: /home/me/.local/bin/agentmux"},
       {"name": "paths", "status": "ok", "detail": "config=/home/me/.config/agentmux/config.yaml state=/home/me/.local/state/agentmux"},
       {"name": "state_dir", "status": "ok", "detail": "/home/me/.local/state/agentmux"},
@@ -900,7 +927,7 @@ JSON 示例：
 
 | 错误码 | 含义 | 建议动作 |
 | --- | --- | --- |
-| `invalid_arguments` | 参数缺失、冲突或位置错误 | 按提示修正；实例名必须写在 flag 之前 |
+| `invalid_arguments` | 参数缺失、冲突、未知 flag 或位置错误 | 按提示修正；实例名和 flag 可以混排 |
 | `invalid_key` | `--key` 不在白名单内 | 改用 `Enter`、`C-c`、`Escape`、`Up`、`Down`、`Tab` |
 | `template_not_found` | 模板不存在 | `template list --json` |
 | `instance_not_found` | 实例不存在或已被清理 | `list --json`，必要时 `summon` |

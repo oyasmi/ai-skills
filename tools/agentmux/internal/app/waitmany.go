@@ -6,6 +6,8 @@ import (
 	"io"
 	"strings"
 
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/capture"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/instance"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/output"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/service"
 )
@@ -23,12 +25,23 @@ func waitMany(ctx context.Context, svc service.Service, names []string, stableMS
 	pending := []string{}
 	failed := []string{}
 	items := make([]map[string]any, 0, len(outcomes))
+	observedTimeout := false
 	for _, out := range outcomes {
+		status := string(out.Instance.Status)
+		if out.ErrorCode != "" {
+			status = "error"
+		} else if status == "" && !out.Done {
+			status = "pending"
+		}
 		item := map[string]any{
 			"instance":   out.Name,
 			"done":       out.Done,
-			"status":     string(out.Instance.Status),
+			"status":     status,
 			"elapsed_ms": out.Snapshot.ElapsedMS,
+		}
+		if out.TimedOut {
+			item["timed_out"] = true
+			observedTimeout = true
 		}
 		switch {
 		case out.ErrorCode != "":
@@ -40,28 +53,40 @@ func waitMany(ctx context.Context, svc service.Service, names []string, stableMS
 		default:
 			pending = append(pending, out.Name)
 		}
-		if out.Instance.Name != "" && !service.IsStructuredHarness(out.Instance.HarnessType) {
-			item["saw_busy"] = out.Snapshot.SawBusy
-			item["pane_title"] = out.Snapshot.PaneTitle
+		if out.Instance.Name != "" {
+			for key, value := range waitSnapshotData(out.Instance, out.Snapshot) {
+				item[key] = value
+			}
 		}
 		if collect && out.Done && out.ErrorCode == "" {
 			item["content"] = out.Snapshot.Content
+			item["harness_type"] = out.Instance.HarnessType
+			item["scope"] = string(capture.ScopeCurrent)
+			for key, value := range out.Snapshot.Extra {
+				item[key] = value
+			}
 		}
 		items = append(items, item)
 	}
+	commandOK := len(failed) == 0
+	timedOut := !ok && observedTimeout
 
 	if jsonMode {
-		_ = output.WriteJSON(stdout, output.Success{OK: true, Command: "wait", Data: map[string]any{
+		_ = output.WriteJSON(stdout, output.Success{OK: commandOK, Command: "wait", Data: map[string]any{
 			"mode":      string(mode),
 			"satisfied": ok,
-			"timed_out": !ok,
+			"timed_out": timedOut,
 			"done":      done,
 			"pending":   pending,
 			"failed":    failed,
 			"instances": items,
 		}})
+		if !commandOK {
+			return 1
+		}
 		return 0
 	}
+	rows := make([][]string, 0, len(outcomes))
 	for _, out := range outcomes {
 		state := "pending"
 		switch {
@@ -69,14 +94,46 @@ func waitMany(ctx context.Context, svc service.Service, names []string, stableMS
 			state = out.ErrorCode
 		case out.Done:
 			state = "done"
+		case out.TimedOut:
+			state = "timed_out"
 		}
-		fmt.Fprintf(stdout, "%s\t%s\t%s\t%dms\n", out.Name, state, out.Instance.Status, out.Snapshot.ElapsedMS)
-		if collect && out.Done && out.ErrorCode == "" {
-			fmt.Fprintf(stdout, "--- %s ---\n%s\n", out.Name, out.Snapshot.Content)
+		status := string(out.Instance.Status)
+		if status == "" {
+			status = "-"
+		}
+		rows = append(rows, []string{out.Name, state, status, fmt.Sprintf("%dms", out.Snapshot.ElapsedMS)})
+	}
+	_ = output.RenderTable(stdout, []string{"Instance", "State", "Status", "Elapsed"}, rows)
+	if collect {
+		for _, out := range outcomes {
+			if out.Done && out.ErrorCode == "" {
+				fmt.Fprintf(stdout, "--- %s ---\n%s\n", out.Name, out.Snapshot.Content)
+			}
 		}
 	}
-	if !ok {
-		fmt.Fprintf(stderr, "mode=%s not satisfied; pending: %s\n", mode, strings.Join(pending, ", "))
+	if len(failed) > 0 {
+		fmt.Fprintf(stderr, "wait failed for: %s\n", strings.Join(failed, ", "))
+	} else if !ok {
+		fmt.Fprintf(stderr, "mode=%s timed out; pending: %s\n", mode, strings.Join(pending, ", "))
+	}
+	if !commandOK {
+		return 1
 	}
 	return 0
+}
+
+func waitSnapshotData(inst instance.Instance, snap capture.Snapshot) map[string]any {
+	data := map[string]any{}
+	if service.IsStructuredHarness(inst.HarnessType) {
+		return data
+	}
+	data["saw_busy"] = snap.SawBusy
+	data["stable_for_ms"] = snap.StableForMS
+	data["cursor_x"] = snap.CursorX
+	data["cursor_y"] = snap.CursorY
+	data["width"] = snap.Width
+	data["height"] = snap.Height
+	data["history_lines"] = snap.History
+	data["pane_title"] = snap.PaneTitle
+	return data
 }

@@ -15,6 +15,7 @@ import (
 
 func parseSummonArgs(args []string) (service.SummonInput, error) {
 	in := service.SummonInput{}
+	args = splitEqualsForms(args, "--template", "--name", "--cwd", "--model", "--effort", "--command", "--system-prompt", "--prompt")
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--template":
@@ -75,7 +76,10 @@ func parseSummonArgs(args []string) (service.SummonInput, error) {
 			if args[i] == "--json" {
 				continue
 			}
-			return in, apperr.New("invalid_arguments", "unknown flag "+args[i])
+			if strings.HasPrefix(args[i], "-") {
+				return in, apperr.New("invalid_arguments", "unknown flag: "+args[i])
+			}
+			return in, apperr.New("invalid_arguments", "unexpected argument: "+args[i])
 		}
 	}
 	if strings.TrimSpace(in.TemplateName) == "" {
@@ -96,6 +100,27 @@ func parseRunArgs(args []string) (service.RunInput, bool, error) {
 	rest := make([]string, 0, len(args))
 	args = splitEqualsForms(args, "--prompt-file", "--timeout", "--history")
 	for i := 0; i < len(args); i++ {
+		if name, value, ok := splitBooleanEquals(args[i]); ok {
+			parsed, err := strconv.ParseBool(value)
+			if err != nil {
+				return in, false, apperr.New("invalid_arguments", "invalid value for "+name+": expected true or false")
+			}
+			switch name {
+			case "--stdin":
+				useStdin = parsed
+			case "--raw":
+				in.Capture.Raw = parsed
+			case "--trace":
+				in.Capture.Trace = parsed
+			case "--detach":
+				in.Detach = parsed
+			default:
+				// This was an equals form for a non-boolean flag. Leave it for
+				// the normal parser so it gets the command-specific error.
+				rest = append(rest, args[i])
+			}
+			continue
+		}
 		switch args[i] {
 		case "--prompt-file", "--timeout", "--history":
 			if i+1 >= len(args) {
@@ -180,10 +205,64 @@ func splitEqualsForms(args []string, flags ...string) []string {
 	return out
 }
 
+func splitBooleanEquals(arg string) (name, value string, ok bool) {
+	for _, flag := range []string{"--stdin", "--raw", "--trace", "--detach"} {
+		if strings.HasPrefix(arg, flag+"=") {
+			return flag, strings.TrimPrefix(arg, flag+"="), true
+		}
+	}
+	return "", "", false
+}
+
+// splitNamedArgs lets the conventional positional argument and flag order
+// work in either direction while keeping flag values attached to their flag.
+// The standard flag package stops parsing at the first positional argument,
+// so commands with an instance name need this small normalization step.
+func splitNamedArgs(args []string, valueFlags map[string]bool) (positionals, flags []string, err error) {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			positionals = append(positionals, args[i+1:]...)
+			break
+		}
+		if !strings.HasPrefix(arg, "-") {
+			positionals = append(positionals, arg)
+			continue
+		}
+		flags = append(flags, arg)
+		if strings.Contains(arg, "=") || !valueFlags[arg] {
+			continue
+		}
+		if i+1 >= len(args) {
+			return nil, nil, apperr.New("invalid_arguments", "missing value for "+arg)
+		}
+		flags = append(flags, args[i+1])
+		i++
+	}
+	return positionals, flags, nil
+}
+
+func parseNamedInstanceArgs(args []string, command, help string, valueFlags map[string]bool) (string, []string, error) {
+	positionals, flags, err := splitNamedArgs(args, valueFlags)
+	if err != nil {
+		return "", nil, err
+	}
+	if len(positionals) == 0 {
+		return "", nil, apperr.New("invalid_arguments", "missing instance name\n\n"+help)
+	}
+	if len(positionals) > 1 {
+		return "", nil, apperr.New("invalid_arguments", command+" accepts exactly one instance name\n\n"+help)
+	}
+	if err := requireInstanceName(positionals[0], command, help); err != nil {
+		return "", nil, err
+	}
+	return positionals[0], flags, nil
+}
+
 func parseListArgs(args []string) (includeEnded bool, err error) {
 	fs := newFlagSet("list")
 	fs.BoolVar(&includeEnded, "all", false, "")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagSet(fs, args); err != nil {
 		return false, err
 	}
 	if fs.NArg() > 0 {
@@ -193,21 +272,21 @@ func parseListArgs(args []string) (includeEnded bool, err error) {
 }
 
 func parsePromptArgs(args []string) (name, text, key string, useStdin bool, waitIfBusyMS int, err error) {
-	if len(args) == 0 {
-		return "", "", "", false, 0, apperr.New("invalid_arguments", "missing instance name\n\n"+promptHelp())
-	}
-	name = args[0]
-	if err := requireInstanceName(name, "prompt", promptHelp()); err != nil {
+	name, flagArgs, err := parseNamedInstanceArgs(args, "prompt", promptHelp(), map[string]bool{
+		"--text":         true,
+		"--key":          true,
+		"--wait-if-busy": true,
+	})
+	if err != nil {
 		return "", "", "", false, 0, err
 	}
 	var waitIfBusyRaw string
-	args = splitEqualsForms(args[1:], "--wait-if-busy")
 	fs := newFlagSet("prompt")
 	fs.StringVar(&text, "text", "", "")
 	fs.StringVar(&key, "key", "", "")
 	fs.BoolVar(&useStdin, "stdin", false, "")
 	fs.StringVar(&waitIfBusyRaw, "wait-if-busy", "", "")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagSet(fs, flagArgs); err != nil {
 		return "", "", "", false, 0, err
 	}
 	if fs.NArg() > 0 {
@@ -226,11 +305,12 @@ func parsePromptArgs(args []string) (name, text, key string, useStdin bool, wait
 }
 
 func parseCaptureArgs(args []string) (name string, opts capture.Options, err error) {
-	if len(args) == 0 {
-		return "", capture.Options{}, apperr.New("invalid_arguments", "missing instance name\n\n"+captureHelp())
-	}
-	name = args[0]
-	if err := requireInstanceName(name, "capture", captureHelp()); err != nil {
+	name, flagArgs, err := parseNamedInstanceArgs(args, "capture", captureHelp(), map[string]bool{
+		"--history": true,
+		"--since":   true,
+		"--scope":   true,
+	})
+	if err != nil {
 		return "", capture.Options{}, err
 	}
 	opts = capture.Options{History: -1, Scope: capture.ScopeCurrent}
@@ -242,7 +322,7 @@ func parseCaptureArgs(args []string) (name string, opts capture.Options, err err
 	fs.BoolVar(&opts.Trace, "trace", false, "")
 	fs.BoolVar(&opts.New, "new", false, "")
 	fs.StringVar(&scopeRaw, "scope", string(capture.ScopeCurrent), "")
-	if err := fs.Parse(args[1:]); err != nil {
+	if err := parseFlagSet(fs, flagArgs); err != nil {
 		return "", capture.Options{}, err
 	}
 	if fs.NArg() > 0 {
@@ -265,27 +345,33 @@ func parseCaptureArgs(args []string) (name string, opts capture.Options, err err
 	return name, opts, nil
 }
 
-// requireInstanceName rejects a flag in the instance-name position. Without it
-// `agentmux capture --history 40 worker` silently treats "--history" as the
-// instance and fails with an error that points nowhere near the real mistake.
+// requireInstanceName rejects a flag-looking positional value. Named commands
+// accept flags before or after the instance name, but an actual instance name
+// still cannot begin with a dash.
 func requireInstanceName(name, command, help string) error {
 	if strings.HasPrefix(name, "-") {
-		return apperr.New("invalid_arguments", "the instance name must come before flags: "+command+" <instance-name> [flags]\n\n"+help)
+		return apperr.New("invalid_arguments", command+" expects an instance name, not a flag\n\n"+help)
 	}
 	return nil
 }
 
 func parseWaitArgs(args []string) (names []string, stableMS, timeoutMS int, mode service.WaitMode, collect bool, err error) {
-	if len(args) == 0 {
+	positionals, flagArgs, splitErr := splitNamedArgs(args, map[string]bool{
+		"--stable":  true,
+		"--timeout": true,
+		"--mode":    true,
+	})
+	if splitErr != nil {
+		return nil, 0, 0, "", false, splitErr
+	}
+	for _, name := range positionals {
+		if err := requireInstanceName(name, "wait", waitHelp()); err != nil {
+			return nil, 0, 0, "", false, err
+		}
+		names = appendUnique(names, name)
+	}
+	if len(names) == 0 {
 		return nil, 0, 0, "", false, apperr.New("invalid_arguments", "missing instance name\n\n"+waitHelp())
-	}
-	if err := requireInstanceName(args[0], "wait", waitHelp()); err != nil {
-		return nil, 0, 0, "", false, err
-	}
-	rest := args
-	for len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
-		names = appendUnique(names, rest[0])
-		rest = rest[1:]
 	}
 	fs := newFlagSet("wait")
 	var stableRaw, timeoutRaw, modeRaw string
@@ -293,11 +379,8 @@ func parseWaitArgs(args []string) (names []string, stableMS, timeoutMS int, mode
 	fs.StringVar(&timeoutRaw, "timeout", "30s", "")
 	fs.StringVar(&modeRaw, "mode", string(service.WaitAll), "")
 	fs.BoolVar(&collect, "collect", false, "")
-	if err := fs.Parse(rest); err != nil {
+	if err := parseFlagSet(fs, flagArgs); err != nil {
 		return nil, 0, 0, "", false, err
-	}
-	if fs.NArg() > 0 {
-		return nil, 0, 0, "", false, apperr.New("invalid_arguments", "wait does not accept positional arguments after flags; list every instance name first")
 	}
 	switch service.WaitMode(strings.TrimSpace(modeRaw)) {
 	case service.WaitAll, "":
@@ -328,18 +411,15 @@ func appendUnique(names []string, name string) []string {
 }
 
 func parseHaltArgs(args []string) (name string, immediately bool, timeoutMS int, err error) {
-	if len(args) == 0 {
-		return "", false, 0, apperr.New("invalid_arguments", "missing instance name\n\n"+haltHelp())
-	}
-	name = args[0]
-	if err := requireInstanceName(name, "halt", haltHelp()); err != nil {
+	name, flagArgs, err := parseNamedInstanceArgs(args, "halt", haltHelp(), map[string]bool{"--timeout": true})
+	if err != nil {
 		return "", false, 0, err
 	}
 	fs := newFlagSet("halt")
 	var timeoutRaw string
 	fs.BoolVar(&immediately, "immediately", false, "")
 	fs.StringVar(&timeoutRaw, "timeout", "5s", "")
-	if err := fs.Parse(args[1:]); err != nil {
+	if err := parseFlagSet(fs, flagArgs); err != nil {
 		return "", false, 0, err
 	}
 	if fs.NArg() > 0 {
@@ -359,6 +439,26 @@ func newFlagSet(name string) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	return fs
+}
+
+func parseFlagSet(fs *flag.FlagSet, args []string) error {
+	if err := fs.Parse(args); err != nil {
+		return apperr.New("invalid_arguments", normalizeFlagError(err.Error()))
+	}
+	return nil
+}
+
+func normalizeFlagError(message string) string {
+	message = strings.TrimSpace(message)
+	const prefix = "flag provided but not defined: -"
+	if strings.HasPrefix(message, prefix) {
+		return "unknown flag: --" + strings.TrimPrefix(message, prefix)
+	}
+	if strings.HasPrefix(message, "flag needs an argument: -") {
+		return "flag needs an argument: --" + strings.TrimPrefix(message, "flag needs an argument: -")
+	}
+	message = strings.Replace(message, " for flag -", " for flag --", 1)
+	return message
 }
 
 func parseMillisOrDuration(raw, flagName string) (int, error) {

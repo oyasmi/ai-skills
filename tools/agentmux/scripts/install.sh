@@ -19,7 +19,7 @@ mkdir -p "$GOCACHE" "$GOPATH" "$GOMODCACHE"
 # A stamped version is what lets `agentmux doctor` and `agentmux version --json`
 # tell a fresh build apart from a stale one instead of both reporting "dev".
 VERSION="${VERSION:-$(git -C "$ROOT_DIR" describe --tags --always --dirty 2>/dev/null || echo dev)}"
-BUILD_TIME="${BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+BUILD_TIME="${BUILD_TIME:-$(date +%Y-%m-%dT%H:%M:%S%z)}"
 
 echo "Building agentmux $VERSION..."
 go build -trimpath -ldflags "-s -w -X main.version=$VERSION -X main.buildTime=$BUILD_TIME" \

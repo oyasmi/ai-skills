@@ -89,6 +89,18 @@ type SummonResult struct {
 	Warnings []string
 }
 
+// TemplateSummary is the public, resolved view used by template list. It is
+// intentionally separate from config.Template so unset values are explicit
+// instead of appearing as unexplained blank cells.
+type TemplateSummary struct {
+	Name        string `json:"name"`
+	Model       string `json:"model"`
+	Effort      string `json:"effort"`
+	HarnessType string `json:"harness_type"`
+	CWD         string `json:"cwd"`
+	Description string `json:"description"`
+}
+
 func New(paths config.Paths, cfg config.Config) Service {
 	return Service{
 		Paths:  paths,
@@ -112,16 +124,18 @@ func New(paths config.Paths, cfg config.Config) Service {
 	}
 }
 
-func (s Service) TemplateList() []map[string]string {
-	out := make([]map[string]string, 0, len(s.Config.Templates))
+func (s Service) TemplateList() []TemplateSummary {
+	out := make([]TemplateSummary, 0, len(s.Config.Templates))
 	for name, tpl := range s.Config.Templates {
-		out = append(out, map[string]string{
-			"name":         name,
-			"model":        tpl.Model,
-			"effort":       tpl.Effort,
-			"cwd":          tpl.CWD,
-			"description":  tpl.Description,
-			"harness_type": firstNonBlank(tpl.HarnessType, s.Config.Defaults.HarnessType),
+		model := firstNonBlank(tpl.Model, "default")
+		effort := firstNonBlank(tpl.Effort, "default")
+		out = append(out, TemplateSummary{
+			Name:        name,
+			Model:       model,
+			Effort:      effort,
+			CWD:         firstNonBlank(tpl.CWD, s.Config.Defaults.CWD),
+			Description: tpl.Description,
+			HarnessType: firstNonBlank(tpl.HarnessType, s.Config.Defaults.HarnessType),
 		})
 	}
 	return out
@@ -153,7 +167,9 @@ func (s Service) withRegistryReconcileOne(ctx context.Context, name string, fn f
 // exist for diagnosis and must not clutter the common "what is running" read.
 func (s Service) List(ctx context.Context, includeEnded bool) ([]instance.Instance, error) {
 	var items []instance.Instance
-	err := s.withRegistryReconcileAll(ctx, func(reg *instance.Registry) error {
+	var reconcileErr error
+	err := instance.WithLocked(s.Paths.Registry, func(reg *instance.Registry) error {
+		reconcileErr = s.reconcileRegistryBestEffort(ctx, reg)
 		if includeEnded {
 			items = reg.Sorted()
 			return nil
@@ -161,7 +177,10 @@ func (s Service) List(ctx context.Context, includeEnded bool) ([]instance.Instan
 		items = reg.Active()
 		return nil
 	})
-	return items, err
+	if err != nil {
+		return nil, err
+	}
+	return items, reconcileErr
 }
 
 func (s Service) Inspect(ctx context.Context, name string) (instance.Instance, error) {
@@ -831,6 +850,31 @@ func (s Service) reconcileRegistry(ctx context.Context, reg *instance.Registry) 
 		reg.Put(s.tombstoneIfEnded(next))
 	}
 	return nil
+}
+
+// reconcileRegistryBestEffort is used by list, which is a diagnostic query and
+// should still show healthy instances when one external harness is unavailable.
+// The first probe error is returned as a warning to the caller, while the
+// registry changes for successful probes are still persisted by WithLocked.
+func (s Service) reconcileRegistryBestEffort(ctx context.Context, reg *instance.Registry) error {
+	var firstErr error
+	for name, inst := range reg.Instances {
+		if inst.Ended() {
+			if s.tombstoneExpired(inst) {
+				reg.Delete(name)
+			}
+			continue
+		}
+		next, err := s.reconcile(ctx, inst)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		reg.Put(s.tombstoneIfEnded(next))
+	}
+	return firstErr
 }
 
 // tombstoneIfEnded stamps an instance that reconcile just found dead.

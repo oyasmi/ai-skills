@@ -233,6 +233,8 @@ skill 应提醒使用它的 Agent：
 3. `content` 是主要屏幕文本来源
 4. `reused` 可用于判断是否新建
 5. `status` 可用于判断当前实例是否可能还在运行
+6. `list --json` 是精简实例摘要，不包含 `system_prompt`、`env` 或 transport 内部字段
+7. CLI 对外时间字段（包括 JSON）使用运行机器的本地时区
 
 ---
 

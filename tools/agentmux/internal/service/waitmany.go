@@ -26,6 +26,7 @@ type WaitOutcome struct {
 	Instance  instance.Instance
 	Snapshot  capture.Snapshot
 	Done      bool
+	TimedOut  bool
 	ErrorCode string
 	Error     string
 }
@@ -77,7 +78,8 @@ func (s Service) WaitMany(ctx context.Context, names []string, stableMS, timeout
 		case r.err == nil:
 			out.Instance = r.inst
 			out.Snapshot = r.snap
-			out.Done = !r.snap.TimedOut
+			out.TimedOut = r.snap.TimedOut
+			out.Done = !out.TimedOut
 		case childCtx.Err() != nil:
 			// Cancelled by a satisfied WaitAny, or by the caller: this instance
 			// simply was not waited to completion, which is not an error.

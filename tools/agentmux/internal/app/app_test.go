@@ -8,8 +8,22 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/output"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/service"
 )
+
+func TestSummarizeDescriptionKeepsUsefulChineseContext(t *testing.T) {
+	got := summarizeDescription("方案负责人（高成本）。\n负责复杂方案拆解、风险识别和验收标准设计。\n\n后续段落。")
+	if !strings.Contains(got, "负责复杂方案拆解") {
+		t.Fatalf("summary lost the second sentence: %q", got)
+	}
+	if strings.Contains(got, "。 ") {
+		t.Fatalf("summary inserted a space after Chinese punctuation: %q", got)
+	}
+	if strings.Contains(got, "...") || strings.Contains(got, "…") {
+		t.Fatalf("summary should leave truncation to the table renderer: %q", got)
+	}
+}
 
 func TestRunRejectsListPositionalArguments(t *testing.T) {
 	stateHome, configHome := setupXDGHome(t)
@@ -36,8 +50,73 @@ func TestRunTemplateListStillWorks(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected zero exit code, stderr=%q", stderr.String())
 	}
-	if got := stdout.String(); !strings.Contains(got, "NAME") || !strings.Contains(got, "MODEL") || !strings.Contains(got, "HARNESS") || !strings.Contains(got, "claude-code") {
+	if got := stdout.String(); !strings.Contains(got, "Name") || !strings.Contains(got, "Model") || !strings.Contains(got, "Harness") || !strings.Contains(got, "claude-code") {
 		t.Fatalf("unexpected stdout: %q", got)
+	}
+}
+
+func TestTemplateListDoesNotInitializeState(t *testing.T) {
+	stateHome, configHome := setupXDGHome(t)
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+
+	var stdout, stderr bytes.Buffer
+	if code := Run(context.Background(), []string{"template", "list"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("template list failed: code=%d stderr=%q", code, stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(configHome, "agentmux", "config.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("template list unexpectedly wrote config: err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(stateHome, "agentmux")); !os.IsNotExist(err) {
+		t.Fatalf("template list unexpectedly created state directory: err=%v", err)
+	}
+}
+
+func TestRunInvalidFlagUsesInvalidArgumentsInJSON(t *testing.T) {
+	stateHome, configHome := setupXDGHome(t)
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"list", "--bogus", "--json"}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatal("expected invalid flag to fail")
+	}
+	got := stdout.String()
+	if !strings.Contains(got, `"error_code": "invalid_arguments"`) || strings.Contains(got, "Usage:") {
+		t.Fatalf("unexpected JSON error: %q", got)
+	}
+}
+
+func TestRunRejectsInspectExtraArguments(t *testing.T) {
+	stateHome, configHome := setupXDGHome(t)
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"inspect", "demo", "extra", "--json"}, &stdout, &stderr)
+	if code == 0 || !strings.Contains(stdout.String(), `"error_code": "invalid_arguments"`) {
+		t.Fatalf("expected strict inspect arity, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestRunRejectsJSONForAttach(t *testing.T) {
+	stateHome, configHome := setupXDGHome(t)
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"attach", "--json"}, &stdout, &stderr)
+	if code == 0 || !strings.Contains(stdout.String(), `"error_code": "invalid_arguments"`) {
+		t.Fatalf("expected attach --json to fail explicitly, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestRunUnknownHelpTopicFails(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"help", "nope"}, &stdout, &stderr)
+	if code == 0 || !strings.Contains(stderr.String(), "unknown help topic") {
+		t.Fatalf("expected unknown help topic to fail, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
 
@@ -60,7 +139,7 @@ func TestParsePromptArgsRejectsTextWithStdin(t *testing.T) {
 
 func TestParsePromptArgsRejectsRemovedEnterFlag(t *testing.T) {
 	_, _, _, _, _, err := parsePromptArgs([]string{"demo", "--enter"})
-	if err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -enter") {
+	if err == nil || !strings.Contains(err.Error(), "unknown flag: --enter") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -79,7 +158,7 @@ func TestParsePromptArgsSupportsWaitIfBusy(t *testing.T) {
 	}
 }
 
-func TestParseCaptureArgsRejectsLegacyWaitFlags(t *testing.T) {
+func TestParseCaptureArgsRejectsUnknownFlags(t *testing.T) {
 	name, opts, err := parseCaptureArgs([]string{"demo", "--history", "120"})
 	if err != nil {
 		t.Fatalf("parseCaptureArgs: %v", err)
@@ -88,9 +167,9 @@ func TestParseCaptureArgsRejectsLegacyWaitFlags(t *testing.T) {
 		t.Fatalf("unexpected parsed values: %q %+v", name, opts)
 	}
 
-	_, _, err = parseCaptureArgs([]string{"demo", "--stable", "1500"})
-	if err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {
-		t.Fatalf("expected legacy stable flag to fail, got %v", err)
+	_, _, err = parseCaptureArgs([]string{"demo", "--stable=1500"})
+	if err == nil || !strings.Contains(err.Error(), "unknown flag: --stable") {
+		t.Fatalf("expected unknown stable flag to fail, got %v", err)
 	}
 }
 
@@ -141,24 +220,22 @@ func TestParseCaptureArgsRawIsOptIn(t *testing.T) {
 	}
 }
 
-// `agentmux capture --history 40 worker` used to treat "--history" as the
-// instance name and fail with an unrelated message.
-func TestParseArgsRejectFlagInInstanceNamePosition(t *testing.T) {
-	if _, _, err := parseCaptureArgs([]string{"--history", "40", "demo"}); err == nil ||
-		!strings.Contains(err.Error(), "instance name must come before flags") {
-		t.Fatalf("unexpected capture error: %v", err)
+func TestParseArgsAcceptsFlagsBeforeInstanceName(t *testing.T) {
+	name, opts, err := parseCaptureArgs([]string{"--history", "40", "demo"})
+	if err != nil || name != "demo" || opts.History != 40 {
+		t.Fatalf("unexpected capture result: name=%q opts=%+v err=%v", name, opts, err)
 	}
-	if _, _, _, _, _, err := parsePromptArgs([]string{"--text", "hi", "demo"}); err == nil ||
-		!strings.Contains(err.Error(), "instance name must come before flags") {
-		t.Fatalf("unexpected prompt error: %v", err)
+	name, text, _, _, _, err := parsePromptArgs([]string{"--text", "hi", "demo"})
+	if err != nil || name != "demo" || text != "hi" {
+		t.Fatalf("unexpected prompt result: name=%q text=%q err=%v", name, text, err)
 	}
-	if _, _, _, _, _, err := parseWaitArgs([]string{"--timeout", "5s", "demo"}); err == nil ||
-		!strings.Contains(err.Error(), "instance name must come before flags") {
-		t.Fatalf("unexpected wait error: %v", err)
+	names, _, timeout, _, _, err := parseWaitArgs([]string{"--timeout", "5s", "demo"})
+	if err != nil || len(names) != 1 || names[0] != "demo" || timeout != 5000 {
+		t.Fatalf("unexpected wait result: names=%v timeout=%d err=%v", names, timeout, err)
 	}
-	if _, _, _, err := parseHaltArgs([]string{"--immediately", "demo"}); err == nil ||
-		!strings.Contains(err.Error(), "instance name must come before flags") {
-		t.Fatalf("unexpected halt error: %v", err)
+	name, immediately, _, err := parseHaltArgs([]string{"--immediately", "demo"})
+	if err != nil || name != "demo" || !immediately {
+		t.Fatalf("unexpected halt result: name=%q immediately=%v err=%v", name, immediately, err)
 	}
 }
 
@@ -188,11 +265,9 @@ func TestParseWaitArgsAcceptsSeveralInstances(t *testing.T) {
 		!strings.Contains(err.Error(), "must be all or any") {
 		t.Fatalf("expected an invalid mode to fail, got %v", err)
 	}
-	// Names after flags are a mistake worth naming: they would be silently
-	// dropped otherwise.
-	if _, _, _, _, _, err := parseWaitArgs([]string{"a", "--mode", "any", "b"}); err == nil ||
-		!strings.Contains(err.Error(), "list every instance name first") {
-		t.Fatalf("expected trailing names to fail, got %v", err)
+	names, _, _, mode, _, err = parseWaitArgs([]string{"a", "--mode", "any", "b"})
+	if err != nil || len(names) != 2 || mode != service.WaitAny {
+		t.Fatalf("expected names and flags to be accepted in either order, names=%v mode=%s err=%v", names, mode, err)
 	}
 }
 
@@ -245,6 +320,10 @@ func TestParseEffortOverride(t *testing.T) {
 	if in.Effort == nil || *in.Effort != "xhigh" {
 		t.Fatalf("expected --effort to reach the summon input, got %v", in.Effort)
 	}
+	equalsIn, err := parseSummonArgs([]string{"--template=builder", "--effort=xhigh"})
+	if err != nil || equalsIn.TemplateName != "builder" || equalsIn.Effort == nil || *equalsIn.Effort != "xhigh" {
+		t.Fatalf("expected --flag=value summon syntax, input=%+v err=%v", equalsIn, err)
+	}
 
 	// run forwards every summon flag, so a role's strength is adjustable in the
 	// one-shot path too.
@@ -258,6 +337,10 @@ func TestParseEffortOverride(t *testing.T) {
 	if runIn.Summon.Model == nil || *runIn.Summon.Model != "opus" {
 		t.Fatalf("expected run to forward --model, got %v", runIn.Summon.Model)
 	}
+	equalsRun, _, err := parseRunArgs([]string{"--template=builder", "--prompt=x", "--detach=true"})
+	if err != nil || equalsRun.Summon.TemplateName != "builder" || !equalsRun.Detach {
+		t.Fatalf("expected --flag=value run syntax, input=%+v err=%v", equalsRun, err)
+	}
 
 	// An unrecognised level would otherwise fall through to the harness default
 	// and read as a working override.
@@ -267,6 +350,9 @@ func TestParseEffortOverride(t *testing.T) {
 	}
 	if _, err := parseSummonArgs([]string{"--template", "builder", "--effort"}); err == nil {
 		t.Fatal("expected a missing --effort value to fail")
+	}
+	if _, err := parseSummonArgs([]string{"worker"}); err == nil || !strings.Contains(err.Error(), "unexpected argument: worker") {
+		t.Fatalf("expected a positional summon argument to be diagnosed clearly, got %v", err)
 	}
 }
 
@@ -337,8 +423,9 @@ func TestRunVersionJSON(t *testing.T) {
 	if !strings.Contains(got, `"command": "version"`) || !strings.Contains(got, `"version": "v1.2.3"`) {
 		t.Fatalf("unexpected stdout: %q", got)
 	}
-	if !strings.Contains(got, `"build_time": "2026-01-01T00:00:00Z"`) {
-		t.Fatalf("expected build_time in output: %q", got)
+	expectedBuildTime := output.LocalizeTimestamp("2026-01-01T00:00:00Z")
+	if !strings.Contains(got, `"build_time": "`+expectedBuildTime+`"`) {
+		t.Fatalf("expected local build_time %q in output: %q", expectedBuildTime, got)
 	}
 	if !strings.Contains(got, `"binary_path"`) {
 		t.Fatalf("expected binary_path in output: %q", got)

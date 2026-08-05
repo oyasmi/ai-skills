@@ -1,6 +1,11 @@
 package app
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/apperr"
+)
 
 func usage() string {
 	return strings.TrimSpace(`
@@ -20,12 +25,15 @@ usage:
 `)
 }
 
-func helpForArgs(args []string) (string, bool) {
+func helpForArgs(args []string) (string, bool, error) {
 	filtered := make([]string, 0, len(args))
 	hasHelp := false
 	for _, arg := range args {
 		if arg == "--help" || arg == "-h" {
 			hasHelp = true
+			continue
+		}
+		if arg == "--json" || strings.HasPrefix(arg, "--json=") {
 			continue
 		}
 		filtered = append(filtered, arg)
@@ -35,45 +43,47 @@ func helpForArgs(args []string) (string, bool) {
 		filtered = filtered[1:]
 	}
 	if !hasHelp {
-		return "", false
+		return "", false, nil
 	}
 	switch len(filtered) {
 	case 0:
-		return rootHelp(), true
+		return rootHelp(), true, nil
 	case 1:
 		switch filtered[0] {
 		case "template":
-			return templateHelp(), true
+			return templateHelp(), true, nil
 		case "list":
-			return listHelp(), true
+			return listHelp(), true, nil
 		case "summon":
-			return summonHelp(), true
+			return summonHelp(), true, nil
 		case "run":
-			return runHelp(), true
+			return runHelp(), true, nil
 		case "inspect":
-			return inspectHelp(), true
+			return inspectHelp(), true, nil
 		case "prompt":
-			return promptHelp(), true
+			return promptHelp(), true, nil
 		case "capture":
-			return captureHelp(), true
+			return captureHelp(), true, nil
 		case "wait":
-			return waitHelp(), true
+			return waitHelp(), true, nil
 		case "attach":
-			return attachHelp(), true
+			return attachHelp(), true, nil
 		case "halt":
-			return haltHelp(), true
+			return haltHelp(), true, nil
 		case "doctor":
-			return doctorHelp(), true
+			return doctorHelp(), true, nil
 		case "version":
-			return versionHelp(), true
+			return versionHelp(), true, nil
 		default:
-			return rootHelp(), true
+			return "", true, apperr.New("invalid_arguments", fmt.Sprintf("unknown help topic %q\n\n%s", filtered[0], rootHelp()))
 		}
 	default:
 		if filtered[0] == "template" && filtered[1] == "list" {
-			return templateListHelp(), true
+			if len(filtered) == 2 {
+				return templateListHelp(), true, nil
+			}
 		}
-		return rootHelp(), true
+		return "", true, apperr.New("invalid_arguments", fmt.Sprintf("unknown help topic %q\n\n%s", strings.Join(filtered, " "), rootHelp()))
 	}
 }
 
@@ -101,7 +111,7 @@ Core commands:
   version         Print the CLI version
 
 Global flags:
-  --json          Return machine-readable JSON for command output
+  --json          Return machine-readable JSON for command output (interactive attach does not support it)
   -h, --help      Show help for the selected command
 
 Examples:
@@ -145,19 +155,21 @@ Learn more:
 
 func templateListHelp() string {
 	return strings.TrimSpace(`
-template list prints the configured role templates from ~/.config/agentmux/config.yaml.
+template list prints the configured role templates from the agentmux config file (honoring XDG_CONFIG_HOME).
 
 Usage:
   agentmux template list [--json]
 
 Output:
-  Text mode prints a table with template name, model, effort, harness type, cwd, and the first line of the description.
+  Text mode prints a width-aware table with template name, model, effort, harness type, cwd, and a one-line summary of the first description paragraph.
   JSON mode returns {"ok", "command", "data.templates"}, with the full multi-line description.
 
 Notes:
   A template is a role, not a harness: its description says which situations it is for and how to drive it correctly, while harness_type and command are the technical detail behind it.
   model and effort together are the role's strength dial. effort is one of low, medium, high, xhigh, max, plus minimal and off where the harness has them; agentmux translates it per harness (claude --effort, pi --thinking, codex -c model_reasoning_effort=) and clamps into a narrower vocabulary rather than refusing the role.
-  Read the full description before delegating: text mode truncates it to one line, so use --json when choosing a role.
+  Text mode shortens long values to fit the terminal. Use --json when choosing a role programmatically or when you need the full description.
+  A blank model or effort in configuration is shown as default; cwd and harness use their resolved defaults.
+  If the config file does not exist yet, the built-in templates are shown without creating config or state files.
 
 Examples:
   agentmux template list
@@ -177,12 +189,13 @@ Flags:
   --json                    Return JSON output
 
 Output:
-  Text mode prints a table with name, template, status, model, cwd, update time, and end reason.
+  Text mode prints a table with name, template, status, model, cwd, created time, and last activity. With --all it also prints ended time and reason.
   JSON mode returns {"ok", "command", "data.instances"}.
 
 Notes:
   Use list for multi-instance status overview.
   A stopped instance is kept as a tombstone so it can still be diagnosed: status exited or lost, plus end_reason, ended_at, and any last_error the harness reported.
+  Text and JSON timestamps use the local machine timezone. JSON list output is a stable summary and does not include prompts, environment variables, or transport internals.
   Tombstones are hidden by default, never count against max_instances, and are swept after defaults.status.tombstone_ttl_ms.
   inspect keeps answering for a tombstone; prompt, capture, and wait fail with process_not_running and name the reason.
 
@@ -396,7 +409,7 @@ Usage:
   agentmux wait <instance-name>... [flags]
 
 Arguments:
-  <instance-name>...        One or more instance names, listed before any flag
+  <instance-name>...        One or more instance names; flags may appear before or after them
 
 Flags:
   --mode all|any            With several instances: return when all finish, or as soon as one does. Default all
@@ -438,7 +451,7 @@ Examples:
 
 func attachHelp() string {
 	return strings.TrimSpace(`
-attach lets a human attach a terminal to an instance's tmux session.
+attach lets a human follow an instance interactively. TUI instances attach to tmux; structured instances follow their output event stream.
 
 Usage:
   agentmux attach [<instance-name>]
@@ -450,6 +463,7 @@ Behavior:
   If an instance name is provided, attach connects directly.
   If no instance name is provided and stdin is a TTY, attach prompts for selection.
   If no instance name is provided and stdin is not a TTY, attach returns an error.
+  attach is interactive and does not support --json.
 
 Examples:
   agentmux attach 编码助手-A

@@ -190,6 +190,9 @@ func (r Registry) Sorted() []Instance {
 		items = append(items, inst)
 	}
 	sort.Slice(items, func(i, j int) bool {
+		if items[i].UpdatedAt.Equal(items[j].UpdatedAt) {
+			return items[i].Name < items[j].Name
+		}
 		return items[i].UpdatedAt.After(items[j].UpdatedAt)
 	})
 	return items

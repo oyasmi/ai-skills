@@ -45,7 +45,7 @@ Windows 不是首要目标。
 18. `wait` 超时不再是错误：返回 `ok: true`、退出码 0、`status: busy`、`data.timed_out: true`，并新增 `saw_busy`、`elapsed_ms`
 19. `capture --json` 对结构化 harness 默认不返回消息数组（`content` 已经是答案）；`--trace`、`--raw`、显式 `--history`、`--since` 都会带回最近 20 条（可调）消息，不返回协议原始事件；`--raw` 恢复完整原始事件
 20. 结构化 harness 的 `capture`/`wait` 不再输出恒为 0 的屏幕字段
-21. 实例名写在 flag 之后（`capture --history 40 worker`）会给出明确的用法错误，而不是把 flag 当成实例名
+21. 实例名和 flag 可以按常见命令行习惯混排，例如 `capture --history 40 worker`
 22. 新增 `run`：一次调用完成 summon + prompt + wait + capture，是编排的默认入口
 23. `wait` 支持多个实例名和 `--mode all|any`，并行分片可以先处理最先完成的那个
 24. `capture --since <cursor>` 只返回新产生的内容；每次结构化 `capture` 都会给出 `data.next_cursor`
@@ -57,6 +57,10 @@ Windows 不是首要目标。
 30. 新增 `run --detach`：发出任务立即返回，不等待也不读取输出，用于并行分片；新增 `wait --collect`（单实例和多实例都支持）：等到完成后顺带把精简后的输出带回来，并行场景不再需要每个分片单独调一次 `capture`
 31. `summon`/`run` 在目标 `cwd` 已有其他存活实例时，`data.warnings` 会给出 `cwd_shared:<name>`（不阻断）；agentmux 隔离的是 Agent 进程而不是文件，多个写入型实例共享同一个工作目录会在 Git 状态和构建产物上互相竞争
 32. 模板新增 `effort`（`off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`），并且 `model`/`effort` 现在会被翻译成各 harness 自己的 flag 注入到命令里（`claude --effort`、`pi --thinking`、`codex -c model_reasoning_effort=`），不再需要手写 `$MODEL` 占位符；`summon`/`run --effort <level>` 可临时调档，`doctor` 会标出发生档位夹取的模板。配合它把模板从「harness 清单」改成「角色清单」：默认配置提供 planner / builder / builder-hard / reviewer / scout / documenter
+33. 人类表格使用终端显示宽度处理中文和全角字符，长字段按可用宽度省略；JSON 不截断
+34. `list --json` 返回稳定的精简摘要，`inspect --json` 返回诊断字段但不暴露 `system_prompt` 和 `env`
+35. agentmux CLI 对外生成的时间字段（包括 JSON 和 `version --json` 的 `build_time`）统一使用本地机器时区
+36. 多实例 `wait` 区分真正超时与实例失败：超时仍为退出码 0，失败项使顶层 `ok` 为 false 并返回非零退出码
 
 命令职责上建议这样理解：
 
@@ -515,6 +519,7 @@ agentmux list --all --json
 7. 支持 `pane_title` 信号的 harness 会走轻量 pane 元信息轮询，不再抓取屏幕文本
 8. 若只是想知道当前是 `idle` 还是 `busy`，单实例使用 `inspect --json`，多实例使用 `list --json`
 9. `--collect` 让每个 `done` 的实例附带一次精简 `capture` 的结果（`content` 及状态字段），单实例和多实例都支持；仍在 pending 的实例不读取。并行分片因此是 `run --detach` × N 之后跟一次 `wait --mode any --collect`，不用再对每个分片单独 `capture`
+10. 多实例中某个实例失败只会记录在对应条目，其他条目仍然返回；只要存在失败项，命令退出码非零。只有真的到达 deadline 才设置 `data.timed_out: true`
 
 ### `prompt`
 
@@ -559,6 +564,7 @@ agentmux list --all --json
 
 1. TUI harness 会进入对应 tmux session
 2. `claude-code-ndjson` 和 `codex-cli-execjson` 没有交互式 TUI，`attach` 会跟随实例的 `output.jsonl`，用于调试事件流
+3. `attach` 是交互式命令，不支持 `--json`
 
 ## 并发安全
 
@@ -569,6 +575,8 @@ agentmux list --all --json
 ## 输出格式
 
 面向 Agent 使用时，优先添加 `--json`。
+
+人类文本表格使用句首大写列名，例如 `Name`、`Status`、`Last activity`；`list` 默认只显示活动实例，`list --all` 才显示 `Ended` 和 `Reason`。JSON 和 `inspect` 的完整时间字段使用本地时区 RFC3339；列表文本使用本地时区的紧凑月-日与时分格式。
 
 成功输出示例：
 

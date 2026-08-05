@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="${DIST_DIR:-$ROOT_DIR/dist}"
 VERSION="${VERSION:-dev}"
-BUILD_TIME="${BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+BUILD_TIME="${BUILD_TIME:-$(date +%Y-%m-%dT%H:%M:%S%z)}"
 APP_NAME="agentmux"
 
 TARGETS=(

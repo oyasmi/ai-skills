@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/config"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/instance"
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/output"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/service"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/tmuxctl"
 )
@@ -211,6 +213,7 @@ func TestRunE2EDelegatesInOneCall(t *testing.T) {
 
 	ctx := context.Background()
 	var stdout, stderr bytes.Buffer
+	registryPath := filepath.Join(stateHome, "agentmux", "instances.json")
 	code := Run(ctx, []string{"run", "--template", "claude-code-tui", "--name", "one-shot", "--prompt", "do the task", "--timeout", "5s", "--json"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("run failed: code=%d stderr=%q", code, stderr.String())
@@ -223,6 +226,13 @@ func TestRunE2EDelegatesInOneCall(t *testing.T) {
 	}
 	if len(tmux.loads) != 1 || !strings.Contains(tmux.loads[0], "do the task") {
 		t.Fatalf("expected the task to reach the harness, got %v", tmux.loads)
+	}
+	stdout.Reset()
+	if code := Run(ctx, []string{"list", "--json"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("active list failed: %s", stderr.String())
+	}
+	if strings.Contains(stdout.String(), `"system_prompt"`) || strings.Contains(stdout.String(), `"env"`) || strings.Contains(stdout.String(), "0001-01-01") {
+		t.Fatalf("active list JSON leaked internal or zero-value fields: %q", stdout.String())
 	}
 
 	// The instance survives the call, and halting it leaves a tombstone that
@@ -244,6 +254,40 @@ func TestRunE2EDelegatesInOneCall(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), `"end_reason": "halted"`) {
 		t.Fatalf("list --all must report the tombstone: %q", stdout.String())
+	}
+	if strings.Contains(stdout.String(), `"system_prompt"`) || strings.Contains(stdout.String(), `"env"`) {
+		t.Fatalf("list --json must not expose internal prompt or env fields: %q", stdout.String())
+	}
+	tombstoneReg, err := instance.Load(registryPath)
+	if err != nil {
+		t.Fatalf("reload tombstone: %v", err)
+	}
+	tombstone, ok := tombstoneReg.Get("one-shot")
+	if !ok {
+		t.Fatal("expected one-shot tombstone")
+	}
+	if !strings.Contains(stdout.String(), output.LocalTime(tombstone.CreatedAt)) || !strings.Contains(stdout.String(), output.LocalTime(tombstone.EndedAt)) {
+		t.Fatalf("list --json must use the local formatted lifecycle timestamps: %q", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(ctx, []string{"wait", "one-shot", "missing", "--mode", "all", "--timeout", "1ms", "--json"}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("wait with failed instances must return non-zero, stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	var waitResult struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			TimedOut bool     `json:"timed_out"`
+			Failed   []string `json:"failed"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &waitResult); err != nil {
+		t.Fatalf("decode wait result: %v; output=%q", err, stdout.String())
+	}
+	if waitResult.OK || waitResult.Data.TimedOut || len(waitResult.Data.Failed) != 2 {
+		t.Fatalf("unexpected wait failure result: %+v output=%q", waitResult, stdout.String())
 	}
 }
 

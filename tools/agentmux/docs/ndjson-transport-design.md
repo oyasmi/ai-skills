@@ -623,7 +623,7 @@ ndjson reconcile 不查 tmux。步骤：
 
 ### 15.2 inspect JSON
 
-`inspect --json` 的 `data` 仍是 `Instance`，会天然包含新增字段：
+`inspect --json` 的 `data` 使用 app 层的稳定诊断 DTO，不直接序列化内部 `Instance`；因此会包含需要诊断的字段，但不会暴露 `system_prompt`、`env` 等敏感或大字段：
 
 ```json
 {

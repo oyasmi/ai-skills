@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"text/tabwriter"
 
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/apperr"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/config"
@@ -97,7 +96,7 @@ func checkBinary() []doctorCheck {
 	}
 
 	var checks []doctorCheck
-	detail := fmt.Sprintf("version=%s build_time=%s path=%s", Version, BuildTime, resolved)
+	detail := fmt.Sprintf("version=%s build_time=%s path=%s", Version, output.LocalizeTimestamp(BuildTime), resolved)
 	if Version == "dev" {
 		checks = append(checks, doctorCheck{"binary", "warn", detail + " (unstamped build; use scripts/install.sh or scripts/release.sh so version drift stays visible)"})
 	} else {
@@ -247,12 +246,11 @@ func finishDoctor(checks []doctorCheck, jsonMode bool, stdout io.Writer) int {
 	if jsonMode {
 		_ = output.WriteJSON(stdout, output.Success{OK: ok, Command: "doctor", Data: map[string]any{"checks": checks}})
 	} else {
-		w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "STATUS\tCHECK\tDETAIL")
+		rows := make([][]string, 0, len(checks))
 		for _, c := range checks {
-			fmt.Fprintf(w, "%s\t%s\t%s\n", strings.ToUpper(c.Status), c.Name, c.Detail)
+			rows = append(rows, []string{c.Status, c.Name, c.Detail})
 		}
-		_ = w.Flush()
+		_ = output.RenderTable(stdout, []string{"Status", "Check", "Detail"}, rows)
 		if !ok {
 			fmt.Fprintln(stdout, "\nsome checks failed; fix them before relying on agentmux")
 		}

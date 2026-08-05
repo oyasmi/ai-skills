@@ -7,8 +7,8 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"text/tabwriter"
 	"time"
+	"unicode"
 
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/apperr"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/capture"
@@ -28,11 +28,17 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, rootHelp())
 		return 0
 	}
-	if helpText, ok := helpForArgs(args); ok {
+	if helpText, ok, err := helpForArgs(args); ok {
+		if err != nil {
+			return writeErr(stdout, stderr, false, "help", "", err)
+		}
 		fmt.Fprintln(stdout, helpText)
 		return 0
 	}
-	jsonMode, rest := extractJSON(args)
+	jsonMode, rest, err := extractJSON(args)
+	if err != nil {
+		return writeErr(stdout, stderr, false, "", "", err)
+	}
 	if len(rest) == 0 {
 		fmt.Fprintln(stdout, rootHelp())
 		return 0
@@ -47,13 +53,21 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return writeErr(stdout, stderr, jsonMode, "", "", err)
 	}
-	if err := config.EnsureStateDir(paths); err != nil {
-		return writeErr(stdout, stderr, jsonMode, "", "", err)
+	templateListOnly := rest[0] == "template" && len(rest) > 1 && rest[1] == "list"
+	if !templateListOnly {
+		if err := config.EnsureStateDir(paths); err != nil {
+			return writeErr(stdout, stderr, jsonMode, "", "", err)
+		}
+		if err := config.EnsureDefaultConfig(paths.ConfigFile); err != nil {
+			return writeErr(stdout, stderr, jsonMode, "", "", err)
+		}
 	}
-	if err := config.EnsureDefaultConfig(paths.ConfigFile); err != nil {
-		return writeErr(stdout, stderr, jsonMode, "", "", err)
+	var cfg config.Config
+	if templateListOnly {
+		cfg, err = config.LoadOrDefault(paths.ConfigFile)
+	} else {
+		cfg, err = config.Load(paths.ConfigFile)
 	}
-	cfg, err := config.Load(paths.ConfigFile)
 	if err != nil {
 		return writeErr(stdout, stderr, jsonMode, "", "", err)
 	}
@@ -74,20 +88,16 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 			return writeErr(stdout, stderr, jsonMode, "template list", "", apperr.New("invalid_arguments", "template list does not accept positional arguments\n\n"+templateListHelp()))
 		}
 		items := svc.TemplateList()
-		sort.Slice(items, func(i, j int) bool { return items[i]["name"] < items[j]["name"] })
+		sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
 		if jsonMode {
 			_ = output.WriteJSON(stdout, output.Success{OK: true, Command: "template list", Data: map[string]any{"templates": items}})
 			return 0
 		}
-		w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "NAME\tMODEL\tEFFORT\tHARNESS\tCWD\tDESCRIPTION")
+		rows := make([][]string, 0, len(items))
 		for _, item := range items {
-			// A role's description explains when to use it and how, so it is
-			// routinely several lines. The table shows a one-line summary to stay a
-			// table; `template list --json` carries the whole thing.
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", item["name"], item["model"], item["effort"], item["harness_type"], item["cwd"], summarizeDescription(item["description"]))
+			rows = append(rows, []string{item.Name, item.Model, item.Effort, item.HarnessType, shortPath(item.CWD), summarizeDescription(item.Description)})
 		}
-		_ = w.Flush()
+		_ = output.RenderTable(stdout, []string{"Name", "Model", "Effort", "Harness", "CWD", "Description"}, rows)
 		return 0
 	case "list":
 		includeEnded, err := parseListArgs(args[1:])
@@ -95,19 +105,48 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 			return writeErr(stdout, stderr, jsonMode, "list", "", err)
 		}
 		items, err := svc.List(ctx, includeEnded)
-		if err != nil {
+		if err != nil && len(items) == 0 {
 			return writeErr(stdout, stderr, jsonMode, "list", "", err)
 		}
+		var warning string
+		if err != nil {
+			warning = shortError(err)
+		}
 		if jsonMode {
-			_ = output.WriteJSON(stdout, output.Success{OK: true, Command: "list", Data: map[string]any{"instances": items}})
+			summaries := make([]instanceSummary, 0, len(items))
+			for _, item := range items {
+				summaries = append(summaries, summarizeInstance(item))
+			}
+			data := map[string]any{"instances": summaries}
+			if warning != "" {
+				data["warnings"] = []string{warning}
+			}
+			_ = output.WriteJSON(stdout, output.Success{OK: true, Command: "list", Data: data})
+			if warning != "" {
+				fmt.Fprintf(stderr, "warning: %s\n", warning)
+			}
 			return 0
 		}
-		w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "NAME\tTEMPLATE\tSTATUS\tMODEL\tCWD\tUPDATED\tENDED")
-		for _, item := range items {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", item.Name, item.Template, item.Status, item.Model, item.CWD, item.UpdatedAt.Local().Format(time.RFC3339), item.EndReason)
+		headers := []string{"Name", "Template", "Status", "Model", "CWD", "Created", "Last activity"}
+		rows := make([][]string, 0, len(items))
+		if includeEnded {
+			headers = append(headers, "Ended", "Reason")
 		}
-		_ = w.Flush()
+		for _, item := range items {
+			row := []string{item.Name, item.Template, string(item.Status), item.Model, shortPath(item.CWD), textTime(item.CreatedAt), textTime(item.LastActivityAt)}
+			if includeEnded {
+				reason := item.EndReason
+				if strings.TrimSpace(reason) == "" {
+					reason = "-"
+				}
+				row = append(row, textTime(item.EndedAt), reason)
+			}
+			rows = append(rows, row)
+		}
+		_ = output.RenderTable(stdout, headers, rows)
+		if warning != "" {
+			fmt.Fprintf(stderr, "warning: %s\n", warning)
+		}
 		return 0
 	case "summon":
 		input, err := parseSummonArgs(args[1:])
@@ -214,26 +253,40 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 		if len(args) < 2 {
 			return writeErr(stdout, stderr, jsonMode, "inspect", "", apperr.New("invalid_arguments", "missing instance name\n\n"+inspectHelp()))
 		}
+		if len(args) > 2 {
+			return writeErr(stdout, stderr, jsonMode, "inspect", args[1], apperr.New("invalid_arguments", "inspect accepts exactly one instance name\n\n"+inspectHelp()))
+		}
 		inst, err := svc.Inspect(ctx, args[1])
 		if err != nil {
 			return writeErr(stdout, stderr, jsonMode, "inspect", args[1], err)
 		}
 		if jsonMode {
-			_ = output.WriteJSON(stdout, output.Success{OK: true, Command: "inspect", Instance: inst.Name, Status: string(inst.Status), Data: inst})
+			_ = output.WriteJSON(stdout, output.Success{OK: true, Command: "inspect", Instance: inst.Name, Status: string(inst.Status), Data: detailInstance(inst)})
 			return 0
 		}
-		fmt.Fprintf(stdout, "name: %s\n", inst.Name)
-		fmt.Fprintf(stdout, "template: %s\n", inst.Template)
-		fmt.Fprintf(stdout, "status: %s\n", inst.Status)
-		fmt.Fprintf(stdout, "model: %s\n", inst.Model)
-		fmt.Fprintf(stdout, "effort: %s\n", inst.Effort)
-		fmt.Fprintf(stdout, "cwd: %s\n", inst.CWD)
-		fmt.Fprintf(stdout, "command: %s\n", inst.Command)
-		fmt.Fprintf(stdout, "session_id: %s\n", inst.SessionID)
-		fmt.Fprintf(stdout, "first_prompt_sent: %t\n", inst.FirstPromptSent)
-		fmt.Fprintf(stdout, "created_at: %s\n", inst.CreatedAt.Local().Format(time.RFC3339))
-		fmt.Fprintf(stdout, "updated_at: %s\n", inst.UpdatedAt.Local().Format(time.RFC3339))
-		fmt.Fprintf(stdout, "last_activity_at: %s\n", inst.LastActivityAt.Local().Format(time.RFC3339))
+		fmt.Fprintf(stdout, "Name: %s\n", inst.Name)
+		fmt.Fprintf(stdout, "Template: %s\n", inst.Template)
+		fmt.Fprintf(stdout, "Status: %s\n", inst.Status)
+		fmt.Fprintf(stdout, "Model: %s\n", inst.Model)
+		fmt.Fprintf(stdout, "Effort: %s\n", inst.Effort)
+		fmt.Fprintf(stdout, "Harness: %s\n", inst.HarnessType)
+		fmt.Fprintf(stdout, "CWD: %s\n", inst.CWD)
+		fmt.Fprintf(stdout, "Command: %s\n", inst.Command)
+		fmt.Fprintf(stdout, "Shell: %s\n", inst.Shell)
+		fmt.Fprintf(stdout, "Session ID: %s\n", inst.SessionID)
+		fmt.Fprintf(stdout, "First prompt sent: %t\n", inst.FirstPromptSent)
+		fmt.Fprintf(stdout, "Created: %s\n", detailTime(inst.CreatedAt))
+		fmt.Fprintf(stdout, "Observed: %s\n", detailTime(inst.UpdatedAt))
+		fmt.Fprintf(stdout, "Last activity: %s\n", detailTime(inst.LastActivityAt))
+		if !inst.EndedAt.IsZero() {
+			fmt.Fprintf(stdout, "Ended: %s\n", detailTime(inst.EndedAt))
+		}
+		if inst.EndReason != "" {
+			fmt.Fprintf(stdout, "Reason: %s\n", inst.EndReason)
+		}
+		if inst.LastError != "" {
+			fmt.Fprintf(stdout, "Last error: %s\n", firstLineForDisplay(inst.LastError))
+		}
 		return 0
 	case "prompt":
 		name, text, key, useStdin, waitIfBusyMS, err := parsePromptArgs(args[1:])
@@ -361,7 +414,16 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 		}
 		return 0
 	case "attach":
+		if jsonMode {
+			return writeErr(stdout, stderr, true, "attach", "", apperr.New("invalid_arguments", "attach is interactive and does not support --json"))
+		}
+		if len(args) > 2 {
+			return writeErr(stdout, stderr, false, "attach", args[1], apperr.New("invalid_arguments", "attach accepts at most one instance name\n\n"+attachHelp()))
+		}
 		if len(args) >= 2 {
+			if strings.HasPrefix(args[1], "-") {
+				return writeErr(stdout, stderr, false, "attach", "", apperr.New("invalid_arguments", "attach expects an instance name, not a flag\n\n"+attachHelp()))
+			}
 			return attach(ctx, svc, args[1], stderr)
 		}
 		return attachSelect(ctx, svc, stderr)
@@ -387,7 +449,7 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 		if jsonMode {
 			_ = output.WriteJSON(stdout, output.Success{OK: true, Command: "version", Data: map[string]any{
 				"version":       Version,
-				"build_time":    BuildTime,
+				"build_time":    output.LocalizeTimestamp(BuildTime),
 				"binary_path":   resolvedExecutablePath(),
 				"commands":      commandNames(),
 				"harness_types": service.HarnessTypes(),
@@ -398,60 +460,93 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 		fmt.Fprintln(stdout, Version)
 		return 0
 	default:
-		return writeErr(stdout, stderr, jsonMode, "", "", apperr.New("invalid_arguments", "unknown command "+args[0]+"\n\n"+rootHelp()))
+		return writeErr(stdout, stderr, jsonMode, args[0], "", apperr.New("invalid_arguments", "unknown command "+args[0]+"\n\n"+rootHelp()))
 	}
 }
 
 func boolPtr(v bool) *bool { return &v }
 
-// summarizeDescription collapses a multi-line description into a single
-// printable line for a tab-separated table. Descriptions are authored as
-// YAML block scalars that soft-wrap a sentence across several lines, so a
-// naive first-line split cuts off mid-sentence; this reflows the first
-// paragraph and takes as many whole sentences as fit within a length
-// budget instead.
+func textTime(value time.Time) string {
+	if value.IsZero() {
+		return "-"
+	}
+	return value.Local().Format("01-02 15:04")
+}
+
+func detailTime(value time.Time) string {
+	if formatted := output.LocalTime(value); formatted != "" {
+		return formatted
+	}
+	return "-"
+}
+
+func shortPath(path string) string {
+	home, err := os.UserHomeDir()
+	if err == nil {
+		if path == home {
+			return "~"
+		}
+		prefix := home + string(os.PathSeparator)
+		if strings.HasPrefix(path, prefix) {
+			return "~" + strings.TrimPrefix(path, home)
+		}
+	}
+	return path
+}
+
+func firstLineForDisplay(value string) string {
+	if index := strings.IndexByte(value, '\n'); index >= 0 {
+		return strings.TrimSpace(value[:index])
+	}
+	return strings.TrimSpace(value)
+}
+
+// summarizeDescription collapses the first paragraph of a description into a
+// single printable line. The table renderer owns the width budget; keeping
+// this function uncapped prevents a short first sentence from hiding useful
+// context before the renderer has even seen it.
 func summarizeDescription(s string) string {
 	if i := strings.Index(s, "\n\n"); i >= 0 {
 		s = s[:i]
 	}
-	s = strings.Join(strings.Fields(s), " ")
-	if s == "" {
-		return ""
-	}
-	const maxRunes = 60
-	enders := "。！？.!?"
-	runes := []rune(s)
+	return collapseWrappedText(s)
+}
 
-	var sentenceEnds []int
-	start := 0
-	for i, r := range runes {
-		if strings.ContainsRune(enders, r) {
-			sentenceEnds = append(sentenceEnds, i+1)
-			start = i + 1
+func collapseWrappedText(s string) string {
+	var b strings.Builder
+	spacePending := false
+	var previous rune
+	for _, r := range s {
+		if unicode.IsSpace(r) {
+			spacePending = b.Len() > 0
+			continue
 		}
+		if spacePending && needsWrappedSpace(previous, r) {
+			b.WriteByte(' ')
+		}
+		b.WriteRune(r)
+		previous = r
+		spacePending = false
 	}
-	if start < len(runes) {
-		sentenceEnds = append(sentenceEnds, len(runes))
-	}
+	return strings.TrimSpace(b.String())
+}
 
-	cut := 0
-	for _, end := range sentenceEnds {
-		if end > maxRunes && cut > 0 {
-			break
-		}
-		cut = end
-		if cut >= maxRunes {
-			break
-		}
+func needsWrappedSpace(previous, current rune) bool {
+	if previous == 0 {
+		return false
 	}
-	if cut == 0 {
-		cut = len(runes)
+	if isCJKRune(previous) && isCJKRune(current) {
+		return false
 	}
-	if cut > maxRunes {
-		cut = maxRunes
+	if unicode.IsPunct(previous) || unicode.IsPunct(current) {
+		return false
 	}
-	if cut < len(runes) {
-		return strings.TrimSpace(string(runes[:cut])) + "..."
-	}
-	return string(runes[:cut])
+	return true
+}
+
+func isCJKRune(r rune) bool {
+	return (r >= 0x2e80 && r <= 0x9fff) ||
+		(r >= 0xac00 && r <= 0xd7a3) ||
+		(r >= 0xf900 && r <= 0xfaff) ||
+		(r >= 0x20000 && r <= 0x3fffd)
 }

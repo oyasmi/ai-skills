@@ -92,7 +92,7 @@ func TestRunDoctorTextModeDoesNotCrashOnEmptyDetail(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected zero exit code, stderr=%q", stderr.String())
 	}
-	if got := stdout.String(); !strings.Contains(got, "STATUS") || !strings.Contains(got, "binary") {
+	if got := stdout.String(); !strings.Contains(got, "Status") || !strings.Contains(got, "binary") {
 		t.Fatalf("unexpected text output: %q", got)
 	}
 }

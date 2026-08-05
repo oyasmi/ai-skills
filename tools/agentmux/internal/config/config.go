@@ -428,9 +428,27 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Config{}, apperr.Wrap("config_io_error", err, "read config file %s", path)
 	}
+	return loadBytes(b, "config file "+path)
+}
+
+// LoadOrDefault is used by read-only commands that can operate with the
+// built-in templates. It avoids turning a query such as template list into an
+// unexpected filesystem initialization operation.
+func LoadOrDefault(path string) (Config, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return Config{}, apperr.Wrap("config_io_error", err, "read config file %s", path)
+		}
+		b = []byte(DefaultConfigYAML)
+	}
+	return loadBytes(b, "config file "+path)
+}
+
+func loadBytes(b []byte, source string) (Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(b, &cfg); err != nil {
-		return Config{}, apperr.Wrap("config_parse_error", err, "parse config file %s", path)
+		return Config{}, apperr.Wrap("config_parse_error", err, "parse %s", source)
 	}
 	cfg.ApplyDefaults()
 	if err := cfg.Validate(); err != nil {

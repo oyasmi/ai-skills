@@ -81,6 +81,9 @@ func TestWaitManyAllReportsPendingInstances(t *testing.T) {
 	if !outcomes[1].Snapshot.TimedOut {
 		t.Fatal("expected the unfinished instance to report its timeout")
 	}
+	if !outcomes[1].TimedOut {
+		t.Fatal("expected the multi-wait outcome to expose its timeout")
+	}
 }
 
 // collect turns a fan-out into "wait once, read every finished shard" instead
