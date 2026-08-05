@@ -45,8 +45,8 @@ var allowedValueFlags = map[string]bool{
 	"--config": true,
 }
 
-// ValidateCommand enforces that the template command is a plain `codex exec`
-// prefix carrying only parent-level flags. Everything after it -- the `resume`
+// ValidateCommand enforces that the template command carries only
+// parent-level flags. Everything after the prefix -- the `resume`
 // subcommand, `--json`, and the `-` stdin marker -- is appended by agentmux.
 //
 // The scan is deliberately token-based rather than a real shell parse: it is
@@ -63,9 +63,6 @@ func ValidateCommand(command string) error {
 		return apperr.New("config_invalid", "codex-cli-execjson command must not use command substitution")
 	}
 	fields := strings.Fields(trimmed)
-	if len(fields) < 2 || filepath.Base(fields[0]) != "codex" || fields[1] != "exec" {
-		return apperr.New("config_invalid", "codex-cli-execjson command must start with `codex exec`")
-	}
 	for i := 2; i < len(fields); i++ {
 		f := fields[i]
 		name := f

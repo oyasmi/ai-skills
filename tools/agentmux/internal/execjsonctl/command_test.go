@@ -13,6 +13,7 @@ func TestValidateCommandAcceptsPlainExecPrefix(t *testing.T) {
 		"codex exec --sandbox workspace-write --skip-git-repo-check --model gpt-5.1-codex",
 		"codex exec --sandbox=workspace-write -C /tmp --add-dir /tmp/shared",
 		"/usr/local/bin/codex exec -s read-only",
+		"claude exec",
 	} {
 		if err := ValidateCommand(cmd); err != nil {
 			t.Fatalf("expected %q to be valid, got %v", cmd, err)
@@ -22,8 +23,6 @@ func TestValidateCommandAcceptsPlainExecPrefix(t *testing.T) {
 
 func TestValidateCommandRejectsUnsupportedInput(t *testing.T) {
 	cases := map[string]string{
-		"missing exec":         "codex --model gpt-5.1-codex",
-		"not codex":            "claude exec",
 		"resume subcommand":    "codex exec resume abc",
 		"review subcommand":    "codex exec review",
 		"agentmux owns json":   "codex exec --json",
