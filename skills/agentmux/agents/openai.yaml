@@ -1,4 +1,4 @@
 interface:
   display_name: "AgentMux"
-  short_description: "通过 AgentMux 委派并管理外部 CLI coding agent"
-  default_prompt: "使用 $agentmux 委派外部 coding agent：先 `agentmux template list --json` 按角色选人（读 description 判断什么场景用它、怎么用才对；复杂或高风险任务先用 planner 出方案，常规任务用 builder，验收用 reviewer，必要时用 `--effort`/`--model` 临时升档），再用 `agentmux run` 一次性完成单路任务，任务指令要写明目标、相关上下文、范围边界和可验证的完成标准；并行时用 `run --detach` 逐个发出后再 `wait --mode any --collect`，且每个写入型实例必须使用独立 worktree 和不同 `--cwd`；耐心等待（超时只表示仍在工作），读输出优先用不带 --json 的 capture，最后必须自己读文件、diff 并运行验证，不能只相信外部 Agent 的完成声明；全程不要直接调用 tmux；环境不对劲时先跑 `agentmux doctor --json`。"
+  short_description: "按角色委派、编排、管理并验收外部 CLI 智能体任务"
+  default_prompt: "使用 $agentmux 从 template list 的 description 中选择最小足够角色，通过 run 委派任务并独立检查交付；只有复杂或高风险任务才按需组合 planner、builder、reviewer、verifier、worker、documenter 与 scout。"
