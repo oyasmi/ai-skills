@@ -83,9 +83,9 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 		fmt.Fprintln(w, "NAME\tMODEL\tEFFORT\tHARNESS\tCWD\tDESCRIPTION")
 		for _, item := range items {
 			// A role's description explains when to use it and how, so it is
-			// routinely several lines. The table shows the first line to stay a
+			// routinely several lines. The table shows a one-line summary to stay a
 			// table; `template list --json` carries the whole thing.
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", item["name"], item["model"], item["effort"], item["harness_type"], item["cwd"], firstLine(item["description"]))
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", item["name"], item["model"], item["effort"], item["harness_type"], item["cwd"], summarizeDescription(item["description"]))
 		}
 		_ = w.Flush()
 		return 0
@@ -105,7 +105,7 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 		w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(w, "NAME\tTEMPLATE\tSTATUS\tMODEL\tCWD\tUPDATED\tENDED")
 		for _, item := range items {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", item.Name, item.Template, item.Status, item.Model, item.CWD, item.UpdatedAt.Format(time.RFC3339), item.EndReason)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", item.Name, item.Template, item.Status, item.Model, item.CWD, item.UpdatedAt.Local().Format(time.RFC3339), item.EndReason)
 		}
 		_ = w.Flush()
 		return 0
@@ -231,9 +231,9 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 		fmt.Fprintf(stdout, "command: %s\n", inst.Command)
 		fmt.Fprintf(stdout, "session_id: %s\n", inst.SessionID)
 		fmt.Fprintf(stdout, "first_prompt_sent: %t\n", inst.FirstPromptSent)
-		fmt.Fprintf(stdout, "created_at: %s\n", inst.CreatedAt.Format(time.RFC3339))
-		fmt.Fprintf(stdout, "updated_at: %s\n", inst.UpdatedAt.Format(time.RFC3339))
-		fmt.Fprintf(stdout, "last_activity_at: %s\n", inst.LastActivityAt.Format(time.RFC3339))
+		fmt.Fprintf(stdout, "created_at: %s\n", inst.CreatedAt.Local().Format(time.RFC3339))
+		fmt.Fprintf(stdout, "updated_at: %s\n", inst.UpdatedAt.Local().Format(time.RFC3339))
+		fmt.Fprintf(stdout, "last_activity_at: %s\n", inst.LastActivityAt.Local().Format(time.RFC3339))
 		return 0
 	case "prompt":
 		name, text, key, useStdin, waitIfBusyMS, err := parsePromptArgs(args[1:])
@@ -404,10 +404,54 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 
 func boolPtr(v bool) *bool { return &v }
 
-// firstLine keeps a multi-line value printable inside a tab-separated table.
-func firstLine(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return strings.TrimSpace(s[:i])
+// summarizeDescription collapses a multi-line description into a single
+// printable line for a tab-separated table. Descriptions are authored as
+// YAML block scalars that soft-wrap a sentence across several lines, so a
+// naive first-line split cuts off mid-sentence; this reflows the first
+// paragraph and takes as many whole sentences as fit within a length
+// budget instead.
+func summarizeDescription(s string) string {
+	if i := strings.Index(s, "\n\n"); i >= 0 {
+		s = s[:i]
 	}
-	return strings.TrimSpace(s)
+	s = strings.Join(strings.Fields(s), " ")
+	if s == "" {
+		return ""
+	}
+	const maxRunes = 60
+	enders := "。！？.!?"
+	runes := []rune(s)
+
+	var sentenceEnds []int
+	start := 0
+	for i, r := range runes {
+		if strings.ContainsRune(enders, r) {
+			sentenceEnds = append(sentenceEnds, i+1)
+			start = i + 1
+		}
+	}
+	if start < len(runes) {
+		sentenceEnds = append(sentenceEnds, len(runes))
+	}
+
+	cut := 0
+	for _, end := range sentenceEnds {
+		if end > maxRunes && cut > 0 {
+			break
+		}
+		cut = end
+		if cut >= maxRunes {
+			break
+		}
+	}
+	if cut == 0 {
+		cut = len(runes)
+	}
+	if cut > maxRunes {
+		cut = maxRunes
+	}
+	if cut < len(runes) {
+		return strings.TrimSpace(string(runes[:cut])) + "..."
+	}
+	return string(runes[:cut])
 }
