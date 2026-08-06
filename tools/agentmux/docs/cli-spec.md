@@ -18,10 +18,11 @@
 5. `inspect`
 6. `prompt`
 7. `capture`
-8. `wait`
-9. `attach`
-10. `halt`
-11. `version`
+8. `logs`
+9. `wait`
+10. `attach`
+11. `halt`
+12. `version`
 
 `run` 是编排的默认入口：一次调用完成 summon、prompt、wait 和 capture。其余命令用于需要分步控制的场景。
 
@@ -49,7 +50,7 @@ agentmux <subcommand> [flags]
 2. 错误也输出 JSON
 3. 非 JSON 模式下输出简洁文本或表格
 4. 所有 agentmux CLI 对外生成的时间字段（包括 JSON）使用本地机器时区；JSON 和详细文本字段采用 RFC3339，摘要表格可使用紧凑的本地日期时间格式
-5. `attach` 是交互式命令，不支持 `--json`；传入后返回 `invalid_arguments`
+5. `attach` 和 `logs` 是人类查看命令，不支持 `--json`；传入后返回 `invalid_arguments`
 
 ### 2.3 名称约定
 
@@ -212,7 +213,7 @@ agentmux list [--all] [--json]
 
 1. `list` 默认隐藏墓碑，`list --all` 显示
 2. `inspect` 对墓碑正常返回，这正是排查时需要的
-3. `prompt`、`capture`、`wait` 对墓碑返回 `process_not_running`，错误信息里带上 `end_reason` 和 `last_error`
+3. `prompt`、`capture`、`wait` 对墓碑返回 `process_not_running`，错误信息里带上 `end_reason` 和 `last_error`；structured tombstone 仍可用 `logs` 读取历史
 4. `halt` 对已停止实例是幂等的，不报错
 5. 墓碑不占用 `max_instances` 配额，同名 `summon` 可以直接回收该名字
 6. 超过 `defaults.status.tombstone_ttl_ms`（默认 24 小时）后自动清除
@@ -375,7 +376,8 @@ agentmux run --template <template-name> (--prompt <text> | --prompt-file <path> 
 11. `--trace`
 12. `--raw`（隐含 `--trace`）
 13. `--detach`：发送 prompt 后立即返回，不等待也不读取输出；不能与 `--history`/`--trace`/`--raw` 同时使用
-14. `--json`
+14. `--keep`：新建实例的同步 run 完成后保留实例；复用已有实例时 run 从不负责关闭
+15. `--json`
 
 行为：
 
@@ -383,7 +385,7 @@ agentmux run --template <template-name> (--prompt <text> | --prompt-file <path> 
 2. 同名实例存在时复用，因此重复 `run` 会在同一会话里继续
 3. 复用到的实例仍在忙时，不会立刻报错或把新任务和旧任务的输出混在一起：先在 `--timeout` 预算内等旧任务收尾，花掉的时间通过 `data.queued_ms` 报告；预算耗尽仍未空闲则返回 `instance_busy`
 4. prompt 发送之后再超时不是失败：agent 继续工作，返回 `data.timed_out: true` 和当前已产出的内容，调用方可以再 `wait`
-5. 结束后实例保留，便于检查和追加指令；需要停止时显式 `halt`
+5. 新建实例的同步 run 在最终 capture 后默认清理并留下 tombstone；需要继续追加指令时使用 `--keep`
 6. `--prompt-file` 适合较长的任务契约，避免超长命令行和 TUI 粘贴问题
 7. `--detach` 仍会先按第 3 条等待忙实例，但发送 prompt 后立即返回，用于并行分片；配合 `wait --mode any --collect` 使用
 
@@ -404,7 +406,7 @@ JSON 示例：
   "command": "run",
   "instance": "登录修复-A",
   "reused": false,
-  "status": "idle",
+  "status": "exited",
   "data": {
     "template": "builder",
     "model": "sonnet",
@@ -766,7 +768,34 @@ JSON 示例：
 
 ---
 
-## 4.8 `attach`
+## 4.8 `logs`
+
+用途：
+
+读取结构化（headless）实例的可读完整对话；实例已经停止时仍可读取保留的 tombstone transcript。
+
+语法：
+
+```bash
+agentmux logs <instance-name> [--follow]
+```
+
+行为：
+
+1. 默认读取整段已记录会话，按 `USER`、`ASSISTANT`、`THINKING`、`TOOL`、`RESULT` 等标签输出
+2. `--follow` 先输出已有记录，再持续等待新增事件，直到实例停止或命令被中断
+3. 仅支持结构化 harness；TUI 继续使用 `capture` 或 `attach`
+4. 包括 tombstone 在内，只要 registry 记录和 transport 目录仍在，就可以读取历史
+5. `logs` 不提供 `--json`；活动中的结构化实例需要机器数据时使用 `capture <name> --scope session --history 0 --raw --json`，已结束实例使用 `logs`
+
+示例：
+
+```bash
+agentmux logs 编码助手-A
+agentmux logs 编码助手-A --follow
+```
+
+## 4.9 `attach`
 
 用途：
 
@@ -788,12 +817,12 @@ agentmux attach [<instance-name>]
 
 1. `attach` 主要服务人类调试
 2. Agent 编排流程不应依赖它
-3. TUI harness attach 到 tmux；结构化 harness 跟随 `output.jsonl` 事件流
+3. TUI harness attach 到 tmux；结构化 harness 保留原始 `output.jsonl` 事件流调试行为，日常阅读使用 `logs`
 4. `attach` 不支持 `--json`
 
 ---
 
-## 4.9 `halt`
+## 4.10 `halt`
 
 用途：
 
@@ -839,7 +868,7 @@ JSON 示例：
 
 ---
 
-## 4.10 `version`
+## 4.11 `version`
 
 用途：
 
@@ -868,16 +897,16 @@ JSON 示例：
     "version": "v0.4.0",
     "build_time": "2026-04-01T08:00:00+08:00",
     "binary_path": "/home/me/.local/bin/agentmux",
-    "commands": ["template list", "list", "summon", "run", "inspect", "prompt", "capture", "wait", "attach", "halt", "doctor", "version"],
+    "commands": ["template list", "list", "summon", "run", "inspect", "prompt", "capture", "logs", "wait", "attach", "halt", "doctor", "version"],
     "harness_types": ["claude-code", "codex-cli", "gemini-cli", "claude-code-ndjson", "codex-cli-execjson", "pi-rpc"],
-    "features": ["run", "doctor", "version-provenance", "run-wait-if-busy", "wait-multi", "wait-timeout-ok", "wait-observability", "prompt-ack", "capture-since", "capture-raw", "lean-capture", "capture-new-cursor", "run-detach", "wait-collect", "cwd-shared-warning", "tombstones", "role-effort"]
+    "features": ["run", "doctor", "version-provenance", "run-wait-if-busy", "wait-multi", "wait-timeout-ok", "wait-observability", "prompt-ack", "capture-since", "capture-raw", "lean-capture", "capture-new-cursor", "run-detach", "wait-collect", "logs-follow", "cwd-shared-warning", "tombstones", "role-effort"]
   }
 }
 ```
 
 ---
 
-## 4.11 `doctor`
+## 4.12 `doctor`
 
 用途：
 

@@ -352,7 +352,7 @@ func (c Controller) Capture(ctx context.Context, inst instance.Instance, opts ca
 	if err != nil {
 		return capture.Snapshot{}, err
 	}
-	msgs, content, usage := normalizeEvents(events)
+	msgs, content, usage := normalizeEventsWithPrompts(events, st.Turns, inst.TransportDir, from)
 
 	turnState := ""
 	if i := lastTurn(&st); i >= 0 {

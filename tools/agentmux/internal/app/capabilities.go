@@ -14,6 +14,7 @@ func commandNames() []string {
 		"inspect",
 		"prompt",
 		"capture",
+		"logs",
 		"wait",
 		"attach",
 		"halt",
@@ -66,6 +67,9 @@ func featureNames() []string {
 		// --collect, instead of one capture call per shard.
 		"run-detach",
 		"wait-collect",
+		// `logs` renders the recorded transcript and can follow a structured
+		// harness until it stops, including a retained tombstone.
+		"logs-follow",
 		// `summon` and `run` report data.warnings with "cwd_shared:<name>"
 		// when another active instance already points at the same cwd.
 		// Non-blocking: it does not stop the summon.

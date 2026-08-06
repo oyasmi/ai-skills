@@ -71,6 +71,9 @@
 
 `capture --json`（配合 `--trace`/`--raw`/`--history`/`--since`/`--new` 之一）额外返回：
 
+人类需要查看完整 headless 对话时使用 `agentmux logs <名称>`；需要持续观察时加
+`--follow`。它也能读取保留的 structured tombstone；活动实例的机器读取仍使用 `capture --json`。
+
 - `claude-code-ndjson`：`messages`、`usage`、`claude_session_id`、`turns`、`last_error`。
 - `codex-cli-execjson`：`messages`、`usage`、`thread_id`、`turns`、`turn_state`、`last_error`。
 - `pi-rpc`：`messages`、`usage`、`pi_session_id`、`turns`、`last_error`。

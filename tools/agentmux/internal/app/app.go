@@ -358,6 +358,15 @@ func dispatch(ctx context.Context, svc service.Service, jsonMode bool, args []st
 		}
 		fmt.Fprint(stdout, snap.Content)
 		return 0
+	case "logs":
+		name, follow, err := parseLogsArgs(args[1:])
+		if err != nil {
+			return writeErr(stdout, stderr, jsonMode, "logs", "", err)
+		}
+		if jsonMode {
+			return writeErr(stdout, stderr, true, "logs", name, apperr.New("invalid_arguments", "logs is human-readable; for an active structured instance use capture --scope session --history 0 --raw --json; ended instances are readable with logs"))
+		}
+		return runLogs(ctx, svc, name, follow, stdout, stderr)
 	case "wait":
 		names, stableMS, timeoutMS, mode, collect, err := parseWaitArgs(args[1:])
 		if err != nil {

@@ -114,6 +114,8 @@ func parseRunArgs(args []string) (service.RunInput, bool, error) {
 				in.Capture.Trace = parsed
 			case "--detach":
 				in.Detach = parsed
+			case "--keep":
+				in.Keep = parsed
 			default:
 				// This was an equals form for a non-boolean flag. Leave it for
 				// the normal parser so it gets the command-specific error.
@@ -147,6 +149,8 @@ func parseRunArgs(args []string) (service.RunInput, bool, error) {
 			in.Capture.Trace = true
 		case "--detach":
 			in.Detach = true
+		case "--keep":
+			in.Keep = true
 		default:
 			rest = append(rest, args[i])
 		}
@@ -206,7 +210,7 @@ func splitEqualsForms(args []string, flags ...string) []string {
 }
 
 func splitBooleanEquals(arg string) (name, value string, ok bool) {
-	for _, flag := range []string{"--stdin", "--raw", "--trace", "--detach"} {
+	for _, flag := range []string{"--stdin", "--raw", "--trace", "--detach", "--keep"} {
 		if strings.HasPrefix(arg, flag+"=") {
 			return flag, strings.TrimPrefix(arg, flag+"="), true
 		}
@@ -343,6 +347,22 @@ func parseCaptureArgs(args []string) (name string, opts capture.Options, err err
 		return "", capture.Options{}, apperr.New("invalid_arguments", "invalid value for --scope: must be current or session")
 	}
 	return name, opts, nil
+}
+
+func parseLogsArgs(args []string) (name string, follow bool, err error) {
+	name, flagArgs, err := parseNamedInstanceArgs(args, "logs", logsHelp(), nil)
+	if err != nil {
+		return "", false, err
+	}
+	fs := newFlagSet("logs")
+	fs.BoolVar(&follow, "follow", false, "")
+	if err := parseFlagSet(fs, flagArgs); err != nil {
+		return "", false, err
+	}
+	if fs.NArg() > 0 {
+		return "", false, apperr.New("invalid_arguments", "logs does not accept positional arguments after instance name")
+	}
+	return name, follow, nil
 }
 
 // requireInstanceName rejects a flag-looking positional value. Named commands

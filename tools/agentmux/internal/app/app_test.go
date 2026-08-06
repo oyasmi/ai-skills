@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/oyasmi/ai-skills/tools/agentmux/internal/capture"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/output"
 	"github.com/oyasmi/ai-skills/tools/agentmux/internal/service"
 )
@@ -220,6 +221,36 @@ func TestParseCaptureArgsRawIsOptIn(t *testing.T) {
 	}
 }
 
+func TestParseLogsArgsSupportsFollow(t *testing.T) {
+	name, follow, err := parseLogsArgs([]string{"--follow", "worker"})
+	if err != nil {
+		t.Fatalf("parseLogsArgs: %v", err)
+	}
+	if name != "worker" || !follow {
+		t.Fatalf("unexpected logs args: name=%q follow=%v", name, follow)
+	}
+	if _, _, err := parseLogsArgs([]string{"worker", "--json"}); err == nil {
+		t.Fatal("logs parser should leave global --json to dispatch, not accept it as a local flag")
+	}
+}
+
+func TestRenderLogBatchUsesReadableLabels(t *testing.T) {
+	var out bytes.Buffer
+	renderLogBatch(&out, capture.Snapshot{Extra: map[string]any{
+		"messages": []map[string]any{
+			{"type": "user", "text": "do it"},
+			{"type": "tool_use", "tool": "shell", "text": "ok"},
+			{"type": "assistant", "content_type": "thinking", "text": "checking"},
+			{"type": "assistant", "text": "done"},
+		},
+	}})
+	for _, want := range []string{"[USER]", "do it", "[TOOL shell]", "[THINKING]", "[ASSISTANT]", "done"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("logs output missing %q: %q", want, out.String())
+		}
+	}
+}
+
 func TestParseArgsAcceptsFlagsBeforeInstanceName(t *testing.T) {
 	name, opts, err := parseCaptureArgs([]string{"--history", "40", "demo"})
 	if err != nil || name != "demo" || opts.History != 40 {
@@ -309,6 +340,16 @@ func TestParseRunArgsDetach(t *testing.T) {
 		if _, _, err := parseRunArgs(args); err == nil || !strings.Contains(err.Error(), "--detach cannot be combined") {
 			t.Fatalf("expected --detach with %s to fail, got %v", flag, err)
 		}
+	}
+}
+
+func TestParseRunArgsKeep(t *testing.T) {
+	in, _, err := parseRunArgs([]string{"--template", "worker", "--prompt", "do it", "--keep"})
+	if err != nil {
+		t.Fatalf("parseRunArgs --keep: %v", err)
+	}
+	if !in.Keep {
+		t.Fatal("expected --keep to preserve a newly created instance")
 	}
 }
 

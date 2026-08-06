@@ -61,6 +61,8 @@ Windows 不是首要目标。
 34. `list --json` 返回稳定的精简摘要，`inspect --json` 返回诊断字段但不暴露 `system_prompt` 和 `env`
 35. agentmux CLI 对外生成的时间字段（包括 JSON 和 `version --json` 的 `build_time`）统一使用本地机器时区
 36. 多实例 `wait` 区分真正超时与实例失败：超时仍为退出码 0，失败项使顶层 `ok` 为 false 并返回非零退出码
+37. 新增精简的 `logs`：结构化 harness 可直接查看可读 transcript，`--follow` 可实时跟随，实例停止后仍可读取保留的历史
+38. `run` 默认清理自己新建且已完成的实例并留下墓碑；需要继续复用会话时使用 `--keep`，复用已有实例时不会擅自关闭
 
 命令职责上建议这样理解：
 
@@ -69,8 +71,9 @@ Windows 不是首要目标。
 2. `inspect --json` 用于查看单个实例当前状态、`pane_title` 和元数据
 3. `wait` 用于阻塞到 agent 看起来完成当前工作；超时返回 `timed_out: true` 而不是报错
 4. `capture` 用于读取实例输出；TUI harness 返回终端文本，结构化 harness 返回协议消息聚合后的文本和结构化数据
+5. `logs` 用于人类查看结构化 harness 的完整对话；需要实时观察时加 `--follow`
 
-面向 Agent 编排的读取建议：只要目的是「看外部 Agent 说了什么」，用不带 `--json` 的 `capture`，它只打印聚合后的 `content`；需要 `usage`、`thread_id`、`turn_state` 时再加 `--json`。
+面向 Agent 编排的读取建议：机器读取仍使用 `capture --json`；人类想看完整对话时使用 `logs`，需要实时观察时加 `--follow`。
 
 ### 两种结构化 harness 的差异
 
@@ -390,7 +393,7 @@ agentmux run --template builder --effort xhigh --model opus --prompt-file ./hard
 cat question.md | agentmux run --template scout --stdin --json
 ```
 
-`run` 结束后实例保留，可以继续追加指令或检查；重复 `run` 同一个名字会在同一会话里继续。单路阻塞式的 `run` 不适合并行——它会阻塞到自己这一路结束；并行场景改用 `run --detach`（发出即返回）逐个分片调用，再统一 `wait --mode any --collect`：
+普通 `run` 完成后会清理自己新建的实例并保留墓碑；需要让新实例继续接受指令时加 `--keep`。如果 `run` 复用了已有实例，则不会替调用方关闭它。单路阻塞式的 `run` 不适合并行——它会阻塞到自己这一路结束；并行场景改用 `run --detach`（发出即返回）逐个分片调用，再统一 `wait --mode any --collect`：
 
 ```bash
 agentmux run --template builder --name 分片-A --cwd /wt/a --prompt "..." --detach --json
@@ -422,6 +425,13 @@ agentmux capture 编码助手-A --scope session --history 40 --json   # --histor
 agentmux capture 编码助手-A --json --since 18422       # 只看上次之后的新内容（隐含 --trace）
 agentmux capture 编码助手-A --new --json               # 同上，但游标由 agentmux 自己记账，不用手动传
 agentmux capture 编码助手-A --json --history 0 --raw   # 调试用：完整消息与原始事件
+```
+
+查看结构化 harness 的完整可读对话：
+
+```bash
+agentmux logs 编码助手-A
+agentmux logs 编码助手-A --follow
 ```
 
 等待 agent 完成当前工作，不返回内容：
@@ -492,6 +502,7 @@ agentmux list --all --json
 2. 复用到忙实例时不会立刻报错或把新任务和旧任务混在一起：先等旧任务收尾，`data.queued_ms` 报告花掉的等待时间；预算耗尽则报 `instance_busy`
 3. `--detach` 在发送完 prompt 后立即返回，不等待也不读取输出，`data.detached: true`；仍会先按上一条等待忙实例，仍不能与 `--history`/`--trace`/`--raw` 同时使用
 4. `--timeout` 到期且已发送 prompt 之后，不是失败：`data.timed_out: true`，可以对同一个实例再次 `wait`
+5. 新建实例的同步 `run` 在成功读回结果后自动清理并留下墓碑；`--keep` 保持实例，复用已有实例时 `run` 不负责关闭
 
 ### `capture`
 
@@ -507,6 +518,12 @@ agentmux list --all --json
 10. `capture` 的主要职责是读输出，不是做状态查询，也不是等待接口
 11. 若只想获知某个实例当前状态，应使用 `inspect --json`
 12. 若需要等待 agent 完成工作，应先执行 `wait`
+
+### `logs`
+
+1. `logs <instance-name>` 读取结构化 harness 记录的完整可读对话，包括 user、assistant、thinking、tool 和 result 消息
+2. `logs --follow` 先打印已有历史，再持续等待新增事件；停止的结构化实例也可以读取，只要墓碑和 transport 记录仍在
+3. `logs` 是人类观察接口；活动中的结构化实例需要机器读取原始协议时使用 `capture --scope session --history 0 --raw --json`，已结束实例仍使用 `logs`
 
 ### `wait`
 
@@ -559,11 +576,12 @@ agentmux list --all --json
 3. `list` 默认隐藏墓碑，`list --all` 显示；`inspect` 对墓碑正常返回
 4. 墓碑不占 `max_instances` 配额，同名 `summon` 会直接回收名字
 5. 超过 `defaults.status.tombstone_ttl_ms`（默认 24 小时）自动清除
+6. structured tombstone 在清除前仍可通过 `logs` 查看完整记录
 
 ### `attach`
 
 1. TUI harness 会进入对应 tmux session
-2. `claude-code-ndjson` 和 `codex-cli-execjson` 没有交互式 TUI，`attach` 会跟随实例的 `output.jsonl`，用于调试事件流
+2. `claude-code-ndjson`、`codex-cli-execjson` 和 `pi-rpc` 没有交互式 TUI；查看可读对话使用 `logs`，`attach` 保留为原始事件流调试入口
 3. `attach` 是交互式命令，不支持 `--json`
 
 ## 并发安全

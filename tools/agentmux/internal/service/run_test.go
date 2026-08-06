@@ -28,6 +28,7 @@ func TestRunDelegatesATaskAndReturnsTheAnswer(t *testing.T) {
 		Prompt:    "summarize the repo",
 		TimeoutMS: 5000,
 		Capture:   capture.Options{History: -1, Scope: capture.ScopeCurrent},
+		Keep:      true,
 	})
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -63,6 +64,31 @@ func TestRunDelegatesATaskAndReturnsTheAnswer(t *testing.T) {
 	}
 	if err := svc.NDJSON.Halt(ctx, again.Instance, true, 0); err != nil {
 		t.Fatalf("halt: %v", err)
+	}
+}
+
+func TestRunCleansUpFreshInstanceByDefault(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns a local fake process")
+	}
+	svc := newRunTestService(t)
+	res, err := svc.Run(context.Background(), RunInput{
+		Summon:    SummonInput{TemplateName: "ndjson", Name: "one-shot"},
+		Prompt:    "do one task",
+		TimeoutMS: 5000,
+		Capture:   capture.Options{History: -1, Scope: capture.ScopeCurrent},
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.Instance.Status != instance.StatusExited {
+		t.Fatalf("a fresh completed run must be cleaned up, got %s", res.Instance.Status)
+	}
+	if res.Snapshot.Content != "service done" {
+		t.Fatalf("cleanup must happen after capture, got %q", res.Snapshot.Content)
+	}
+	if _, err := svc.Inspect(context.Background(), "one-shot"); err != nil {
+		t.Fatalf("the cleaned-up run must remain inspectable: %v", err)
 	}
 }
 

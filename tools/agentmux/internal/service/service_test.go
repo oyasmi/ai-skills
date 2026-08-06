@@ -1750,6 +1750,52 @@ func TestNDJSONHarnessDoesNotUseTmuxForPromptWaitCaptureHalt(t *testing.T) {
 	}
 }
 
+func TestTranscriptReadsStructuredTombstoneHistory(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns a local fake process")
+	}
+	ctx := context.Background()
+	svc, _ := newTestService(t, &fakeTmux{sessions: map[string]bool{}})
+	fake := writeServiceFakeClaude(t, svc.Paths.StateDir)
+	svc.Config.Templates["ndjson"] = config.Template{
+		Command:     fake,
+		HarnessType: ndjsonctl.HarnessType,
+		CWD:         svc.Paths.StateDir,
+		Shell:       "/bin/bash -lc",
+		Env:         map[string]string{},
+	}
+	if _, err := svc.Summon(ctx, SummonInput{TemplateName: "ndjson", Name: "audit"}); err != nil {
+		t.Fatalf("summon: %v", err)
+	}
+	if _, err := svc.Prompt(ctx, "audit", "original prompt", ""); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	if _, _, err := svc.Wait(ctx, "audit", 1, 2000); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if _, err := svc.HaltWithOptions(ctx, "audit", true, 0); err != nil {
+		t.Fatalf("halt: %v", err)
+	}
+	inst, snap, err := svc.Transcript(ctx, "audit", "")
+	if err != nil {
+		t.Fatalf("transcript tombstone: %v", err)
+	}
+	if !inst.Ended() {
+		t.Fatalf("transcript should return the ended instance, got %s", inst.Status)
+	}
+	msgs, ok := snap.Extra["messages"].([]ndjsonctl.NormalizedMessage)
+	if !ok {
+		t.Fatalf("unexpected transcript messages type %T", snap.Extra["messages"])
+	}
+	var text string
+	for _, msg := range msgs {
+		text += msg.Text + "\n"
+	}
+	if !strings.Contains(text, "hello") || !strings.Contains(text, "service done") {
+		t.Fatalf("transcript lost conversation history: %q", text)
+	}
+}
+
 func TestNewUsesConfiguredTmuxSocket(t *testing.T) {
 	cfg := config.Config{
 		Version: 1,

@@ -9,10 +9,10 @@ description: 使用 `agentmux` CLI 把任务委派给一个或多个外部 AI co
 
 ## 核心规则
 
-1. 只通过 `agentmux` 管理外部 Agent 实例。不要直接调用外部 coding CLI、`tmux` 或读取 harness 原始日志，除非用户明确要求调试底层实现。
+1. 只通过 `agentmux` 管理外部 Agent 实例。不要直接调用外部 coding CLI、`tmux` 或读取 harness 原始日志，除非用户明确要求调试底层实现；人类观察 headless 对话使用 `logs`。
 2. 按任务职责选择模板，不要按模型或 harness 名称选。先用 `agentmux template list --json` 读取本机模板及其完整 `description`。
 3. 只委派可与当前工作分离、且能独立验收的任务。默认只用一个最小足够角色；只有任务确实需要独立判断、并行分片或多阶段交付时才组合多个角色。
-4. 单路任务优先使用 `run`；只有需要异步并行或分步观察、纠偏时才拆成 `summon`、`prompt`、`wait` 和 `capture`。
+4. 单路一次性任务优先使用 `run`；需要保留新会话继续工作时显式加 `--keep`。只有需要异步并行或分步观察、纠偏时才拆成 `summon`、`prompt`、`wait` 和 `capture`。
 5. 等待超时表示实例仍在工作，不表示失败。不要仅因耗时长或状态仍为 `busy` 就中断。
 6. 多实例 `wait` 中，真正超时仍是 `ok: true`；但任一实例失败会使顶层 `ok: false` 和退出码非零，不能把失败当成超时处理。
 7. 外部 Agent 的完成声明不是验收证据。直接检查文件、diff 和产物，并亲自运行与风险相称的验证。
@@ -99,14 +99,14 @@ agentmux list --json
 
 委派前确认并保留实例名、工作目录、预期产物、验收方法和失败后的恢复方案；这些信息用于后续判断是继续等待、纠偏、复用还是新建实例。
 
-单路任务使用：
+单路一次性任务使用：
 
 ```bash
 agentmux run --template <角色> --name <描述性名称> --cwd <工作目录> \
   --prompt-file <任务文件> --timeout 10m --json
 ```
 
-短任务可改用 `--prompt "<任务契约>"`。`run` 会创建或复用实例、等待既有任务收尾、发送本次任务、等待并读取结果；任务在超时后仍可继续等待。
+短任务可改用 `--prompt "<任务契约>"`。`run` 会创建或复用实例、等待既有任务收尾、发送本次任务、等待并读取结果；新建实例成功完成后默认清理并留下墓碑。需要继续复用新实例时加 `--keep`；复用已有实例时 `run` 不会替调用方关闭它。
 
 需要分步控制时使用：
 
@@ -134,11 +134,13 @@ agentmux inspect <名称> --json        # 状态和元数据
 agentmux wait <名称> --timeout 3m --json
 agentmux capture <名称>               # 聚合文本，默认首选
 agentmux capture <名称> --new --json  # 只读结构化 harness 的新增消息
+agentmux logs <名称>                  # 结构化 harness 的完整可读对话
+agentmux logs <名称> --follow         # 先读历史，再跟随新增事件
 ```
 
 `wait` 的实例名和 flags 可以按常见命令行习惯混排，例如
 `agentmux wait --timeout 3m <名称> --json`。`attach` 是交互式命令：TUI
-实例连接 tmux，结构化 harness 跟随输出事件流，且不支持 `--json`。
+实例连接 tmux；headless 对话使用 `logs --follow`，原始事件调试才使用 attach。
 
 读取 `wait` 结果时：
 
@@ -146,7 +148,7 @@ agentmux capture <名称> --new --json  # 只读结构化 harness 的新增消�
 - `ok: true`、`timed_out: true`、`status: busy`：仍在工作；继续等待。
 - `ok: false`：实例或运行环境确实失败；按 `error_code` 处理。
 
-长任务按 `1m, 1m, 3m, 5m` 的节奏等待，之后重复；单次等待不超过五分钟。需要检查进展时使用 `capture`，不要反复拉取完整消息轨迹。
+长任务按 `1m, 1m, 3m, 5m` 的节奏等待，之后重复；单次等待不超过五分钟。机器需要增量读取时使用 `capture --new`，人类需要完整进度时使用 `logs --follow`。
 
 追加或重试前先用 `inspect` 和 `capture` 检查实例状态、既有输出与预期产物，避免把同一任务重复下发。追加指令只描述相对原任务的变化：
 

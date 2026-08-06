@@ -191,7 +191,7 @@ func TestPromptWaitCaptureThenResumeSecondTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("capture session: %v", err)
 	}
-	if !strings.Contains(messagesText(session), "echo:hello") || !strings.Contains(messagesText(session), "echo:again") {
+	if !strings.Contains(messagesText(session), "hello") || !strings.Contains(messagesText(session), "again") || !strings.Contains(messagesText(session), "echo:hello") || !strings.Contains(messagesText(session), "echo:again") {
 		t.Fatalf("session scope must include both turns, got %s", messagesText(session))
 	}
 

@@ -130,10 +130,44 @@ func scanTurn(events []Event, from int64) turnOutcome {
 // ids at item_0 for every turn, so the dedup index is reset on turn.started --
 // otherwise turn 2's item_0 would overwrite turn 1's.
 func normalizeEvents(events []Event) ([]NormalizedMessage, string, Usage) {
+	return normalizeEventsWithPrompts(events, nil, "", 0)
+}
+
+// normalizeEventsWithPrompts adds the user input that codex consumes from
+// stdin. Codex's --json stream does not echo that input, but agentmux keeps an
+// exact prompt file for every turn, so a transcript can still show both sides
+// of the conversation.
+func normalizeEventsWithPrompts(events []Event, turns []Turn, dir string, from int64) ([]NormalizedMessage, string, Usage) {
 	out := []NormalizedMessage{}
 	index := map[string]int{}
 	var content string
 	var usage Usage
+	lastPromptTurn := -1
+
+	turnForOffset := func(offset int64) int {
+		found := -1
+		for i := range turns {
+			if turns[i].StartOffset <= offset {
+				found = i
+			}
+		}
+		return found
+	}
+	appendPrompt := func(turn int) {
+		if turn < 0 || turn == lastPromptTurn || turn >= len(turns) || turns[turn].StartOffset < from || dir == "" {
+			return
+		}
+		b, err := os.ReadFile(promptPath(dir, turns[turn].Index))
+		if err != nil {
+			return
+		}
+		text := strings.TrimSpace(string(b))
+		if text == "" {
+			return
+		}
+		out = append(out, NormalizedMessage{Type: "user", Role: "user", ContentType: "text", Text: text})
+		lastPromptTurn = turn
+	}
 
 	put := func(id string, msg NormalizedMessage) {
 		if id == "" {
@@ -149,6 +183,7 @@ func normalizeEvents(events []Event) ([]NormalizedMessage, string, Usage) {
 	}
 
 	for _, ev := range events {
+		appendPrompt(turnForOffset(ev.Offset))
 		switch ev.Type {
 		case "thread.started":
 			out = append(out, NormalizedMessage{Type: "system", ContentType: "thread_started", Text: ev.ThreadID, Raw: ev.Raw})
@@ -176,6 +211,13 @@ func normalizeEvents(events []Event) ([]NormalizedMessage, string, Usage) {
 			put(ev.Item.ID, msg)
 		default:
 			out = append(out, NormalizedMessage{Type: "unknown", Raw: ev.Raw})
+		}
+	}
+	if len(events) == 0 {
+		for i := range turns {
+			if turns[i].StartOffset >= from {
+				appendPrompt(i)
+			}
 		}
 	}
 	return out, content, usage

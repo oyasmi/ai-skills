@@ -18,6 +18,10 @@ type RunInput struct {
 	Prompt    string
 	TimeoutMS int
 	Capture   capture.Options
+	// Keep leaves a newly created instance available after a successful run.
+	// Reused instances are never closed by run: their owner is the caller that
+	// summoned them, not this one-shot delegation.
+	Keep bool
 	// Detach sends the prompt and returns immediately, without waiting or
 	// capturing: parallel fan-out is "run --detach x N, then wait --collect"
 	// instead of summon + prompt spelled out by hand.
@@ -113,6 +117,17 @@ func (s Service) Run(ctx context.Context, in RunInput) (RunResult, error) {
 	inst, snap, err := s.Capture(ctx, name, in.Capture)
 	if err != nil {
 		return RunResult{}, err
+	}
+	if !in.Keep && !res.Reused && !waitSnap.TimedOut {
+		// A synchronous run owns an instance it created. Close it after the
+		// final capture so the result remains available while the transport is
+		// still open, then leave the registry tombstone for inspection.
+		ended, haltErr := s.HaltWithOptions(ctx, name, false, 5*time.Second)
+		if haltErr != nil {
+			res.Warnings = append(res.Warnings, "cleanup_failed:"+haltErr.Error())
+		} else {
+			inst = ended
+		}
 	}
 	return RunResult{
 		Instance:  inst,

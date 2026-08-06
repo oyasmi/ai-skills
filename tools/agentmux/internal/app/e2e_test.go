@@ -231,12 +231,15 @@ func TestRunE2EDelegatesInOneCall(t *testing.T) {
 	if code := Run(ctx, []string{"list", "--json"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("active list failed: %s", stderr.String())
 	}
+	if !strings.Contains(stdout.String(), `"instances": []`) {
+		t.Fatalf("a completed fresh run must clean up its instance, got %q", stdout.String())
+	}
 	if strings.Contains(stdout.String(), `"system_prompt"`) || strings.Contains(stdout.String(), `"env"`) || strings.Contains(stdout.String(), "0001-01-01") {
 		t.Fatalf("active list JSON leaked internal or zero-value fields: %q", stdout.String())
 	}
 
-	// The instance survives the call, and halting it leaves a tombstone that
-	// list hides but list --all still reports.
+	// The automatic cleanup leaves a tombstone; halting it again is idempotent,
+	// and list --all still reports the lifecycle record.
 	stdout.Reset()
 	if code := Run(ctx, []string{"halt", "one-shot", "--timeout", "20ms", "--json"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("halt failed: %s", stderr.String())

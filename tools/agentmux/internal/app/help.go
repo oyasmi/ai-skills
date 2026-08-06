@@ -15,8 +15,9 @@ usage:
   agentmux summon --template <template-name> [--name <instance-name>] [--cwd <path>] [--model <model>] [--effort <level>] [--command <shell-command>] [--system-prompt <text>] [--prompt <text>] [--json]
   agentmux inspect <instance-name> [--json]
   agentmux prompt <instance-name> [--text <text> | --stdin] [--key <key>] [--json]
-  agentmux run --template <template-name> [--name <instance-name>] [--cwd <path>] (--prompt <text> | --prompt-file <path> | --stdin) [--timeout <duration-or-ms>] [--history <limit>] [--trace] [--raw] [--detach] [--json]
+  agentmux run --template <template-name> [--name <instance-name>] [--cwd <path>] (--prompt <text> | --prompt-file <path> | --stdin) [--timeout <duration-or-ms>] [--history <limit>] [--trace] [--raw] [--detach] [--keep] [--json]
   agentmux capture <instance-name> [--scope current|session] [--history <limit>] [--since <cursor> | --new] [--trace] [--raw] [--json]
+  agentmux logs <instance-name> [--follow]
   agentmux wait <instance-name>... [--mode all|any] [--stable <duration-or-ms>] [--timeout <duration-or-ms>] [--collect] [--json]
   agentmux attach [<instance-name>]
   agentmux halt <instance-name> [--json]
@@ -64,6 +65,8 @@ func helpForArgs(args []string) (string, bool, error) {
 			return promptHelp(), true, nil
 		case "capture":
 			return captureHelp(), true, nil
+		case "logs":
+			return logsHelp(), true, nil
 		case "wait":
 			return waitHelp(), true, nil
 		case "attach":
@@ -104,6 +107,7 @@ Core commands:
   inspect         Query one instance's current status and metadata
   prompt          Send text or a special key to an instance
   capture         Read the latest observable output from an instance
+  logs            Read a structured instance's readable transcript
   wait            Wait until one or several agents appear done
   attach          Attach a human terminal to an instance
   halt            Stop an instance
@@ -122,6 +126,7 @@ Examples:
   agentmux summon --template builder --name 编码助手-A --cwd ~/work/project
   agentmux summon --template builder --name 编码助手-A --prompt "先阅读项目并总结结构" --json
   agentmux capture 编码助手-A --history 120 --json
+  agentmux logs 编码助手-A --follow
   echo "补充两行说明" | agentmux prompt 编码助手-A --stdin --json
   agentmux prompt 编码助手-A --text "继续" --json
 
@@ -228,6 +233,7 @@ Flags:
   --trace                   Include the per-protocol-event message trace; off by default, since data.content already carries the answer
   --raw                     Include raw protocol events in the returned output; also implies --trace
   --detach                  Send the prompt and return immediately, without waiting or capturing
+  --keep                    Keep a newly created instance after a successful run; otherwise run cleans it up
   --json                    Return JSON output
   -h, --help                Show this help
 
@@ -237,7 +243,7 @@ Behavior:
   An existing instance with the same name is reused, so repeated runs continue the same session.
   If the reused instance is still busy with earlier work, run waits for it to clear before sending this task's prompt, spending part of --timeout on that wait; data.queued_ms in JSON output reports how much. Exhausting --timeout while still busy fails with instance_busy instead of sending into unrelated work.
   Reaching --timeout after the prompt was sent is not a failure: the agent keeps working, data.timed_out is set, and whatever it produced so far is returned. Wait on the instance again to pick it up.
-  The instance is left running so its work can be inspected; stop it with halt.
+  A newly created instance is cleaned up after a successful non-detached run and remains as a tombstone; use --keep when the session should stay available. An existing instance is never closed by run.
   --detach still waits out a busy reused instance first (--timeout still governs that), but returns as soon as this task's prompt is sent; data.timed_out and data.content are not produced, data.detached is true instead. This is what makes a parallel fan-out cheap: summon with --detach for each shard, then a single wait --collect --mode any picks up whichever finishes first.
   --detach cannot be combined with --history, --trace, or --raw, since nothing is captured until a later capture or wait --collect call.
   If another active instance already points at the same cwd, data.warnings includes "cwd_shared:<that-instance-name>"; see agentmux help summon.
@@ -398,6 +404,31 @@ Examples:
   agentmux capture 编码助手-A --scope session --history 40 --json
   agentmux capture 编码助手-A --since 4096 --json
   agentmux capture 编码助手-A --new --json
+`)
+}
+
+func logsHelp() string {
+	return strings.TrimSpace(`
+logs prints the readable transcript of a structured (headless) instance.
+
+Usage:
+  agentmux logs <instance-name> [--follow]
+
+Arguments:
+  <instance-name>           Target instance name, including a stopped tombstone
+
+Flags:
+  --follow                  Print existing history, then wait for new events
+  -h, --help                Show this help
+
+Notes:
+  logs includes user prompts, assistant messages, thinking, tool calls and results when the harness exposes them.
+  It also works after a structured instance has stopped, as long as its tombstone and transport record are retained.
+  TUI instances keep using capture or attach; for machine-readable data from an active structured instance use capture --scope session --history 0 --raw --json. Ended instances use logs.
+
+Examples:
+  agentmux logs 编码助手-A
+  agentmux logs 编码助手-A --follow
 `)
 }
 

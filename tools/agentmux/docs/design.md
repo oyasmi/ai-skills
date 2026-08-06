@@ -272,9 +272,12 @@ tools/agentmux/
 说明：
 
 1. 去掉 `show`，统一用 `inspect`
-2. 去掉 `watch`、`doctor`、`remove`、`rename`、`bootstrap`、`paste`、`logs`
+2. 去掉 `watch`、`doctor`、`remove`、`rename`、`bootstrap`、`paste`
 3. 去掉独立 `keys` 子命令，特殊键能力并入 `prompt`
 4. `capture` 与 `wait` 职责分离，抓屏与等待分别建模
+
+说明：本文这一节记录早期的最小命令基线。当前 CLI 另外提供
+`logs`，只用于结构化 harness 的可读 transcript；它不改变上述控制命令的职责划分。
 
 这样命令面更小，更符合“先把核心做好”。
 

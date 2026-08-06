@@ -549,6 +549,42 @@ func (s Service) Capture(ctx context.Context, name string, opts capture.Options)
 	return inst, snap, nil
 }
 
+// Transcript reads the complete recorded conversation of a structured
+// harness. Unlike Capture it also accepts ended instances, because a
+// transport directory is the source of truth for post-run inspection. The
+// caller owns the cursor; unlike capture --new, reading a transcript never
+// advances a shared per-instance cursor.
+func (s Service) Transcript(ctx context.Context, name, since string) (instance.Instance, capture.Snapshot, error) {
+	var inst instance.Instance
+	err := s.withRegistryReconcileOne(ctx, name, func(reg *instance.Registry) error {
+		current, ok := reg.Get(name)
+		if !ok {
+			return apperr.New("instance_not_found", fmt.Sprintf("instance %q not found", name))
+		}
+		inst = current
+		return nil
+	})
+	if err != nil {
+		return instance.Instance{}, capture.Snapshot{}, err
+	}
+	hs, structured := s.harnessFor(inst)
+	if !structured {
+		return instance.Instance{}, capture.Snapshot{}, apperr.New("invalid_arguments",
+			fmt.Sprintf("logs needs a structured harness; instance %q uses %s", name, inst.HarnessType))
+	}
+	snap, err := hs.Capture(ctx, inst, capture.Options{
+		History: 0,
+		Scope:   capture.ScopeSession,
+		Since:   since,
+		Trace:   true,
+		Raw:     true,
+	})
+	if err != nil {
+		return instance.Instance{}, capture.Snapshot{}, err
+	}
+	return inst, snap, nil
+}
+
 // Wait blocks until the agent appears done with its current work.
 //
 // Reaching the timeout is a normal outcome, not a failure: the caller learns
