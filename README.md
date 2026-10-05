@@ -41,7 +41,8 @@ cp -R skills/query-akshare "${CODEX_HOME:-$HOME/.codex}/skills/query-akshare"
 需要 Python 3.9+，脚本可以单独复制使用，无需安装包、登录或 API key：
 
 ```bash
-python3 tools/unsplash_wallpaper.py                    # 下载并设置壁纸
+python3 tools/unsplash_wallpaper.py                    # 下载并设置所有虚拟桌面的壁纸
+python3 tools/unsplash_wallpaper.py --current-space    # 仅设置各显示器当前可见的桌面
 python3 tools/unsplash_wallpaper.py --download-only    # 仅下载，打印图片路径和来源
 python3 tools/unsplash_wallpaper.py --offline          # 不联网，轮换已有图片
 python3 tools/unsplash_wallpaper.py --keep 5 --width 2560
@@ -70,8 +71,14 @@ HTTP 429 会保存 Unsplash 的冷却时间，遵守 `Retry-After`，期间直�
 ```
 
 `--quiet` 只隐藏成功输出，错误和后备来源的提示保留在 stderr，方便 cron 记录。
-cron 中请使用绝对路径，不依赖 PATH 或工作目录。脚本通过系统自带的
-`osascript` 调用 AppKit，设置所有已连接显示器的**当前桌面**，不遍历其他 Spaces；
+cron 中请使用绝对路径，不依赖 PATH 或工作目录。默认设置**所有虚拟桌面和显示器**的
+同一张壁纸（macOS 14+），同时更新默认配置，让新建桌面也使用该壁纸。
+脚本通过系统自带的 `osascript` 调用 AppKit 验证图片，然后暂停当前用户的
+`WallpaperAgent`，原子更新 `~/Library/Application Support/com.apple.wallpaper/Store/Index.plist`
+里的桌面配置，再重启壁纸进程；保留屏幕保护程序和显示器/桌面标识。
+无需自动切换桌面或授予辅助功能权限，刷新时壁纸可能短暂闪烁。
+该配置格式属于 macOS 私有实现；无法识别或缺失时会报错，不会静默只更新当前桌面。
+`--current-space` 使用原来的 AppKit 设置方式，也适用于较旧的 macOS。
 需要已登录的图形桌面会话。退出码：成功或并发跳过为 0，运行失败为 1，
 参数错误为 2，中断为 130。
 

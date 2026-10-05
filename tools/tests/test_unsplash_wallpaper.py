@@ -1,12 +1,15 @@
 """Standard-library regression tests: python3 -m unittest discover -s tools/tests."""
 
 import email.message
+import copy
 import fcntl
 import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
+import plistlib
+import signal
 import subprocess
 import sys
 import tempfile
@@ -252,13 +255,190 @@ class WallpaperTests(unittest.TestCase):
 
     def test_osascript_receives_path_as_argument_and_has_timeout(self):
         path = self.cache / 'quotes"and spaces.jpg'
-        with patch.object(w.subprocess, "run", return_value=Mock(returncode=0)) as run:
+        with patch.object(w.subprocess, "run", return_value=Mock(returncode=0)) as run, \
+                patch.object(w, "set_all_spaces") as all_spaces:
             w.set_wallpaper(path)
-        self.assertEqual(run.call_args.args[0][-1], str(path))
+        all_spaces.assert_called_once_with(path)
+        self.assertEqual(run.call_args.args[0][-2:], [str(path), "validate"])
         self.assertNotIn(str(path), run.call_args.kwargs["input"])
+        self.assertEqual(run.call_args.kwargs["timeout"], 30)
         with patch.object(w.subprocess, "run", side_effect=subprocess.TimeoutExpired("osascript", 30)):
             with self.assertRaises(w.WallpaperError):
                 w.set_wallpaper(path)
+
+
+class AllSpacesTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.home = Path(self.temporary.name)
+        self.store_path = self.home / "Library/Application Support/com.apple.wallpaper/Store/Index.plist"
+        self.store_path.parent.mkdir(parents=True)
+        self.path = self.home / 'wallpaper quotes"中文 #%.jpg'
+        self.idle = {"Content": {"Choices": [{"Provider": "screensaver", "Configuration": b"keep"}]}}
+        slot = {"Type": "individual", "Desktop": {"old": True}, "Idle": self.idle, "extra": 42}
+        self.store = {
+            "AllSpacesAndDisplays": {"Type": "idle", "Idle": self.idle},
+            "SystemDefault": copy.deepcopy(slot),
+            "Displays": {"display-1": copy.deepcopy(slot)},
+            "Spaces": {
+                "space-1": {"Default": copy.deepcopy(slot),
+                            "Displays": {"display-1": copy.deepcopy(slot), "display-2": "$null"},
+                            "extra": "keep"},
+                "space-2": {"Default": {"Type": "linked", "Desktop": self.idle}},
+            },
+            "unknown": b"keep",
+        }
+        self.original = plistlib.dumps(self.store, fmt=plistlib.FMT_BINARY)
+        self.store_path.write_bytes(self.original)
+        self.store_path.chmod(0o640)
+
+    def test_updates_all_slots_and_defaults_preserving_screensavers(self):
+        original = copy.deepcopy(self.store)
+        updated = w.wallpaper_store_for_image(self.store, self.path)
+        slots = [updated["AllSpacesAndDisplays"], updated["SystemDefault"],
+                 updated["Displays"]["display-1"], updated["Spaces"]["space-1"]["Default"],
+                 *updated["Spaces"]["space-1"]["Displays"].values(),
+                 updated["Spaces"]["space-2"]["Default"]]
+        for slot in slots:
+            choice = slot["Desktop"]["Content"]["Choices"][0]
+            self.assertEqual(choice["Provider"], "com.apple.wallpaper.choice.image")
+            self.assertEqual(choice["Files"], [{"relative": self.path.resolve().as_uri()}])
+            self.assertEqual(plistlib.loads(choice["Configuration"]), {"placement": 1})
+            self.assertEqual(slot["Desktop"]["Content"]["Shuffle"], "$null")
+            if "Idle" in slot:
+                self.assertEqual(slot["Idle"], self.idle)
+                self.assertEqual(slot["Type"], "individual")
+            else:
+                self.assertEqual(slot["Type"], "desktop")
+        self.assertEqual(updated["SystemDefault"]["extra"], 42)
+        self.assertEqual(updated["Spaces"]["space-1"]["extra"], "keep")
+        self.assertEqual(updated["unknown"], b"keep")
+        self.assertEqual(self.store, original)
+
+    def test_null_global_and_empty_overrides_get_defaults(self):
+        self.store.update(AllSpacesAndDisplays="$null", Spaces={}, Displays={})
+        updated = w.wallpaper_store_for_image(self.store, self.path)
+        self.assertEqual(updated["AllSpacesAndDisplays"]["Type"], "desktop")
+        self.assertIn("Desktop", updated["SystemDefault"])
+
+    def test_unknown_schema_is_rejected(self):
+        for changes in ({"Spaces": []}, {"Displays": []}, {"SystemDefault": {"Type": "new-schema"}},
+                        {"Spaces": {"space": []}}):
+            with self.subTest(changes=changes), self.assertRaises(w.WallpaperError):
+                w.wallpaper_store_for_image(dict(self.store, **changes), self.path)
+
+    def apply(self, kill):
+        with patch.object(w.Path, "home", return_value=self.home), \
+                patch.object(w.subprocess, "run", return_value=Mock(returncode=0, stdout="123\n456\n")) as run, \
+                patch.object(w.os, "kill", side_effect=kill):
+            w.set_all_spaces(self.path)
+        self.assertEqual(run.call_args.args[0],
+                         ["/usr/bin/pgrep", "-u", str(os.getuid()), "-x", "WallpaperAgent"])
+
+    def test_pauses_agents_before_write_then_restarts_and_resumes(self):
+        events = []
+
+        def kill(pid, sig):
+            if sig == signal.SIGSTOP:
+                self.assertEqual(self.store_path.read_bytes(), self.original)
+            if sig == signal.SIGTERM:
+                updated = plistlib.loads(self.store_path.read_bytes())
+                self.assertIn("Desktop", updated["AllSpacesAndDisplays"])
+            events.append((pid, sig))
+
+        self.apply(kill)
+        self.assertEqual(events, [(123, signal.SIGSTOP), (456, signal.SIGSTOP),
+                                  (123, signal.SIGTERM), (456, signal.SIGTERM),
+                                  (123, signal.SIGCONT), (456, signal.SIGCONT)])
+        self.assertEqual(self.store_path.stat().st_mode & 0o777, 0o640)
+        self.assertEqual(list(self.store_path.parent.glob(".*.tmp")), [])
+
+    def test_invalid_store_is_untouched_and_agents_are_resumed(self):
+        self.store_path.write_bytes(b"invalid plist")
+        kill = Mock()
+        with self.assertRaises(w.WallpaperError):
+            self.apply(kill)
+        self.assertEqual(self.store_path.read_bytes(), b"invalid plist")
+        self.assertEqual([call.args[1] for call in kill.call_args_list],
+                         [signal.SIGSTOP, signal.SIGSTOP, signal.SIGCONT, signal.SIGCONT])
+
+    def test_restart_failure_restores_store_and_resumes_agents(self):
+        def fail_restart(pid, sig):
+            if sig == signal.SIGTERM:
+                raise PermissionError("cannot restart")
+
+        kill = Mock(side_effect=fail_restart)
+        with self.assertRaises(PermissionError):
+            self.apply(kill)
+        self.assertEqual(self.store_path.read_bytes(), self.original)
+        self.assertEqual([call.args for call in kill.call_args_list][-2:],
+                         [(123, signal.SIGCONT), (456, signal.SIGCONT)])
+
+    def test_partial_pause_failure_resumes_already_stopped_agent(self):
+        def fail_pause(pid, sig):
+            if pid == 456 and sig == signal.SIGSTOP:
+                raise PermissionError("cannot pause")
+
+        kill = Mock(side_effect=fail_pause)
+        with self.assertRaises(PermissionError):
+            self.apply(kill)
+        self.assertEqual(self.store_path.read_bytes(), self.original)
+        self.assertEqual(kill.call_args.args, (123, signal.SIGCONT))
+
+    def test_write_failure_keeps_store_and_resumes_agents(self):
+        kill = Mock()
+        with patch.object(w, "atomic_file", side_effect=OSError("disk full")), \
+                self.assertRaises(OSError):
+            self.apply(kill)
+        self.assertEqual(self.store_path.read_bytes(), self.original)
+        self.assertEqual([call.args[1] for call in kill.call_args_list],
+                         [signal.SIGSTOP, signal.SIGSTOP, signal.SIGCONT, signal.SIGCONT])
+
+    def test_resume_failure_still_attempts_to_resume_remaining_agents(self):
+        def fail_resume(pid, sig):
+            if pid == 123 and sig == signal.SIGCONT:
+                raise PermissionError("cannot resume")
+
+        kill = Mock(side_effect=fail_resume)
+        with self.assertRaises(PermissionError):
+            self.apply(kill)
+        self.assertEqual(kill.call_args.args, (456, signal.SIGCONT))
+
+    def test_xml_store_format_is_preserved(self):
+        self.store_path.write_bytes(plistlib.dumps(self.store, fmt=plistlib.FMT_XML))
+        self.apply(Mock())
+        self.assertTrue(self.store_path.read_bytes().startswith(b"<?xml"))
+
+    def test_unavailable_agent_leaves_store_untouched(self):
+        with patch.object(w.Path, "home", return_value=self.home), \
+                patch.object(w.subprocess, "run", return_value=Mock(returncode=1, stdout="")), \
+                patch.object(w.os, "kill") as kill, self.assertRaises(w.WallpaperError):
+            w.set_all_spaces(self.path)
+        kill.assert_not_called()
+        self.assertEqual(self.store_path.read_bytes(), self.original)
+
+    def test_missing_store_fails_without_silent_current_space_fallback(self):
+        self.store_path.unlink()
+        with patch.object(w.Path, "home", return_value=self.home), \
+                patch.object(w.subprocess, "run") as run, self.assertRaises(w.WallpaperError):
+            w.set_all_spaces(self.path)
+        run.assert_not_called()
+
+    def test_current_space_uses_appkit_without_editing_store(self):
+        self.assertFalse(w.arguments([]).current_space)
+        self.assertTrue(w.arguments(["--current-space"]).current_space)
+        with patch.object(w.subprocess, "run", return_value=Mock(returncode=0)) as run, \
+                patch.object(w, "set_all_spaces") as all_spaces:
+            w.set_wallpaper(self.path, current_space=True)
+        self.assertEqual(run.call_args.args[0][-1], "apply")
+        all_spaces.assert_not_called()
+
+    def test_invalid_image_never_edits_store(self):
+        with patch.object(w.subprocess, "run", return_value=Mock(returncode=1, stderr="invalid image")), \
+                patch.object(w, "set_all_spaces") as all_spaces, self.assertRaises(w.WallpaperError):
+            w.set_wallpaper(self.path)
+        all_spaces.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -7,8 +7,9 @@ The website's private JSON endpoint may change; failures fall back to Bing's
 daily images, then cached images. Downloads are JPEG, at most 32 MiB. Unsplash
 images are never upscaled; Bing supplies its UHD version (usually 3840 px).
 
-Run once from Terminal before scheduling in your own user's crontab. AppKit
-updates every connected screen's active desktop; other Spaces are not enumerated.
+Run once from Terminal before scheduling in your own user's crontab. By default,
+update all Spaces and displays via WallpaperAgent's store (macOS 14+). Use
+--current-space for AppKit's active-desktop behavior, including on older macOS.
 Use absolute paths for both Python and this script in cron (cron has a small PATH).
 For example, after checking `command -v python3`, using Homebrew on Apple Silicon:
   0 */3 * * * /opt/homebrew/bin/python3 /absolute/path/unsplash_wallpaper.py --quiet
@@ -20,6 +21,8 @@ Exit codes: 0 success/overlap, 1 runtime failure, 2 invalid arguments, 130 inter
 """
 
 import argparse
+import copy
+import datetime
 import email.utils
 import fcntl
 import hashlib
@@ -28,8 +31,11 @@ import http.cookiejar
 import json
 import os
 from pathlib import Path
+import plistlib
 import random
 import re
+import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -56,6 +62,7 @@ function run(argv) {
     var url = $.NSURL.fileURLWithPath(argv[0]);
     var image = $.NSImage.alloc.initWithContentsOfURL(url);
     if (!image || !image.isValid) throw Error('macOS could not decode the image');
+    if (argv[1] === 'validate') return;
     var workspace = $.NSWorkspace.sharedWorkspace;
     for (var i = 0; i < screens.count; i++) {
         var error = Ref();
@@ -364,15 +371,133 @@ def cleanup(cache, state, keep, max_age, selected):
     state["photos"] = {name: details for name, details in state["photos"].items() if name in retained}
 
 
-def set_wallpaper(path):
+def wallpaper_command(command, **kwargs):
     try:
         result = subprocess.run(
-            ["/usr/bin/osascript", "-l", "JavaScript", "-", str(path)],
-            input=SET_WALLPAPER, text=True, capture_output=True, timeout=30)
+            command, text=True, capture_output=True, timeout=30, **kwargs)
     except subprocess.TimeoutExpired as exc:
         raise WallpaperError("macOS wallpaper update timed out") from exc
+    return result
+
+
+def wallpaper_store_for_image(store, path):
+    """Replace desktop slots, keeping display/Space IDs and screensavers intact."""
+    if not isinstance(store, dict) or not {"SystemDefault", "Spaces", "Displays"} <= store.keys():
+        raise WallpaperError("unrecognized macOS wallpaper store")
+    updated = copy.deepcopy(store)
+    slots = []
+
+    def add_slot(container, key):
+        slot = container.get(key, "$null")
+        if slot == "$null":
+            slot = container[key] = {}
+        if not isinstance(slot, dict) or slot.get("Type") not in (
+                None, "desktop", "idle", "individual", "linked"):
+            raise WallpaperError("unrecognized macOS wallpaper slot")
+        slots.append(slot)
+
+    def add_displays(container):
+        displays = container.get("Displays", {})
+        if not isinstance(displays, dict):
+            raise WallpaperError("unrecognized macOS wallpaper displays")
+        for display_id in displays:
+            add_slot(displays, display_id)
+
+    add_slot(updated, "AllSpacesAndDisplays")
+    add_slot(updated, "SystemDefault")
+    add_displays(updated)
+    if not isinstance(updated["Spaces"], dict):
+        raise WallpaperError("unrecognized macOS wallpaper Spaces")
+    for space in updated["Spaces"].values():
+        if not isinstance(space, dict):
+            raise WallpaperError("unrecognized macOS wallpaper Space")
+        add_slot(space, "Default")
+        add_displays(space)
+
+    now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+    desktop = {
+        "Content": {
+            "Choices": [{
+                "Provider": "com.apple.wallpaper.choice.image",
+                "Files": [{"relative": path.resolve().as_uri()}],
+                "Configuration": plistlib.dumps({"placement": 1}, fmt=plistlib.FMT_BINARY),
+            }],
+            "Shuffle": "$null",
+        },
+        "LastSet": now, "LastUse": now,
+    }
+    for slot in slots:
+        # Linked aerials use their desktop content as the screensaver too.
+        if slot.get("Type") == "linked" and "Idle" not in slot and "Desktop" in slot:
+            slot["Idle"] = copy.deepcopy(slot["Desktop"])
+        slot["Desktop"] = copy.deepcopy(desktop)
+        slot["Type"] = "individual" if isinstance(slot.get("Idle"), dict) else "desktop"
+    return updated
+
+
+def set_all_spaces(path):
+    """Pause only this user's agent so it cannot overwrite the atomic store edit."""
+    store_path = Path.home() / "Library/Application Support/com.apple.wallpaper/Store/Index.plist"
+    if not store_path.is_file():
+        raise WallpaperError("all-Spaces wallpaper setting requires the macOS 14+ wallpaper store; "
+                             "use --current-space for active desktops on older macOS")
+    result = wallpaper_command(["/usr/bin/pgrep", "-u", str(os.getuid()), "-x", "WallpaperAgent"])
+    if result.returncode or not result.stdout.strip():
+        raise WallpaperError("WallpaperAgent is unavailable; run in a logged-in desktop session")
+    try:
+        pids = [int(pid) for pid in result.stdout.split()]
+    except ValueError as exc:
+        raise WallpaperError("could not identify WallpaperAgent") from exc
+    stopped, original, written = [], None, False
+
+    def write_store(data):
+        with atomic_file(store_path, binary=True) as (stream, temporary):
+            stream.write(data)
+            temporary.chmod(stat.S_IMODE(store_path.stat().st_mode))
+
+    try:
+        for pid in pids:
+            os.kill(pid, signal.SIGSTOP)
+            stopped.append(pid)
+        original = store_path.read_bytes()
+        try:
+            store = plistlib.loads(original)
+        except (ValueError, TypeError, OverflowError) as exc:
+            raise WallpaperError("invalid macOS wallpaper store") from exc
+        updated = wallpaper_store_for_image(store, path)
+        fmt = plistlib.FMT_BINARY if original.startswith(b"bplist00") else plistlib.FMT_XML
+        write_store(plistlib.dumps(updated, fmt=fmt, sort_keys=False))
+        written = True
+        # SIGTERM is delivered once SIGCONT resumes the agent. launchd restarts it
+        # with the new store; no desktop switching or Accessibility access needed.
+        for pid in stopped:
+            os.kill(pid, signal.SIGTERM)
+    except BaseException:
+        if written:
+            write_store(original)
+        raise
+    finally:
+        resume_error = None
+        for pid in stopped:
+            try:
+                os.kill(pid, signal.SIGCONT)
+            except ProcessLookupError:
+                pass
+            except OSError as exc:
+                # Attempt to resume every paused agent even if one signal fails.
+                resume_error = exc
+        if resume_error is not None:
+            raise resume_error
+
+
+def set_wallpaper(path, current_space=False):
+    result = wallpaper_command(
+        ["/usr/bin/osascript", "-l", "JavaScript", "-", str(path),
+         "apply" if current_space else "validate"], input=SET_WALLPAPER)
     if result.returncode:
         raise WallpaperError("macOS wallpaper update failed: " + result.stderr.strip())
+    if not current_space:
+        set_all_spaces(path)
 
 
 def bounded_int(low, high):
@@ -402,6 +527,8 @@ def arguments(argv=None):
     parser.add_argument("--timeout", type=bounded_int(1, 120), default=20, metavar="SEC",
                         help="network socket timeout (default: 20)")
     parser.add_argument("--download-only", action="store_true", help="download/choose an image without applying it")
+    parser.add_argument("--current-space", action="store_true",
+                        help="only update active desktops on connected displays (default: all Spaces, macOS 14+)")
     parser.add_argument("--offline", action="store_true", help="rotate cached images without network requests")
     parser.add_argument("--quiet", action="store_true", help="suppress success messages; keep errors and warnings")
     return parser.parse_args(argv)
@@ -444,7 +571,7 @@ def run(args):
                     raise WallpaperError("no usable cached wallpapers; retry when the network is available")
                 selected = RNG.choice(alternatives or images)
             if not args.download_only:
-                set_wallpaper(selected)
+                set_wallpaper(selected, current_space=args.current_space)
                 state["current"] = selected.name
             os.utime(selected, None)  # Age means last use, not filesystem access time.
             photo_id = selected.stem.removeprefix("wallpaper-")
