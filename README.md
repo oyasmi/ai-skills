@@ -34,6 +34,52 @@ cp -R skills/query-akshare "${CODEX_HOME:-$HOME/.codex}/skills/query-akshare"
 - [`tools/aiquota`](tools/aiquota)：查看 AI 编程订阅额度用量的 Go CLI，供 `aiquota` skill 使用，也可独立使用。
 - [`tools/akqry`](tools/akqry)：AkShare 数据接口发现、参数检查、查询与可追溯落盘 CLI；供 `query-akshare` skill 使用。
 - [`tools/cmd_mgr`](tools/cmd_mgr)：跨平台命令管理 GUI，不参与本仓库的自动化测试/发布流程。
+- [`tools/unsplash_wallpaper.py`](tools/unsplash_wallpaper.py)：仅依赖 Python 标准库的 macOS 壁纸轮换脚本，优先 Unsplash，自动回退至 Bing 每日图片和本地缓存。
+
+### 自动更换 macOS 壁纸
+
+需要 Python 3.9+，脚本可以单独复制使用，无需安装包、登录或 API key：
+
+```bash
+python3 tools/unsplash_wallpaper.py                    # 下载并设置壁纸
+python3 tools/unsplash_wallpaper.py --download-only    # 仅下载，打印图片路径和来源
+python3 tools/unsplash_wallpaper.py --offline          # 不联网，轮换已有图片
+python3 tools/unsplash_wallpaper.py --keep 5 --width 2560
+python3 tools/unsplash_wallpaper.py --help
+```
+
+脚本随机抽取 Unsplash **Wallpapers 主题**最近约 1,500 条内容里的免费横图，
+排除 Unsplash+、低于 1920×1080 的图片和最近 200 次使用过的图片。
+默认下载最大宽度 3840 的 JPEG，不放大原图。已经实测网站会返回 Anubis
+反爬挑战；脚本使用标准库处理 `preact` / `fast` 挑战并保存 cookies，
+计算挑战最多花费 10 秒，不依赖浏览器。私有列表接口或反爬机制可能变化，
+失败时自动尝试 Bing 每日图片：优先今天，再选最近一周内尚未使用的图片，
+使用 UHD 版本（不受 `--width` 控制）。两个来源都失败时，轮换本地缓存。
+HTTP 429 会保存 Unsplash 的冷却时间，遵守 `Retry-After`，期间直接使用后备来源。
+
+默认缓存目录为 `~/Library/Caches/unsplash-wallpaper`，可通过 `--cache-dir` 修改。
+保留最多 8 张（`--keep`，至少 2 张），清理 30 天未使用的旧图（`--max-age`），
+保护脚本当前设置的壁纸。下载、状态和 cookies 均原子写入；并发运行直接跳过，
+不会同时下载或清理。图片来源记录在 `state.json` 中。
+
+先在 Terminal 运行一次确认可用，再用当前桌面用户的 `crontab -e` 定时运行。
+通过 `command -v python3` 确认 Python 的绝对路径；例如 Apple Silicon 的 Homebrew：
+
+```cron
+0 */3 * * * /opt/homebrew/bin/python3 /Users/oyasmi/projects/ai-skills/tools/unsplash_wallpaper.py --quiet
+```
+
+`--quiet` 只隐藏成功输出，错误和后备来源的提示保留在 stderr，方便 cron 记录。
+cron 中请使用绝对路径，不依赖 PATH 或工作目录。脚本通过系统自带的
+`osascript` 调用 AppKit，设置所有已连接显示器的**当前桌面**，不遍历其他 Spaces；
+需要已登录的图形桌面会话。退出码：成功或并发跳过为 0，运行失败为 1，
+参数错误为 2，中断为 130。
+
+验证脚本的缓存、来源切换、反爬、限流和并发行为：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tools/tests -v
+```
 
 构建 Go 工具（以 agentmux 为例，aiquota 同理）：
 
