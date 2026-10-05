@@ -304,7 +304,13 @@ class AllSpacesTests(unittest.TestCase):
             choice = slot["Desktop"]["Content"]["Choices"][0]
             self.assertEqual(choice["Provider"], "com.apple.wallpaper.choice.image")
             self.assertEqual(choice["Files"], [{"relative": self.path.resolve().as_uri()}])
-            self.assertEqual(plistlib.loads(choice["Configuration"]), {"placement": 1})
+            configuration = plistlib.loads(choice["Configuration"])
+            self.assertEqual(configuration["placement"], 1)
+            # Required by macOS 15's image provider. A placement-only plist
+            # passed the old tests but failed native decoding with error 4865.
+            background = configuration["backgroundColor"]
+            self.assertEqual(plistlib.loads(background["colorSpace"]), "kCGColorSpaceGenericRGB")
+            self.assertEqual(background["components"], [0.0, 0.0, 0.0, 1.0])
             self.assertEqual(slot["Desktop"]["Content"]["Shuffle"], "$null")
             if "Idle" in slot:
                 self.assertEqual(slot["Idle"], self.idle)

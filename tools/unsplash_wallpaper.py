@@ -415,12 +415,23 @@ def wallpaper_store_for_image(store, path):
         add_displays(space)
 
     now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+    # This is the configuration emitted by NSWorkspace on macOS 15. The image
+    # provider requires backgroundColor as well as placement: omitting it makes
+    # WallpaperAgent fail decoding with NSCocoaErrorDomain 4865 and render the
+    # default wallpaper, even though desktopImageURLForScreen returns our URL.
+    configuration = {
+        "placement": 1,
+        "backgroundColor": {
+            "colorSpace": plistlib.dumps("kCGColorSpaceGenericRGB", fmt=plistlib.FMT_BINARY),
+            "components": [0.0, 0.0, 0.0, 1.0],
+        },
+    }
     desktop = {
         "Content": {
             "Choices": [{
                 "Provider": "com.apple.wallpaper.choice.image",
                 "Files": [{"relative": path.resolve().as_uri()}],
-                "Configuration": plistlib.dumps({"placement": 1}, fmt=plistlib.FMT_BINARY),
+                "Configuration": plistlib.dumps(configuration, fmt=plistlib.FMT_BINARY),
             }],
             "Shuffle": "$null",
         },

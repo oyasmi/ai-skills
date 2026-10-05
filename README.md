@@ -76,6 +76,8 @@ cron 中请使用绝对路径，不依赖 PATH 或工作目录。默认设置**�
 脚本通过系统自带的 `osascript` 调用 AppKit 验证图片，然后暂停当前用户的
 `WallpaperAgent`，原子更新 `~/Library/Application Support/com.apple.wallpaper/Store/Index.plist`
 里的桌面配置，再重启壁纸进程；保留屏幕保护程序和显示器/桌面标识。
+图片配置同时写入缩放方式和完整背景颜色（含颜色空间），避免 macOS 15
+因配置解码失败而回退到默认壁纸；图片路径写入成功本身并不能证明图片已经显示。
 无需自动切换桌面或授予辅助功能权限，刷新时壁纸可能短暂闪烁。
 该配置格式属于 macOS 私有实现；无法识别或缺失时会报错，不会静默只更新当前桌面。
 `--current-space` 使用原来的 AppKit 设置方式，也适用于较旧的 macOS。
