@@ -166,8 +166,9 @@ class Unsplash:
             self.cookies.save(str(temporary), ignore_discard=True)
 
     def read(self, url, limit):
-        """One retry for transient failures; persist Unsplash's HTTP 429 cooldown."""
-        for attempt in range(2):
+        """Retry transient failures with backoff; persist Unsplash's HTTP 429 cooldown."""
+        # Connection-refused/reset blips often clear within seconds; back off and retry.
+        for attempt in range(3):
             try:
                 try:
                     response = self.opener.open(url, timeout=self.timeout)
@@ -182,14 +183,14 @@ class Unsplash:
                     data = response.read(limit + 1)
                 if len(data) > limit:
                     raise WallpaperError("image service response exceeds the size limit")
-                if status in (500, 502, 503, 504) and attempt == 0:
+                if status in (500, 502, 503, 504) and attempt < 2:
                     time.sleep(1)
                     continue
                 return status, headers, final_url, data
             except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException) as exc:
-                if attempt:
+                if attempt == 2:
                     raise WallpaperError(f"network request failed: {exc}") from exc
-                time.sleep(1)
+                time.sleep(2 ** attempt)
 
     def solve(self, html, url):
         """Answer only known Anubis algorithms, with bounded CPU work."""
