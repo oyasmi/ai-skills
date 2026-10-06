@@ -49,13 +49,17 @@ python3 tools/unsplash_wallpaper.py --keep 5 --width 2560
 python3 tools/unsplash_wallpaper.py --help
 ```
 
-脚本随机抽取 Unsplash **Wallpapers 主题**最近约 1,500 条内容里的免费横图，
+脚本读取 Unsplash **Wallpapers 主题**的图片总数，在整个主题中随机分页抽取免费横图，
 排除 Unsplash+、低于 1920×1080 的图片和最近 200 次使用过的图片。
+主题总数缓存一天；读取失败时沿用已知范围，首次无法读取则使用前 50 页。
+每次最多尝试 5 个随机页面及首页，单页或单张图片失败后继续尝试，避免过早回退到旧图。
 默认下载最大宽度 3840 的 JPEG，不放大原图。已经实测网站会返回 Anubis
 反爬挑战；脚本使用标准库处理 `preact` / `fast` 挑战并保存 cookies，
 计算挑战最多花费 10 秒，不依赖浏览器。私有列表接口或反爬机制可能变化，
 失败时自动尝试 Bing 每日图片：优先今天，再选最近一周内尚未使用的图片，
-使用 UHD 版本（不受 `--width` 控制）。两个来源都失败时，轮换本地缓存。
+使用 UHD 版本（不受 `--width` 控制）。两个来源都失败时，轮换本地缓存：
+优先尚未使用的图片，然后选择最久未使用的图片，避免小缓存中的随机重复。
+`--offline` 使用相同的轮换规则；成功输出中的 `cached rotation` 表示本次使用了缓存。
 HTTP 429 会保存 Unsplash 的冷却时间，遵守 `Retry-After`，期间直接使用后备来源。
 
 默认缓存目录为 `~/Library/Caches/unsplash-wallpaper`，可通过 `--cache-dir` 修改。

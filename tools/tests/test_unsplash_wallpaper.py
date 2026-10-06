@@ -57,6 +57,7 @@ class WallpaperTests(unittest.TestCase):
     def test_selection_avoids_recent_ids(self):
         self.state["history"] = ["recent"]
         client = Mock()
+        client.page_count.return_value = 50
         client.photos.return_value = [photo("recent"), photo("new"), photo("paid", premium=True)]
         expected = self.image("new")
         client.download.return_value = expected
@@ -65,10 +66,110 @@ class WallpaperTests(unittest.TestCase):
 
     def test_selection_falls_back_to_first_page(self):
         client = Mock()
-        client.photos.side_effect = [[], [], [photo()]]
-        with patch.object(w.RNG, "sample", return_value=[20, 40]):
+        client.page_count.return_value = 608
+        client.photos.side_effect = [[], [], [], [], [], [photo()]]
+        with patch.object(w.RNG, "sample", return_value=[20, 40, 80, 160, 320]) as sample:
             w.fetch_wallpaper(client, self.state, 3840)
-        self.assertEqual([call.args[0] for call in client.photos.call_args_list], [20, 40, 1])
+        sample.assert_called_once_with(range(1, 609), 5)
+        self.assertEqual([call.args[0] for call in client.photos.call_args_list], [20, 40, 80, 160, 320, 1])
+
+    def test_topic_size_is_discovered_cached_and_rounded_up(self):
+        client = w.Unsplash(self.cache, self.state, 20)
+        client.listing = Mock(return_value={"total_photos": 18236})
+        self.assertEqual(client.page_count(), 608)
+        self.assertEqual(client.page_count(), 608)
+        client.listing.assert_called_once_with(w.ORIGIN + "/napi/topics/wallpapers")
+        w.save_state(self.cache, self.state)
+        restored = w.Unsplash(self.cache, w.load_state(self.cache), 20)
+        restored.listing = Mock(side_effect=AssertionError("should use persisted size"))
+        self.assertEqual(restored.page_count(), 608)
+
+    def test_topic_size_refreshes_after_a_day(self):
+        self.state["topic"] = {"total_photos": 1500, "checked_at": time.time() - 2 * w.TOPIC_REFRESH}
+        client = w.Unsplash(self.cache, self.state, 20)
+        client.listing = Mock(return_value={"total_photos": 18236})
+        self.assertEqual(client.page_count(), 608)
+        self.assertEqual(self.state["topic"]["total_photos"], 18236)
+
+    def test_topic_size_failure_retains_known_range_or_default(self):
+        client = w.Unsplash(self.cache, self.state, 20)
+        for topic, pages in (({}, 50), ({"total_photos": 18236}, 608),
+                             (None, 50), ({"total_photos": "invalid"}, 50)):
+            for response in ({"total_photos": 0}, [], w.WallpaperError("unavailable")):
+                with self.subTest(topic=topic, response=response):
+                    self.state["topic"] = topic
+                    if isinstance(response, Exception):
+                        client.listing = Mock(side_effect=response)
+                    else:
+                        client.listing = Mock(return_value=response)
+                    with patch.object(w, "warn"):
+                        self.assertEqual(client.page_count(), pages)
+
+    def test_topic_size_rate_limit_stops_requests(self):
+        client = w.Unsplash(self.cache, self.state, 20)
+        self.state["retry_after"] = time.time() + 3600
+        client.listing = Mock(side_effect=w.WallpaperError("rate limited"))
+        with self.assertRaises(w.WallpaperError):
+            client.page_count()
+
+    def test_selection_continues_after_listing_and_download_failures(self):
+        client = Mock()
+        client.page_count.return_value = 608
+        client.photos.side_effect = [w.WallpaperError("HTTP 503"),
+                                     [photo("broken")], [photo("new")]]
+        expected = self.image("new")
+        client.download.side_effect = [w.WallpaperError("bad JPEG"), expected]
+        with patch.object(w.RNG, "sample", return_value=[100, 200, 300, 400, 500]):
+            self.assertEqual(w.fetch_wallpaper(client, self.state, 3840), expected)
+        self.assertEqual([call.args[0] for call in client.photos.call_args_list], [100, 200, 300])
+        self.assertEqual([call.args[0]["id"] for call in client.download.call_args_list], ["broken", "new"])
+
+    def test_selection_rate_limit_does_not_try_another_page(self):
+        client = Mock()
+        client.page_count.return_value = 608
+        client.photos.return_value = [photo()]
+
+        def limited(*args):
+            self.state["retry_after"] = time.time() + 3600
+            raise w.WallpaperError("rate limited")
+
+        client.download.side_effect = limited
+        with self.assertRaises(w.WallpaperError):
+            w.fetch_wallpaper(client, self.state, 3840)
+        client.photos.assert_called_once()
+        client.download.assert_called_once()
+
+    def test_selection_excludes_current_even_if_missing_from_history(self):
+        self.state["current"] = "wallpaper-current.jpg"
+        client = Mock()
+        client.page_count.return_value = 1
+        client.photos.return_value = [photo("current"), photo("new")]
+        w.fetch_wallpaper(client, self.state, 3840)
+        self.assertEqual(client.download.call_args.args[0]["id"], "new")
+        client.photos.assert_called_once_with(1)
+
+    def test_repeated_listing_does_not_retry_broken_photo(self):
+        client = Mock()
+        client.page_count.return_value = 10
+        client.photos.return_value = [photo("broken"), photo("broken")]
+        client.download.side_effect = w.WallpaperError("bad JPEG")
+        with self.assertRaisesRegex(w.WallpaperError, "bad JPEG"):
+            w.fetch_wallpaper(client, self.state, 3840)
+        client.download.assert_called_once()
+
+    def test_online_sampling_reaches_older_pages_without_repeating(self):
+        client = Mock()
+        client.page_count.return_value = 608
+        client.photos.side_effect = lambda page: [photo(f"p{page}-{i}") for i in range(30)]
+        client.download.side_effect = lambda photo, width: self.cache / f"wallpaper-{photo['id']}.jpg"
+        ids = []
+        with patch.object(w.RNG, "sample", return_value=[100, 200, 300, 400, 500]):
+            for _ in range(120):
+                path = w.fetch_wallpaper(client, self.state, 3840)
+                photo_id = path.stem.removeprefix("wallpaper-")
+                ids.append(photo_id)
+                self.state["history"].append(photo_id)
+        self.assertEqual(len(set(ids)), 120)
 
     def test_preact_response_matches_challenge(self):
         info = {"challenge": "known data", "difficulty": 1,
@@ -202,6 +303,42 @@ class WallpaperTests(unittest.TestCase):
             w.run(args)
         self.assertEqual(w.load_state(self.cache)["history"], ["cached"])
         self.assertTrue(selected.exists())
+
+    def test_cache_prefers_unused_then_least_recently_used(self):
+        current, oldest, newest, unused = [self.image(name) for name in ("current", "oldest", "newest", "unused")]
+        self.state.update(current=current.name, history=["oldest", "newest", "current"])
+        self.assertEqual(w.choose_cached(self.cache, self.state), unused)
+        self.state["history"].append("unused")
+        self.assertEqual(w.choose_cached(self.cache, self.state), oldest)
+
+    def test_cache_rotation_uses_all_six_images_before_repeating(self):
+        initial = copy.deepcopy(self.state)
+        for offline in (True, False):
+            with self.subTest(offline=offline):
+                w.save_state(self.cache, initial)
+                for i in range(6):
+                    self.image(str(i))
+                argv = ["--cache-dir", str(self.cache), "--download-only", "--quiet"]
+                if offline:
+                    argv.append("--offline")
+                args, ids = w.arguments(argv), []
+                with patch.object(w.Unsplash, "read", side_effect=AssertionError("network")), \
+                        patch.object(w, "fetch_wallpaper", side_effect=w.WallpaperError("blocked")), \
+                        patch.object(w.Unsplash, "bing", side_effect=w.WallpaperError("exhausted")), \
+                        patch.object(w, "warn"):
+                    for _ in range(18):
+                        w.run(args)
+                        ids.append(w.load_state(self.cache)["history"][-1])
+                self.assertEqual(len(set(ids[:6])), 6)
+                self.assertEqual(ids[:6], ids[6:12])
+                self.assertEqual(ids[:6], ids[12:])
+
+    def test_cache_rotation_reports_cached_selection(self):
+        self.image("cached")
+        args = w.arguments(["--cache-dir", str(self.cache), "--offline", "--download-only"])
+        with patch("builtins.print") as output:
+            w.run(args)
+        self.assertIn("cached rotation", output.call_args_list[0].args[0])
 
     def test_unsplash_failure_uses_bing_and_saves_cooldown(self):
         selected = self.image("bing-example")

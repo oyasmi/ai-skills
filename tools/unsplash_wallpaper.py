@@ -2,7 +2,8 @@
 """Download a random free Unsplash wallpaper and apply it on macOS (Python 3.9+).
 
 No packages, login, API key, or browser required. Uses the website's Wallpapers
-topic and handles Anubis preact/fast challenges with a persistent cookie jar.
+topic, samples its full page range, and handles Anubis preact/fast challenges
+with a persistent cookie jar.
 The website's private JSON endpoint may change; failures fall back to Bing's
 daily images, then cached images. Downloads are JPEG, at most 32 MiB. Unsplash
 images are never upscaled; Bing supplies its UHD version (usually 3840 px).
@@ -15,7 +16,8 @@ For example, after checking `command -v python3`, using Homebrew on Apple Silico
   0 */3 * * * /opt/homebrew/bin/python3 /absolute/path/unsplash_wallpaper.py --quiet
 
 Cache: ~/Library/Caches/unsplash-wallpaper. Keep eight images and remove images
-unused for 30 days, always protecting the current wallpaper. State and cookies
+unused for 30 days, always protecting the current wallpaper. Cache fallback
+prefers unused images, then the least recently used. State and cookies
 are written atomically. A nonblocking process lock makes overlapping runs no-ops.
 Exit codes: 0 success/overlap, 1 runtime failure, 2 invalid arguments, 130 interrupt.
 """
@@ -52,6 +54,10 @@ IMAGE_NAME = re.compile(r"wallpaper-[A-Za-z0-9_-]{1,80}\.jpg\Z")
 MAX_IMAGE = 32 * 1024 * 1024
 MAX_PAGE = 2 * 1024 * 1024
 RNG = random.SystemRandom()
+PHOTOS_PER_PAGE = 30
+TOPIC_REFRESH = 86400
+FALLBACK_PAGES = 50
+PAGE_ATTEMPTS = 5
 
 # argv passes the filename as data, rather than interpolating it into source.
 SET_WALLPAPER = r"""
@@ -218,10 +224,8 @@ class Unsplash:
             "elapsedTime": max(1, int((time.monotonic() - start) * 1000)),
         })
 
-    def photos(self, page):
-        url = ORIGIN + "/napi/topics/wallpapers/photos?" + urllib.parse.urlencode({
-            "page": page, "per_page": 30, "order_by": "latest",
-        })
+    def listing(self, url):
+        """Read topic JSON through the same challenge flow as photo listings."""
         for attempt in range(3):
             status, _, final_url, data = self.read(url, MAX_PAGE)
             html = data.decode("utf-8", errors="replace")
@@ -236,12 +240,40 @@ class Unsplash:
             if status != 200:
                 raise WallpaperError(f"wallpaper listing returned HTTP {status}")
             try:
-                photos = json.loads(data)
+                return json.loads(data)
             except ValueError as exc:
                 raise WallpaperError("wallpaper listing is not JSON (website may have changed)") from exc
-            if not isinstance(photos, list):
-                raise WallpaperError("unexpected wallpaper listing format")
-            return photos
+
+    def page_count(self):
+        """Discover the whole topic; reuse its size for a day to avoid extra requests."""
+        topic = self.state.get("topic", {})
+        if not isinstance(topic, dict):
+            topic = {}
+        total, checked = topic.get("total_photos"), topic.get("checked_at", 0)
+        known = type(total) is int and 0 < total <= 3_000_000
+        if (known and isinstance(checked, (int, float))
+                and 0 <= time.time() - checked < TOPIC_REFRESH):
+            return (total + PHOTOS_PER_PAGE - 1) // PHOTOS_PER_PAGE
+        try:
+            details = self.listing(ORIGIN + "/napi/topics/wallpapers")
+            count = details.get("total_photos") if isinstance(details, dict) else None
+            if type(count) is not int or not 0 < count <= 3_000_000:
+                raise WallpaperError("unexpected wallpaper topic size")
+        except WallpaperError as exc:
+            if self.state["retry_after"] > time.time():
+                raise
+            warn(f"could not refresh wallpaper topic size: {exc}; using known page range")
+            return (total + PHOTOS_PER_PAGE - 1) // PHOTOS_PER_PAGE if known else FALLBACK_PAGES
+        self.state["topic"] = {"total_photos": count, "checked_at": time.time()}
+        return (count + PHOTOS_PER_PAGE - 1) // PHOTOS_PER_PAGE
+
+    def photos(self, page):
+        photos = self.listing(ORIGIN + "/napi/topics/wallpapers/photos?" + urllib.parse.urlencode({
+            "page": page, "per_page": PHOTOS_PER_PAGE, "order_by": "latest",
+        }))
+        if not isinstance(photos, list):
+            raise WallpaperError("unexpected wallpaper listing format")
+        return photos
 
     def download(self, photo, width):
         raw = photo["urls"]["raw"]
@@ -319,20 +351,36 @@ def eligible(photo):
 
 
 def fetch_wallpaper(client, state, width):
-    # Vary the page as well as the photo: sample the latest ~1,500 topic entries.
-    pages = RNG.sample(range(1, 51), 2) + [1]
+    # Sample the whole topic, rather than repeatedly visiting only its newest slice.
+    count = client.page_count()
+    pages = RNG.sample(range(1, count + 1), min(PAGE_ATTEMPTS, count)) + [1]
+    excluded = set(state["history"])
+    excluded.add(Path(state["current"]).stem.removeprefix("wallpaper-"))
+    last_error = None
     for page in dict.fromkeys(pages):
-        candidates = [p for p in client.photos(page) if eligible(p)]
-        unseen = [p for p in candidates if p["id"] not in state["history"]]
+        try:
+            candidates = [p for p in client.photos(page) if eligible(p)]
+        except WallpaperError as exc:
+            if state["retry_after"] > time.time():
+                raise
+            last_error = exc
+            continue
+        unseen = [p for p in candidates if p["id"] not in excluded]
         RNG.shuffle(unseen)
-        choices = unseen[:3]
-        for index, photo in enumerate(choices):
+        for photo in unseen[:3]:
+            if photo["id"] in excluded:
+                continue
+            excluded.add(photo["id"])
             try:
                 return client.download(photo, width)
-            except WallpaperError:
-                if state["retry_after"] > time.time() or index == len(choices) - 1:
+            except WallpaperError as exc:
+                if state["retry_after"] > time.time():
                     raise
-    raise WallpaperError("no new free landscape wallpaper found")
+                last_error = exc
+    message = "no new free landscape wallpaper found"
+    if last_error is not None:
+        message += f"; last request failed: {last_error}"
+    raise WallpaperError(message)
 
 
 def cached_images(cache):
@@ -347,6 +395,23 @@ def cached_images(cache):
                 if valid_jpeg(start + stream.read(2)):
                     images.append(path)
     return sorted(images, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def choose_cached(cache, state):
+    """Use every cached image before repeating, then rotate least recently used."""
+    images = cached_images(cache)
+    if not images:
+        raise WallpaperError("no usable cached wallpapers; retry when the network is available")
+    alternatives = [p for p in images if p.name != state["current"]] or images
+    recency = {photo_id: index for index, photo_id in enumerate(state["history"])}
+
+    def photo_id(path):
+        return path.stem.removeprefix("wallpaper-")
+
+    unseen = [p for p in alternatives if photo_id(p) not in recency]
+    if unseen:
+        return RNG.choice(unseen)
+    return min(alternatives, key=lambda p: recency[photo_id(p)])
 
 
 def cleanup(cache, state, keep, max_age, selected):
@@ -563,6 +628,7 @@ def run(args):
                 path.unlink()
         state = load_state(cache)
         client, selected = Unsplash(cache, state, args.timeout), None
+        from_cache = False
         try:
             if not args.offline:
                 try:
@@ -576,11 +642,8 @@ def run(args):
                     except WallpaperError as bing_exc:
                         warn(f"{bing_exc}; trying cached wallpapers")
             if selected is None:
-                images = cached_images(cache)
-                alternatives = [p for p in images if p.name != state["current"]]
-                if not images:
-                    raise WallpaperError("no usable cached wallpapers; retry when the network is available")
-                selected = RNG.choice(alternatives or images)
+                selected = choose_cached(cache, state)
+                from_cache = True
             if not args.download_only:
                 set_wallpaper(selected, current_space=args.current_space)
                 state["current"] = selected.name
@@ -589,6 +652,8 @@ def run(args):
             state["history"] = [p for p in state["history"] if p != photo_id][-199:] + [photo_id]
             if not args.quiet:
                 action = "Selected" if args.download_only else "Wallpaper set"
+                if from_cache:
+                    action += " (cached rotation)"
                 print(f"{action}: {selected}")
                 details = state["photos"].get(selected.name, {})
                 if details:
