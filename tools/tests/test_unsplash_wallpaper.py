@@ -46,13 +46,22 @@ class WallpaperTests(unittest.TestCase):
         return path
 
     def test_only_free_high_resolution_landscapes(self):
-        self.assertFalse(w.eligible("unexpected listing entry"))
+        self.assertIsNone(w.candidate("unexpected listing entry"))
         for changes in ({}, {"plus": True}, {"premium": True}, {"width": 1000},
-                        {"height": 5000}, {"id": "../escape"}, {"urls": {}},
-                        {"urls": {"raw": None}},
+                        {"height": 5000}, {"width": 12000}, {"width": 4000.5}, {"id": "../escape"},
+                        {"id": None}, {"urls": {}}, {"urls": {"raw": None}},
                         {"urls": {"raw": "https://plus.unsplash.com/premium_photo-x"}}):
             with self.subTest(changes=changes):
-                self.assertEqual(w.eligible(photo(**changes)), not changes)
+                self.assertEqual(w.candidate(photo(**changes)) is not None, not changes)
+
+    def test_candidate_tolerates_null_metadata(self):
+        entry = w.candidate(photo(user=None, links=None))
+        self.assertEqual((entry["credit"], entry["author"]), ("Unknown", ""))
+        self.assertEqual(entry["url"], w.ORIGIN + "/photos/free")
+        entry = w.candidate(photo(user={"name": "Ann", "username": "ann"},
+                                  links={"html": "javascript:alert(1)"}))
+        self.assertEqual((entry["credit"], entry["author"]), ("Ann", "ann"))
+        self.assertTrue(entry["url"].startswith(w.ORIGIN + "/"))
 
     def test_selection_avoids_recent_ids(self):
         self.state["history"] = ["recent"]
@@ -72,6 +81,7 @@ class WallpaperTests(unittest.TestCase):
             w.fetch_wallpaper(client, self.state, 3840)
         sample.assert_called_once_with(range(1, 609), 5)
         self.assertEqual([call.args[0] for call in client.photos.call_args_list], [20, 40, 80, 160, 320, 1])
+        self.assertNotIn("topic", self.state)
 
     def test_topic_size_is_discovered_cached_and_rounded_up(self):
         client = w.Unsplash(self.cache, self.state, 20)
@@ -157,6 +167,77 @@ class WallpaperTests(unittest.TestCase):
             w.fetch_wallpaper(client, self.state, 3840)
         client.download.assert_called_once()
 
+    def test_queue_avoids_listing_on_most_runs(self):
+        client = Mock()
+        client.page_count.return_value = 608
+        client.photos.side_effect = lambda page: [photo(f"p{page}-{i}") for i in range(30)]
+        client.download.side_effect = lambda photo, width: self.cache / f"wallpaper-{photo['id']}.jpg"
+        for _ in range(12):
+            path = w.fetch_wallpaper(client, self.state, 3840)
+            self.state["history"].append(w.image_id(path.name))
+        self.assertLessEqual(client.photos.call_count, 4)
+        self.assertEqual(len(set(self.state["history"])), 12)
+        # Queued entries survive a state round trip.
+        w.save_state(self.cache, self.state)
+        self.assertEqual(w.load_state(self.cache)["queue"], self.state["queue"])
+
+    def test_queue_prefers_photographers_not_used_recently(self):
+        self.state["authors"] = ["alice"]
+        self.state["queue"] = [w.candidate(photo(f"a{i}", user={"username": "alice"})) for i in range(9)]
+        self.state["queue"].append(w.candidate(photo("b", user={"username": "bob"})))
+        client = Mock()
+        w.fetch_wallpaper(client, self.state, 3840)
+        self.assertEqual(client.download.call_args.args[0]["id"], "b")
+        client.photos.assert_not_called()
+
+    def test_stale_or_invalid_queue_entries_are_dropped(self):
+        fresh = w.candidate(photo("fresh"))
+        stale = w.candidate(photo("stale"), now=time.time() - w.QUEUE_MAX_AGE - 1)
+        hostile = dict(fresh, id="hostile", raw="https://evil.example/x")
+        self.state["queue"] = [fresh, stale, hostile, "junk", {}]
+        w.save_state(self.cache, self.state)
+        self.assertEqual(w.load_state(self.cache)["queue"], [fresh])
+
+    def test_network_failure_stops_listing_immediately(self):
+        client = Mock()
+        client.page_count.return_value = 608
+        client.photos.side_effect = w.NetworkError("offline")
+        with self.assertRaises(w.NetworkError):
+            w.fetch_wallpaper(client, self.state, 3840)
+        client.photos.assert_called_once()
+        client.download.assert_not_called()
+
+    def test_listing_failure_still_uses_queued_photos(self):
+        self.state["queue"] = [w.candidate(photo("queued"))]
+        client = Mock()
+        client.page_count.return_value = 608
+        client.photos.side_effect = w.NetworkError("unsplash.com blocked")
+        with patch.object(w, "warn") as warned:
+            w.fetch_wallpaper(client, self.state, 3840)
+        self.assertEqual(client.download.call_args.args[0]["id"], "queued")
+        self.assertIn("using queued photos", warned.call_args.args[0])
+
+    def test_download_network_failure_does_not_try_more_photos(self):
+        self.state["queue"] = [w.candidate(photo(f"q{i}")) for i in range(10)]
+        client = Mock()
+        client.download.side_effect = w.NetworkError("offline")
+        with self.assertRaises(w.NetworkError):
+            w.fetch_wallpaper(client, self.state, 3840)
+        client.download.assert_called_once()
+
+    def test_read_raises_network_error_after_retries_within_budget(self):
+        client = w.Unsplash(self.cache, self.state, 20)
+        client.opener.open = Mock(side_effect=w.urllib.error.URLError("unreachable"))
+        with patch.object(w.time, "sleep") as sleep, self.assertRaises(w.NetworkError):
+            client.read(w.ORIGIN, 100)
+        self.assertEqual(client.opener.open.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+        client.opener.open.reset_mock()
+        client.deadline = time.monotonic() - 1
+        with self.assertRaisesRegex(w.NetworkError, "budget"):
+            client.read(w.ORIGIN, 100)
+        client.opener.open.assert_not_called()
+
     def test_online_sampling_reaches_older_pages_without_repeating(self):
         client = Mock()
         client.page_count.return_value = 608
@@ -224,20 +305,23 @@ class WallpaperTests(unittest.TestCase):
         self.assertGreater(w.retry_time("invalid"), time.time() + 3590)
         future = w.email.utils.formatdate(time.time() + 5000, usegmt=True)
         self.assertGreater(w.retry_time(future), time.time() + 4990)
+        far_future = w.email.utils.formatdate(time.time() + 365 * 86400, usegmt=True)
+        self.assertLessEqual(w.retry_time(far_future), time.time() + w.MAX_COOLDOWN)
+        self.assertLessEqual(w.retry_time("99999999"), time.time() + w.MAX_COOLDOWN)
 
     def test_image_validation_and_no_upscaling(self):
         client = w.Unsplash(self.cache, self.state, 20)
         headers = email.message.Message()
         headers["Content-Type"] = "image/jpeg"
         client.read = Mock(return_value=(200, headers, "", JPEG))
-        path = client.download(photo(width=2000), 3840)
+        path = client.download(w.candidate(photo(width=2000, height=1200)), 3840)
         self.assertEqual(path.read_bytes(), JPEG)
         query = w.urllib.parse.parse_qs(w.urllib.parse.urlsplit(client.read.call_args.args[0]).query)
         self.assertEqual(query["w"], ["2000"])
         self.assertEqual(query["ixid"], ["track"])
         client.read.return_value = (200, headers, "", JPEG[:-2])
         with self.assertRaises(w.WallpaperError):
-            client.download(photo("truncated"), 3840)
+            client.download(w.candidate(photo("truncated")), 3840)
         self.assertFalse((self.cache / "wallpaper-truncated.jpg").exists())
 
     def test_bing_prefers_unseen_daily_image(self):
@@ -253,6 +337,24 @@ class WallpaperTests(unittest.TestCase):
         path = client.bing()
         self.assertIn("OHR.Yesterday_UHD.jpg", client.read.call_args.args[0])
         self.assertEqual(self.state["photos"][path.name]["source"], "Bing")
+
+    def test_bing_skips_bad_images_and_reaches_older_days(self):
+        client = w.Unsplash(self.cache, self.state, 20)
+        recent = [{"urlbase": f"/th?id=OHR.Day{i}"} for i in range(8)]
+        older = recent[-1:] + [{"urlbase": "/th?id=OHR.Older"}, {"urlbase": "/evil?x"}]
+        self.state["history"] = ["bing-" + hashlib.sha256(i["urlbase"].encode()).hexdigest()[:16]
+                                 for i in recent[:-1]]
+        headers = email.message.Message()
+        headers["Content-Type"] = "image/jpeg"
+        client.read = Mock(side_effect=[(200, headers, "", json.dumps({"images": recent}).encode()),
+                                       (200, headers, "", JPEG[:-2]),
+                                       (200, headers, "", json.dumps({"images": older}).encode()),
+                                       (200, headers, "", JPEG)])
+        path = client.bing()
+        urls = [call.args[0] for call in client.read.call_args_list]
+        self.assertIn("idx=7", urls[2])
+        self.assertIn("OHR.Older_UHD.jpg", urls[3])
+        self.assertEqual(self.state["photos"][path.name]["credit"], "Bing daily image")
 
     def test_cleanup_keeps_current_and_selected_within_limit(self):
         current, selected = self.image("current", age=100), self.image("selected")
@@ -375,17 +477,74 @@ class WallpaperTests(unittest.TestCase):
         self.assertTrue(current.exists())
         self.assertTrue(selected.exists())
 
+    def test_undecodable_image_is_discarded_and_cache_used(self):
+        good, bad = self.image("good", age=1), self.image("bad")
+        args = w.arguments(["--cache-dir", str(self.cache), "--quiet"])
+
+        def apply(path, current_space):
+            if path == bad:
+                raise w.BadImageError("macOS could not decode the image")
+
+        with patch.object(w.sys, "platform", "darwin"), \
+                patch.object(w, "download_new", return_value=bad), \
+                patch.object(w, "set_wallpaper", side_effect=apply), patch.object(w, "warn"):
+            w.run(args)
+        state = w.load_state(self.cache)
+        self.assertEqual(state["current"], good.name)
+        self.assertFalse(bad.exists())
+        self.assertIn("bad", state["history"])
+
+    def test_bad_image_error_is_distinguished(self):
+        with patch.object(w.subprocess, "run", return_value=Mock(
+                returncode=1, stderr="Error: macOS could not decode the image (-2700)")), \
+                self.assertRaises(w.BadImageError):
+            w.set_wallpaper(self.cache / "wallpaper-x.jpg")
+
+    def test_history_and_authors_are_bounded(self):
+        self.state["history"] = [str(i) for i in range(w.HISTORY_LIMIT + 50)]
+        self.state["authors"] = [f"a{i}" for i in range(50)]
+        self.state["retry_after"] = time.time() + 10 * w.MAX_COOLDOWN
+        w.save_state(self.cache, self.state)
+        state = w.load_state(self.cache)
+        self.assertEqual(len(state["history"]), w.HISTORY_LIMIT)
+        self.assertEqual(state["history"][-1], str(w.HISTORY_LIMIT + 49))
+        self.assertEqual(len(state["authors"]), w.AUTHOR_MEMORY)
+        self.assertLessEqual(state["retry_after"], time.time() + w.MAX_COOLDOWN)
+        self.assertEqual(w.remember(["a", "b", "c"], "a", 3), ["b", "c", "a"])
+        self.assertEqual(w.remember(["a", "b", "c"], "d", 3), ["b", "c", "d"])
+
+    def test_run_records_photographer(self):
+        selected = self.image("new")
+        self.state["photos"][selected.name] = {"source": "Unsplash", "credit": "Ann", "author": "ann",
+                                               "url": w.ORIGIN}
+        w.save_state(self.cache, self.state)
+        args = w.arguments(["--cache-dir", str(self.cache), "--download-only", "--quiet"])
+        with patch.object(w, "download_new", return_value=selected):
+            w.run(args)
+        self.assertEqual(w.load_state(self.cache)["authors"], ["ann"])
+
     def test_overlapping_run_is_a_noop(self):
         args = w.arguments(["--cache-dir", str(self.cache), "--quiet"])
-        with (self.cache / ".lock").open("a") as held:
+        with patch.object(w.sys, "platform", "darwin"), (self.cache / ".lock").open("a") as held:
             fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
             with patch.object(w, "load_state", side_effect=AssertionError("should skip")):
                 w.run(args)
 
-    def test_invalid_state_and_cli_arguments(self):
-        (self.cache / "state.json").write_text("{}")
-        with self.assertRaises(w.WallpaperError):
-            w.load_state(self.cache)
+    def test_invalid_state_is_quarantined_and_newest_image_protected(self):
+        older, newest = self.image("older", age=2), self.image("newest")
+        for content in ("{}", "not json", '{"version": 1, "photos": [], "history": []}'):
+            with self.subTest(content=content):
+                (self.cache / "state.json").write_text(content)
+                with patch.object(w, "warn") as warned:
+                    state = w.load_state(self.cache)
+                warned.assert_called_once()
+                self.assertEqual(state["current"], newest.name)
+                self.assertEqual(state["history"], [])
+                self.assertEqual((self.cache / "state.json.corrupt").read_text(), content)
+                self.assertFalse((self.cache / "state.json").exists())
+        self.assertTrue(older.exists())
+
+    def test_invalid_cli_arguments(self):
         with patch.object(w.sys, "stderr"), self.assertRaises(SystemExit) as result:
             w.arguments(["--keep", "1"])
         self.assertEqual(result.exception.code, 2)
@@ -402,6 +561,13 @@ class WallpaperTests(unittest.TestCase):
         with patch.object(w.subprocess, "run", side_effect=subprocess.TimeoutExpired("osascript", 30)):
             with self.assertRaises(w.WallpaperError):
                 w.set_wallpaper(path)
+
+    def test_terminate_signal_raises_after_cleanup(self):
+        previous = signal.signal(signal.SIGTERM, w.terminate)
+        self.addCleanup(signal.signal, signal.SIGTERM, previous)
+        with patch.object(w, "run", side_effect=lambda args: signal.raise_signal(signal.SIGTERM)), \
+                patch.object(w, "warn"):
+            self.assertEqual(w.main(["--cache-dir", str(self.cache)]), 128 + signal.SIGTERM)
 
 
 class AllSpacesTests(unittest.TestCase):
@@ -547,6 +713,29 @@ class AllSpacesTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             self.apply(kill)
         self.assertEqual(kill.call_args.args, (456, signal.SIGCONT))
+
+    def test_termination_is_deferred_until_agents_resume(self):
+        previous = signal.signal(signal.SIGTERM, w.terminate)
+        self.addCleanup(signal.signal, signal.SIGTERM, previous)
+        events = []
+
+        def kill(pid, sig):
+            events.append((pid, sig))
+            if (pid, sig) == (123, signal.SIGSTOP):
+                signal.raise_signal(signal.SIGTERM)  # Pending until the mask is restored.
+
+        with self.assertRaises(w.Terminated):
+            self.apply(kill)
+        self.assertEqual(events[-2:], [(123, signal.SIGCONT), (456, signal.SIGCONT)])
+        self.assertIn("Desktop", plistlib.loads(self.store_path.read_bytes())["AllSpacesAndDisplays"])
+
+    def test_vanished_agent_is_skipped(self):
+        def kill(pid, sig):
+            if pid == 123:
+                raise ProcessLookupError
+
+        self.apply(Mock(side_effect=kill))
+        self.assertIn("Desktop", plistlib.loads(self.store_path.read_bytes())["AllSpacesAndDisplays"])
 
     def test_xml_store_format_is_preserved(self):
         self.store_path.write_bytes(plistlib.dumps(self.store, fmt=plistlib.FMT_XML))

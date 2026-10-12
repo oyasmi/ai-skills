@@ -2,11 +2,16 @@
 """Download a random free Unsplash wallpaper and apply it on macOS (Python 3.9+).
 
 No packages, login, API key, or browser required. Uses the website's Wallpapers
-topic, samples its full page range, and handles Anubis preact/fast challenges
-with a persistent cookie jar.
-The website's private JSON endpoint may change; failures fall back to Bing's
-daily images, then cached images. Downloads are JPEG, at most 32 MiB. Unsplash
-images are never upscaled; Bing supplies its UHD version (usually 3840 px).
+topic, samples its full page range, and handles Anubis preact/fast/slow
+challenges with a persistent cookie jar. Each listing queues a few random photos
+from its page, so most runs need only an image request, and consecutive
+wallpapers mix several pages. The last 2000 photos are never repeated, and
+photographers used recently are skipped while others are available.
+The website's private JSON endpoint may change; failures fall back to queued
+photos, Bing's daily images (about two weeks), then cached images. An
+unreachable host ends that source at once, and each source has a two-minute
+network budget. Downloads are JPEG, at most 32 MiB. Unsplash images are never
+upscaled; Bing supplies its UHD version (usually 3840 px).
 
 Run once from Terminal before scheduling in your own user's crontab. By default,
 update all Spaces and displays via WallpaperAgent's store (macOS 14+). Use
@@ -17,9 +22,12 @@ For example, after checking `command -v python3`, using Homebrew on Apple Silico
 
 Cache: ~/Library/Caches/unsplash-wallpaper. Keep eight images and remove images
 unused for 30 days, always protecting the current wallpaper. Cache fallback
-prefers unused images, then the least recently used. State and cookies
-are written atomically. A nonblocking process lock makes overlapping runs no-ops.
-Exit codes: 0 success/overlap, 1 runtime failure, 2 invalid arguments, 130 interrupt.
+prefers unused images, then the least recently used; images macOS cannot decode
+are discarded. State and cookies are written atomically; invalid state is moved
+to state.json.corrupt and rebuilt. A nonblocking process lock makes overlapping
+runs no-ops, and SIGTERM/SIGHUP still save state and never leave WallpaperAgent paused.
+Exit codes: 0 success/overlap, 1 runtime failure, 2 invalid arguments,
+130 interrupt, 129/143 SIGHUP/SIGTERM.
 """
 
 import argparse
@@ -30,6 +38,7 @@ import fcntl
 import hashlib
 import http.client
 import http.cookiejar
+import itertools
 import json
 import os
 from pathlib import Path
@@ -49,8 +58,11 @@ from contextlib import contextmanager
 
 
 ORIGIN = "https://unsplash.com"
+UNSPLASH_HOSTS = ("unsplash.com", "images.unsplash.com")
 USER_AGENT = "unsplash-wallpaper/1.0 (Python urllib)"
+PHOTO_ID = re.compile(r"[A-Za-z0-9_-]{1,80}\Z")
 IMAGE_NAME = re.compile(r"wallpaper-[A-Za-z0-9_-]{1,80}\.jpg\Z")
+BING_BASE = re.compile(r"/th\?id=OHR\.[A-Za-z0-9_.-]{1,200}\Z")
 MAX_IMAGE = 32 * 1024 * 1024
 MAX_PAGE = 2 * 1024 * 1024
 RNG = random.SystemRandom()
@@ -58,6 +70,15 @@ PHOTOS_PER_PAGE = 30
 TOPIC_REFRESH = 86400
 FALLBACK_PAGES = 50
 PAGE_ATTEMPTS = 5
+DOWNLOAD_ATTEMPTS = 4
+QUEUE_LOW = 8           # List another page when fewer photos are queued.
+QUEUE_TAKE = 6          # Random unseen photos queued from each listed page.
+QUEUE_MAX_AGE = 14 * 86400
+HISTORY_LIMIT = 2000
+AUTHOR_MEMORY = 12
+MIN_ASPECT, MAX_ASPECT = 1.2, 2.5
+NETWORK_BUDGET = 120    # Seconds per source (Unsplash, then Bing).
+MAX_COOLDOWN = 86400
 
 # argv passes the filename as data, rather than interpolating it into source.
 SET_WALLPAPER = r"""
@@ -86,8 +107,37 @@ class WallpaperError(Exception):
     """An expected failure suitable for a concise cron log."""
 
 
+class NetworkError(WallpaperError):
+    """A host stayed unreachable after retries; stop using that source this run."""
+
+
+class BadImageError(WallpaperError):
+    """macOS cannot decode a cached image, so it should be discarded."""
+
+
+class Terminated(BaseException):
+    """SIGTERM/SIGHUP, raised like KeyboardInterrupt so cleanup still runs."""
+
+    def __init__(self, signum):
+        super().__init__(signum)
+        self.signum = signum
+
+
 def warn(message):
     print(f"unsplash-wallpaper: {message}", file=sys.stderr)
+
+
+def image_id(name):
+    return Path(name).stem.removeprefix("wallpaper-")
+
+
+def remember(items, value, limit):
+    """Move value to the most recent end of a bounded list."""
+    return [item for item in items if item != value][-(limit - 1):] + [value]
+
+
+def cooling_down(state):
+    return state["retry_after"] > time.time()
 
 
 @contextmanager
@@ -111,22 +161,57 @@ def save_state(cache, state):
         stream.write("\n")
 
 
-def load_state(cache):
+def unsplash_image(url):
+    parsed = urllib.parse.urlsplit(url)
+    return parsed.scheme == "https" and parsed.netloc == "images.unsplash.com"
+
+
+def queued_ok(entry, now):
     try:
-        state = json.loads((cache / "state.json").read_text(encoding="utf-8"))
+        return (PHOTO_ID.match(entry["id"]) is not None and unsplash_image(entry["raw"])
+                and type(entry["width"]) is int and entry["width"] > 0
+                and all(isinstance(entry[key], str) for key in ("credit", "author", "url"))
+                and 0 <= now - entry["queued_at"] < QUEUE_MAX_AGE)
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def load_state(cache):
+    """Validate the core schema; repair optional fields; quarantine corrupt files."""
+    path = cache / "state.json"
+    fresh = {"version": 1, "photos": {}, "history": [], "current": "", "retry_after": 0,
+             "queue": [], "authors": []}
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
         if (not isinstance(state, dict) or state.get("version") != 1
                 or not isinstance(state.get("photos"), dict)
                 or not isinstance(state.get("history"), list)
                 or not isinstance(state.get("retry_after", 0), (int, float))
                 or not isinstance(state.get("current", ""), str)):
             raise ValueError("unexpected state schema")
-        return state
     except FileNotFoundError:
-        pass
-    except (ValueError, UnicodeError) as exc:
-        # Do not guess which cached file is the active wallpaper after corruption.
-        raise WallpaperError(f"invalid {cache / 'state.json'}: {exc}") from exc
-    return {"version": 1, "photos": {}, "history": [], "current": "", "retry_after": 0}
+        return fresh
+    except (ValueError, UnicodeError, RecursionError) as exc:
+        # A cron job must not stay broken forever. The most recently used image
+        # is almost certainly the active wallpaper, so keep protecting it.
+        path.replace(path.with_name("state.json.corrupt"))
+        images = cached_images(cache)
+        fresh["current"] = images[0].name if images else ""
+        warn(f"moved invalid state to state.json.corrupt ({exc}); starting fresh")
+        return fresh
+    now = time.time()
+    state["photos"] = {name: details for name, details in state["photos"].items()
+                       if IMAGE_NAME.match(name) and isinstance(details, dict)}
+    state["history"] = [p for p in state["history"] if isinstance(p, str)][-HISTORY_LIMIT:]
+    state.setdefault("current", "")
+    # A bogus far-future Retry-After or a clock jump must not disable Unsplash.
+    state["retry_after"] = min(state.get("retry_after", 0), now + MAX_COOLDOWN)
+    queue = state.get("queue")
+    state["queue"] = [c for c in queue if queued_ok(c, now)] if isinstance(queue, list) else []
+    authors = state.get("authors")
+    state["authors"] = ([a for a in authors if isinstance(a, str) and a][-AUTHOR_MEMORY:]
+                        if isinstance(authors, list) else [])
+    return state
 
 
 def script_json(html, element_id):
@@ -140,17 +225,21 @@ def retry_time(value):
     """Retry-After can be seconds or an HTTP date; default to a one-hour cooldown."""
     now = time.time()
     try:
-        return now + max(60, int(value))
+        delay = max(60, int(value))
     except (ValueError, TypeError):
         try:
-            return max(now + 60, email.utils.parsedate_to_datetime(value).timestamp())
+            delay = max(60, email.utils.parsedate_to_datetime(value).timestamp() - now)
         except (ValueError, TypeError, OverflowError):
-            return now + 3600
+            delay = 3600
+    return now + min(delay, MAX_COOLDOWN)
 
 
 class Unsplash:
+    """HTTP client for Unsplash and Bing, sharing cookies, retries, and budgets."""
+
     def __init__(self, cache, state, timeout):
         self.cache, self.state, self.timeout = cache, state, timeout
+        self.start_budget()
         self.cookies = http.cookiejar.MozillaCookieJar(str(cache / "cookies.txt"))
         try:
             self.cookies.load(ignore_discard=True)
@@ -158,8 +247,17 @@ class Unsplash:
             pass
         except (OSError, http.cookiejar.LoadError):
             warn("discarding unreadable cookies")
+            self.cookies.clear()
         self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cookies))
         self.opener.addheaders = [("User-Agent", USER_AGENT), ("Accept-Language", "en-US,en;q=0.9")]
+
+    def start_budget(self):
+        self.deadline = time.monotonic() + NETWORK_BUDGET
+
+    def pause(self, seconds):
+        """Jittered backoff that never sleeps past the network budget."""
+        remaining = self.deadline - time.monotonic()
+        time.sleep(max(0.0, min(seconds * RNG.uniform(0.75, 1.25), remaining)))
 
     def save_cookies(self):
         with atomic_file(self.cache / "cookies.txt") as (_, temporary):
@@ -167,30 +265,38 @@ class Unsplash:
 
     def read(self, url, limit):
         """Retry transient failures with backoff; persist Unsplash's HTTP 429 cooldown."""
-        # Connection-refused/reset blips often clear within seconds; back off and retry.
+        host = urllib.parse.urlsplit(url).hostname
         for attempt in range(3):
+            remaining = self.deadline - time.monotonic()
+            if remaining <= 0:
+                raise NetworkError(f"network time budget exhausted for {host}")
             try:
                 try:
-                    response = self.opener.open(url, timeout=self.timeout)
+                    response = self.opener.open(url, timeout=min(self.timeout, remaining))
                 except urllib.error.HTTPError as exc:
                     response = exc  # Anubis uses HTTP 401, but its body is needed.
                 with response:
                     status, headers, final_url = response.code, response.headers, response.url
                     if status == 429:
-                        if urllib.parse.urlsplit(url).hostname in ("unsplash.com", "images.unsplash.com"):
+                        if host in UNSPLASH_HOSTS:
                             self.state["retry_after"] = retry_time(headers.get("Retry-After"))
                         raise WallpaperError("image service rate limited requests")
+                    length = headers.get("Content-Length", "")
+                    if length.isdigit() and int(length) > limit:
+                        raise WallpaperError("image service response exceeds the size limit")
                     data = response.read(limit + 1)
-                if len(data) > limit:
-                    raise WallpaperError("image service response exceeds the size limit")
-                if status in (500, 502, 503, 504) and attempt < 2:
-                    time.sleep(1)
-                    continue
-                return status, headers, final_url, data
-            except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException) as exc:
+            # OSError covers URLError, SSL errors, resets, and Python 3.9's socket.timeout.
+            except (OSError, http.client.HTTPException) as exc:
                 if attempt == 2:
-                    raise WallpaperError(f"network request failed: {exc}") from exc
-                time.sleep(2 ** attempt)
+                    raise NetworkError(f"network request to {host} failed: {exc}") from exc
+                self.pause(2 ** attempt)
+                continue
+            if len(data) > limit:
+                raise WallpaperError("image service response exceeds the size limit")
+            if status in (500, 502, 503, 504) and attempt < 2:
+                self.pause(2 ** attempt)
+                continue
+            return status, headers, final_url, data
 
     def solve(self, html, url):
         """Answer only known Anubis algorithms, with bounded CPU work."""
@@ -205,23 +311,29 @@ class Unsplash:
             return target + ("&" if parsed.query else "?") + urllib.parse.urlencode({"result": digest})
 
         info = script_json(html, "anubis_challenge")
-        if not info or info["rules"]["algorithm"] != "fast":
+        # "slow" differs from "fast" only in the browser's worker strategy.
+        if not info or info["rules"]["algorithm"] not in ("fast", "slow"):
             raise WallpaperError("unsupported anti-bot challenge; try again later")
         challenge = info["challenge"]
         difficulty = info["rules"]["difficulty"]
         if not isinstance(difficulty, int) or not 1 <= difficulty <= 6:
             raise WallpaperError("Anubis difficulty exceeds the CPU budget")
-        start, nonce = time.monotonic(), 0
-        prefix = "0" * difficulty
-        while True:
-            digest = hashlib.sha256((challenge["randomData"] + str(nonce)).encode()).hexdigest()
-            if digest.startswith(prefix):
+        # Compare raw digest bytes against leading zero nibbles and reuse the
+        # hashed prefix, avoiding a hex conversion per nonce.
+        zero_bytes, odd = divmod(difficulty, 2)
+        zeros = bytes(zero_bytes)
+        seed = hashlib.sha256(challenge["randomData"].encode())
+        start = time.monotonic()
+        for nonce in itertools.count():
+            attempt = seed.copy()
+            attempt.update(str(nonce).encode())
+            digest = attempt.digest()
+            if digest[:zero_bytes] == zeros and (not odd or digest[zero_bytes] < 16):
                 break
-            nonce += 1
-            if nonce % 4096 == 0 and time.monotonic() - start > 10:
+            if nonce & 0xFFF == 0xFFF and time.monotonic() - start > 10:
                 raise WallpaperError("Anubis challenge exceeded the 10-second CPU budget")
         return ORIGIN + "/.within.website/x/cmd/anubis/api/pass-challenge?" + urllib.parse.urlencode({
-            "id": challenge["id"], "response": digest, "nonce": nonce, "redir": url,
+            "id": challenge["id"], "response": digest.hex(), "nonce": nonce, "redir": url,
             "elapsedTime": max(1, int((time.monotonic() - start) * 1000)),
         })
 
@@ -260,8 +372,10 @@ class Unsplash:
             count = details.get("total_photos") if isinstance(details, dict) else None
             if type(count) is not int or not 0 < count <= 3_000_000:
                 raise WallpaperError("unexpected wallpaper topic size")
+        except NetworkError:
+            raise
         except WallpaperError as exc:
-            if self.state["retry_after"] > time.time():
+            if cooling_down(self.state):
                 raise
             warn(f"could not refresh wallpaper topic size: {exc}; using known page range")
             return (total + PHOTOS_PER_PAGE - 1) // PHOTOS_PER_PAGE if known else FALLBACK_PAGES
@@ -276,9 +390,16 @@ class Unsplash:
             raise WallpaperError("unexpected wallpaper listing format")
         return photos
 
+    def save_image(self, photo_id, data, details):
+        path = self.cache / f"wallpaper-{photo_id}.jpg"
+        with atomic_file(path, binary=True) as (stream, _):
+            stream.write(data)
+        self.state["photos"][path.name] = details
+        return path
+
     def download(self, photo, width):
-        raw = photo["urls"]["raw"]
-        parsed = urllib.parse.urlsplit(raw)
+        """Download a queued candidate (see candidate()) at most `width` pixels wide."""
+        parsed = urllib.parse.urlsplit(photo["raw"])
         if parsed.scheme != "https" or parsed.netloc != "images.unsplash.com":
             raise WallpaperError("unexpected image host")
         query = dict(urllib.parse.parse_qsl(parsed.query))
@@ -290,46 +411,48 @@ class Unsplash:
             raise WallpaperError(f"image download returned HTTP {status}")
         if headers.get_content_type() != "image/jpeg" or not valid_jpeg(data):
             raise WallpaperError("download is not a complete JPEG")
-        path = self.cache / f"wallpaper-{photo['id']}.jpg"
-        with atomic_file(path, binary=True) as (stream, _):
-            stream.write(data)
-        self.state["photos"][path.name] = {
-            "id": photo["id"], "credit": photo.get("user", {}).get("name", "Unknown"),
-            "url": photo.get("links", {}).get("html", ORIGIN + "/photos/" + photo["id"]),
-            "source": "Unsplash",
-        }
-        return path
+        return self.save_image(photo["id"], data, {
+            "id": photo["id"], "source": "Unsplash", "credit": photo["credit"],
+            "author": photo["author"], "url": photo["url"],
+        })
 
     def bing(self):
-        """Prefer today's Bing image, then unseen daily images from the last week."""
-        url = "https://www.bing.com/HPImageArchive.aspx?format=js&idx=0&n=8&mkt=zh-CN"
-        status, _, _, data = self.read(url, MAX_PAGE)
-        if status != 200:
-            raise WallpaperError(f"Bing daily listing returned HTTP {status}")
-        try:
-            images = json.loads(data)["images"]
-            if not isinstance(images, list):
-                raise ValueError("images is not a list")
+        """Prefer today's Bing image, then unseen daily images from about two weeks."""
+        seen = set(self.state["history"])
+        seen.add(image_id(self.state["current"]))
+        last_error = None
+        # Bing serves at most eight images per request; idx=7 reaches back further.
+        for offset in (0, 7):
+            status, _, _, data = self.read(
+                f"https://www.bing.com/HPImageArchive.aspx?format=js&idx={offset}&n=8&mkt=zh-CN", MAX_PAGE)
+            if status != 200:
+                raise WallpaperError(f"Bing daily listing returned HTTP {status}")
+            try:
+                images = json.loads(data)["images"]
+                if not isinstance(images, list):
+                    raise ValueError("images is not a list")
+            except (ValueError, KeyError, TypeError) as exc:
+                raise WallpaperError("unexpected Bing daily listing format") from exc
             for image in images:
-                base = image["urlbase"]
-                if not isinstance(base, str) or not base.startswith("/th?id=OHR."):
+                base = image.get("urlbase") if isinstance(image, dict) else None
+                if not isinstance(base, str) or not BING_BASE.match(base):
                     continue
                 photo_id = "bing-" + hashlib.sha256(base.encode()).hexdigest()[:16]
-                if photo_id in self.state["history"]:
+                if photo_id in seen:
                     continue
+                seen.add(photo_id)
                 status, headers, _, data = self.read("https://www.bing.com" + base + "_UHD.jpg", MAX_IMAGE)
                 if status != 200 or headers.get_content_type() != "image/jpeg" or not valid_jpeg(data):
-                    raise WallpaperError("Bing did not return a complete JPEG")
-                path = self.cache / f"wallpaper-{photo_id}.jpg"
-                with atomic_file(path, binary=True) as (stream, _):
-                    stream.write(data)
-                self.state["photos"][path.name] = {
-                    "id": photo_id, "source": "Bing", "credit": image.get("copyright", "Bing daily image"),
-                    "url": image.get("copyrightlink", "https://www.bing.com"),
-                }
-                return path
-        except (ValueError, KeyError, TypeError) as exc:
-            raise WallpaperError("unexpected Bing daily listing format") from exc
+                    last_error = WallpaperError("Bing did not return a complete JPEG")
+                    continue
+                credit, link = image.get("copyright"), image.get("copyrightlink")
+                return self.save_image(photo_id, data, {
+                    "id": photo_id, "source": "Bing",
+                    "credit": credit if isinstance(credit, str) else "Bing daily image",
+                    "url": link if isinstance(link, str) else "https://www.bing.com",
+                })
+        if last_error is not None:
+            raise last_error
         raise WallpaperError("all available Bing daily images were used recently")
 
 
@@ -337,65 +460,147 @@ def valid_jpeg(data):
     return data.startswith(b"\xff\xd8\xff") and data.endswith(b"\xff\xd9")
 
 
-def eligible(photo):
-    if not isinstance(photo, dict):
-        return False
+def candidate(photo, now=None):
+    """Return the compact queue entry for a free high-resolution landscape, else None."""
     try:
-        return (not photo.get("premium") and not photo.get("plus")
-                and re.fullmatch(r"[A-Za-z0-9_-]{1,80}", photo["id"]) is not None
-                and photo["width"] >= 1920 and photo["height"] >= 1080
-                and photo["width"] / photo["height"] >= 1.2
-                and isinstance(photo["urls"]["raw"], str)
-                and urllib.parse.urlsplit(photo["urls"]["raw"]).netloc == "images.unsplash.com")
-    except (KeyError, TypeError, ValueError, ZeroDivisionError):
-        return False
+        width, height, raw = photo["width"], photo["height"], photo["urls"]["raw"]
+        if (photo.get("premium") or photo.get("plus") or PHOTO_ID.match(photo["id"]) is None
+                or type(width) is not int or type(height) is not int
+                or width < 1920 or height < 1080
+                # Very wide panoramas look poor when cropped to fill a display.
+                or not MIN_ASPECT <= width / height <= MAX_ASPECT
+                or not isinstance(raw, str) or not unsplash_image(raw)):
+            return None
+        user = photo.get("user") if isinstance(photo.get("user"), dict) else {}
+        links = photo.get("links") if isinstance(photo.get("links"), dict) else {}
+        url = links.get("html")
+        if not isinstance(url, str) or not url.startswith(ORIGIN + "/"):
+            url = ORIGIN + "/photos/" + photo["id"]
+        return {
+            "id": photo["id"], "raw": raw, "width": width,
+            "credit": str(user.get("name") or "Unknown"),
+            "author": str(user.get("username") or user.get("id") or ""),
+            "url": url, "queued_at": time.time() if now is None else now,
+        }
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+
+
+def topic_pages(client):
+    """Lazily yield random pages across the whole topic, then the newest page."""
+    count = client.page_count()
+    yield from dict.fromkeys(RNG.sample(range(1, count + 1), min(PAGE_ATTEMPTS, count)) + [1])
+
+
+def refill(client, state, queue, seen, pages):
+    """Queue a few random unseen photos from the next usable page.
+
+    Returns the last listing error, or None. Taking only a handful per page
+    keeps consecutive wallpapers from coming from the same slice of the topic.
+    """
+    error = None
+    for page in pages:
+        try:
+            listed = client.photos(page)
+        except NetworkError:
+            raise
+        except WallpaperError as exc:
+            if cooling_down(state):
+                raise
+            error = exc
+            continue
+        if not listed and page > 1:
+            state.pop("topic", None)  # The topic shrank; rediscover its size next run.
+        queued = {c["id"] for c in queue}
+        fresh = {}
+        for photo in listed:
+            entry = candidate(photo)
+            if entry and entry["id"] not in seen and entry["id"] not in queued:
+                fresh.setdefault(entry["id"], entry)
+        if fresh:
+            entries = list(fresh.values())
+            RNG.shuffle(entries)
+            queue.extend(entries[:QUEUE_TAKE])
+            return None
+    return error
 
 
 def fetch_wallpaper(client, state, width):
-    # Sample the whole topic, rather than repeatedly visiting only its newest slice.
-    count = client.page_count()
-    pages = RNG.sample(range(1, count + 1), min(PAGE_ATTEMPTS, count)) + [1]
-    excluded = set(state["history"])
-    excluded.add(Path(state["current"]).stem.removeprefix("wallpaper-"))
-    last_error = None
-    for page in dict.fromkeys(pages):
-        try:
-            candidates = [p for p in client.photos(page) if eligible(p)]
-        except WallpaperError as exc:
-            if state["retry_after"] > time.time():
-                raise
-            last_error = exc
-            continue
-        unseen = [p for p in candidates if p["id"] not in excluded]
-        RNG.shuffle(unseen)
-        for photo in unseen[:3]:
-            if photo["id"] in excluded:
-                continue
-            excluded.add(photo["id"])
+    """Download an unseen photo from the queue, listing pages only when it runs low."""
+    seen = set(state["history"])
+    seen.add(image_id(state["current"]))
+    queue = state["queue"] = [c for c in state["queue"] if c["id"] not in seen]
+    recent_authors = set(state["authors"])
+    pages = topic_pages(client)
+    needs_refill, last_error = len(queue) < QUEUE_LOW, None
+    for _ in range(DOWNLOAD_ATTEMPTS):
+        if needs_refill:
+            needs_refill = False
             try:
-                return client.download(photo, width)
-            except WallpaperError as exc:
-                if state["retry_after"] > time.time():
+                error = refill(client, state, queue, seen, pages)
+            except NetworkError as exc:
+                if not queue:
                     raise
-                last_error = exc
+                error, pages = exc, iter(())  # The image CDN may still be reachable.
+            if error is not None:
+                if queue:
+                    warn(f"could not list new wallpapers: {error}; using queued photos")
+                last_error = last_error or error
+        if not queue:
+            break
+        photo = RNG.choice([c for c in queue if c["author"] not in recent_authors] or queue)
+        queue.remove(photo)
+        seen.add(photo["id"])
+        try:
+            return client.download(photo, width)
+        except NetworkError:
+            raise
+        except WallpaperError as exc:
+            if cooling_down(state):
+                raise
+            last_error, needs_refill = exc, not queue
     message = "no new free landscape wallpaper found"
     if last_error is not None:
         message += f"; last request failed: {last_error}"
     raise WallpaperError(message)
 
 
+def download_new(client, state, width):
+    """Try Unsplash, then Bing; None means the caller should rotate cached images."""
+    try:
+        if cooling_down(state):
+            until = time.strftime("%Y-%m-%d %H:%M", time.localtime(state["retry_after"]))
+            raise WallpaperError(f"Unsplash cooldown active until {until}")
+        return fetch_wallpaper(client, state, width)
+    except WallpaperError as exc:
+        warn(f"{exc}; trying Bing daily images")
+    client.start_budget()
+    try:
+        return client.bing()
+    except WallpaperError as exc:
+        warn(f"{exc}; trying cached wallpapers")
+    return None
+
+
 def cached_images(cache):
+    """Owned, complete JPEGs (not symlinks), most recently used first."""
     images = []
     for path in cache.iterdir():
-        if IMAGE_NAME.fullmatch(path.name) and not path.is_symlink() and path.is_file():
+        if not IMAGE_NAME.match(path.name):
+            continue
+        try:
+            info = path.lstat()
+            if not stat.S_ISREG(info.st_mode) or info.st_size < 4:
+                continue
             with path.open("rb") as stream:
-                start = stream.read(3)
-                if path.stat().st_size < 4:
-                    continue
+                head = stream.read(3)
                 stream.seek(-2, os.SEEK_END)
-                if valid_jpeg(start + stream.read(2)):
-                    images.append(path)
-    return sorted(images, key=lambda p: p.stat().st_mtime, reverse=True)
+                tail = stream.read(2)
+        except OSError:
+            continue
+        if valid_jpeg(head + tail):
+            images.append((info.st_mtime, path))
+    return [path for _, path in sorted(images, reverse=True)]
 
 
 def choose_cached(cache, state):
@@ -405,14 +610,17 @@ def choose_cached(cache, state):
         raise WallpaperError("no usable cached wallpapers; retry when the network is available")
     alternatives = [p for p in images if p.name != state["current"]] or images
     recency = {photo_id: index for index, photo_id in enumerate(state["history"])}
-
-    def photo_id(path):
-        return path.stem.removeprefix("wallpaper-")
-
-    unseen = [p for p in alternatives if photo_id(p) not in recency]
+    unseen = [p for p in alternatives if image_id(p.name) not in recency]
     if unseen:
         return RNG.choice(unseen)
-    return min(alternatives, key=lambda p: recency[photo_id(p)])
+    return min(alternatives, key=lambda p: recency[image_id(p.name)])
+
+
+def discard(state, path):
+    """Delete an undecodable image and never download it again."""
+    path.unlink(missing_ok=True)
+    state["photos"].pop(path.name, None)
+    state["history"] = remember(state["history"], image_id(path.name), HISTORY_LIMIT)
 
 
 def cleanup(cache, state, keep, max_age, selected):
@@ -422,9 +630,9 @@ def cleanup(cache, state, keep, max_age, selected):
     images = cached_images(cache)
     valid_names = {p.name for p in images}
     for path in cache.iterdir():
-        if (IMAGE_NAME.fullmatch(path.name) and not path.is_symlink() and path.is_file()
-                and path.name not in valid_names and path.name not in protected):
-            path.unlink()
+        if (IMAGE_NAME.match(path.name) and path.name not in valid_names
+                and path.name not in protected and not path.is_symlink() and path.is_file()):
+            path.unlink(missing_ok=True)
     retained = {p.name for p in images if p.name in protected}
     cutoff = time.time() - max_age * 86400
     for path in images:
@@ -433,7 +641,7 @@ def cleanup(cache, state, keep, max_age, selected):
         if len(retained) < keep and path.stat().st_mtime >= cutoff:
             retained.add(path.name)
         else:
-            path.unlink()
+            path.unlink(missing_ok=True)
     state["photos"] = {name: details for name, details in state["photos"].items() if name in retained}
 
 
@@ -532,9 +740,16 @@ def set_all_spaces(path):
             stream.write(data)
             temporary.chmod(stat.S_IMODE(store_path.stat().st_mode))
 
+    # Defer interrupts until every paused agent has been resumed; a signal in
+    # this window could otherwise leave the user's wallpaper agent frozen.
+    deferred = {signal.SIGINT, signal.SIGTERM, signal.SIGHUP}
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, deferred)
     try:
         for pid in pids:
-            os.kill(pid, signal.SIGSTOP)
+            try:
+                os.kill(pid, signal.SIGSTOP)
+            except ProcessLookupError:
+                continue  # Exited since pgrep; launchd will start it with the new store.
             stopped.append(pid)
         original = store_path.read_bytes()
         try:
@@ -563,6 +778,7 @@ def set_all_spaces(path):
             except OSError as exc:
                 # Attempt to resume every paused agent even if one signal fails.
                 resume_error = exc
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
         if resume_error is not None:
             raise resume_error
 
@@ -572,7 +788,10 @@ def set_wallpaper(path, current_space=False):
         ["/usr/bin/osascript", "-l", "JavaScript", "-", str(path),
          "apply" if current_space else "validate"], input=SET_WALLPAPER)
     if result.returncode:
-        raise WallpaperError("macOS wallpaper update failed: " + result.stderr.strip())
+        message = "macOS wallpaper update failed: " + result.stderr.strip()
+        if "could not decode the image" in result.stderr:
+            raise BadImageError(message)
+        raise WallpaperError(message)
     if not current_space:
         set_all_spaces(path)
 
@@ -626,49 +845,62 @@ def run(args):
         # All our temporary files are abandoned once the exclusive lock is acquired.
         for path in cache.glob(".*.tmp"):
             if re.fullmatch(r"\.(?:state\.json|cookies\.txt|wallpaper-[A-Za-z0-9_-]+\.jpg)\..+\.tmp", path.name):
-                path.unlink()
+                path.unlink(missing_ok=True)
         state = load_state(cache)
-        client, selected = Unsplash(cache, state, args.timeout), None
-        from_cache = False
+        client, selected, from_cache = Unsplash(cache, state, args.timeout), None, False
         try:
             if not args.offline:
-                try:
-                    if state["retry_after"] > time.time():
-                        raise WallpaperError("Unsplash cooldown active")
-                    selected = fetch_wallpaper(client, state, args.width)
-                except WallpaperError as exc:
-                    warn(f"{exc}; trying Bing daily images")
-                    try:
-                        selected = client.bing()
-                    except WallpaperError as bing_exc:
-                        warn(f"{bing_exc}; trying cached wallpapers")
+                selected = download_new(client, state, args.width)
             if selected is None:
-                selected = choose_cached(cache, state)
-                from_cache = True
-            if not args.download_only:
-                set_wallpaper(selected, current_space=args.current_space)
+                selected, from_cache = choose_cached(cache, state), True
+            while not args.download_only:
+                try:
+                    set_wallpaper(selected, current_space=args.current_space)
+                except BadImageError as exc:
+                    # Each discard deletes a file, so this ends when the cache runs out.
+                    warn(f"{exc}; discarding {selected.name}")
+                    discard(state, selected)
+                    selected = None
+                    selected, from_cache = choose_cached(cache, state), True
+                    continue
                 state["current"] = selected.name
+                break
             os.utime(selected, None)  # Age means last use, not filesystem access time.
-            photo_id = selected.stem.removeprefix("wallpaper-")
-            state["history"] = [p for p in state["history"] if p != photo_id][-199:] + [photo_id]
+            state["history"] = remember(state["history"], image_id(selected.name), HISTORY_LIMIT)
+            details = state["photos"].get(selected.name, {})
+            if details.get("author"):
+                state["authors"] = remember(state["authors"], details["author"], AUTHOR_MEMORY)
             if not args.quiet:
                 action = "Selected" if args.download_only else "Wallpaper set"
                 if from_cache:
                     action += " (cached rotation)"
                 print(f"{action}: {selected}")
-                details = state["photos"].get(selected.name, {})
                 if details:
-                    print(f"{details.get('source', 'Unsplash')}: {details['credit']} — {details['url']}")
+                    print(f"{details.get('source', 'Unsplash')}: {details.get('credit', 'Unknown')}"
+                          f" — {details.get('url', ORIGIN)}")
         finally:
             # Save cooldown/cookies even after failure. Never prune the previous active image.
-            cleanup(cache, state, args.keep, args.max_age, selected)
+            # A cleanup or cookie problem must not prevent saving state.
+            try:
+                cleanup(cache, state, args.keep, args.max_age, selected)
+            except OSError as exc:
+                warn(f"cache cleanup failed: {exc}")
             save_state(cache, state)
             if not args.offline:
-                client.save_cookies()
+                try:
+                    client.save_cookies()
+                except OSError as exc:
+                    warn(f"could not save cookies: {exc}")
+
+
+def terminate(signum, _frame):
+    raise Terminated(signum)
 
 
 def main(argv=None):
     args = arguments(argv)
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(signum, terminate)
     try:
         run(args)
     except (WallpaperError, OSError) as exc:
@@ -677,6 +909,9 @@ def main(argv=None):
     except KeyboardInterrupt:
         warn("interrupted")
         return 130
+    except Terminated as exc:
+        warn("terminated")
+        return 128 + exc.signum
     return 0
 
 
