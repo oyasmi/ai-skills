@@ -41,7 +41,8 @@ cp -R skills/query-akshare "${CODEX_HOME:-$HOME/.codex}/skills/query-akshare"
 需要 Python 3.9+，脚本可以单独复制使用，无需安装包、登录或 API key：
 
 ```bash
-python3 tools/unsplash_wallpaper.py                    # 下载并设置所有虚拟桌面的壁纸
+python3 tools/unsplash_wallpaper.py                    # 只设置主显示器的所有虚拟桌面
+python3 tools/unsplash_wallpaper.py --all-screens      # 设置每块显示器的所有虚拟桌面
 python3 tools/unsplash_wallpaper.py --current-space    # 仅设置各显示器当前可见的桌面
 python3 tools/unsplash_wallpaper.py --download-only    # 仅下载，打印图片路径和来源
 python3 tools/unsplash_wallpaper.py --offline          # 不联网，轮换已有图片
@@ -75,10 +76,14 @@ HTTP 429 会保存 Unsplash 的冷却时间，遵守 `Retry-After`，期间直�
 ```
 
 `--quiet` 只隐藏成功输出，错误和后备来源的提示保留在 stderr，方便 cron 记录。
-cron 中请使用绝对路径，不依赖 PATH 或工作目录。默认设置**所有虚拟桌面和显示器**的
-同一张壁纸（macOS 14+），同时更新默认配置，让新建桌面也使用该壁纸。
-脚本通过系统自带的 `osascript` 调用 AppKit 验证图片，然后暂停当前用户的
-`WallpaperAgent`，原子更新 `~/Library/Application Support/com.apple.wallpaper/Store/Index.plist`
+cron 中请使用绝对路径，不依赖 PATH 或工作目录。默认只设置**主显示器**
+（菜单栏所在、在系统设置里指定的那块屏幕）的所有虚拟桌面：同一张壁纸写入
+该屏的全 Space 配置，以及每个已有 Space 里这块屏幕的配置（macOS 14+）。
+副屏、各 Space 的共享默认槽，以及新建桌面的全局默认配置都保持不动。
+`--all-screens` 才把每块显示器的所有虚拟桌面换成这张壁纸，并更新全局默认
+配置，让新建桌面也使用它。脚本通过系统自带的 `osascript` 调用 AppKit
+验证图片并识别主显示器，然后暂停当前用户的 `WallpaperAgent`，原子更新
+`~/Library/Application Support/com.apple.wallpaper/Store/Index.plist`
 里的桌面配置，再重启壁纸进程；保留屏幕保护程序和显示器/桌面标识。
 图片配置同时写入缩放方式和完整背景颜色（含颜色空间），避免 macOS 15
 因配置解码失败而回退到默认壁纸；图片路径写入成功本身并不能证明图片已经显示。

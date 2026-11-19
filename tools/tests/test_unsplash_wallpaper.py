@@ -481,7 +481,7 @@ class WallpaperTests(unittest.TestCase):
         good, bad = self.image("good", age=1), self.image("bad")
         args = w.arguments(["--cache-dir", str(self.cache), "--quiet"])
 
-        def apply(path, current_space):
+        def apply(path, current_space=False, all_screens=False):
             if path == bad:
                 raise w.BadImageError("macOS could not decode the image")
 
@@ -551,16 +551,34 @@ class WallpaperTests(unittest.TestCase):
 
     def test_osascript_receives_path_as_argument_and_has_timeout(self):
         path = self.cache / 'quotes"and spaces.jpg'
-        with patch.object(w.subprocess, "run", return_value=Mock(returncode=0)) as run, \
+        display = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
+        with patch.object(w.subprocess, "run", return_value=Mock(
+                returncode=0, stdout=f'"{display.lower()}"\n')) as run, \
                 patch.object(w, "set_all_spaces") as all_spaces:
             w.set_wallpaper(path)
-        all_spaces.assert_called_once_with(path)
+        all_spaces.assert_called_once_with(path, display)
         self.assertEqual(run.call_args.args[0][-2:], [str(path), "validate"])
         self.assertNotIn(str(path), run.call_args.kwargs["input"])
         self.assertEqual(run.call_args.kwargs["timeout"], 30)
         with patch.object(w.subprocess, "run", side_effect=subprocess.TimeoutExpired("osascript", 30)):
             with self.assertRaises(w.WallpaperError):
                 w.set_wallpaper(path)
+
+    def test_run_limits_apply_to_the_main_display_unless_all_screens(self):
+        selected = self.image("picked")
+        cases = (
+            ([], False, False),
+            (["--all-screens"], False, True),
+            (["--current-space"], True, False),
+        )
+        for extra, current_space, all_screens in cases:
+            with self.subTest(extra=extra):
+                args = w.arguments(["--cache-dir", str(self.cache), "--offline", "--quiet", *extra])
+                with patch.object(w.sys, "platform", "darwin"), \
+                        patch.object(w, "set_wallpaper") as apply:
+                    w.run(args)
+                apply.assert_called_once_with(
+                    selected, current_space=current_space, all_screens=all_screens)
 
     def test_terminate_signal_raises_after_cleanup(self):
         previous = signal.signal(signal.SIGTERM, w.terminate)
@@ -762,8 +780,79 @@ class AllSpacesTests(unittest.TestCase):
         self.assertTrue(w.arguments(["--current-space"]).current_space)
         with patch.object(w.subprocess, "run", return_value=Mock(returncode=0)) as run, \
                 patch.object(w, "set_all_spaces") as all_spaces:
-            w.set_wallpaper(self.path, current_space=True)
+            w.set_wallpaper(self.path, current_space=True, all_screens=True)
         self.assertEqual(run.call_args.args[0][-1], "apply")
+        all_spaces.assert_not_called()
+
+    def test_validation_script_identifies_the_menu_bar_display(self):
+        self.assertIn("objectAtIndex(0)", w.SET_WALLPAPER)
+        self.assertIn("CGDisplayCreateUUIDFromDisplayID", w.SET_WALLPAPER)
+        self.assertNotIn("mainScreen", w.SET_WALLPAPER)
+
+    def test_main_display_updates_only_that_display_on_every_space(self):
+        main = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        self.store["Spaces"]["space-1"]["Displays"][main] = {
+            "Type": "individual", "Desktop": {"old": True}, "Idle": self.idle}
+        original = copy.deepcopy(self.store)
+        updated = w.wallpaper_store_for_image(self.store, self.path, main.upper())
+        for container in (updated["Displays"], updated["Spaces"]["space-1"]["Displays"],
+                          updated["Spaces"]["space-2"]["Displays"]):
+            slot = container[main]
+            choice = slot["Desktop"]["Content"]["Choices"][0]
+            self.assertEqual(choice["Provider"], "com.apple.wallpaper.choice.image")
+            self.assertEqual(choice["Files"], [{"relative": self.path.resolve().as_uri()}])
+            self.assertNotIn(main.upper(), container)
+        self.assertEqual(updated["Displays"][main]["Type"], "desktop")
+        self.assertNotIn("Idle", updated["Displays"][main])
+        preserved = updated["Spaces"]["space-1"]["Displays"][main]
+        self.assertEqual(preserved["Idle"], self.idle)
+        self.assertEqual(preserved["Type"], "individual")
+        self.assertEqual(updated["Spaces"]["space-2"]["Displays"][main]["Type"], "desktop")
+        self.assertEqual(updated["AllSpacesAndDisplays"], original["AllSpacesAndDisplays"])
+        self.assertEqual(updated["SystemDefault"], original["SystemDefault"])
+        self.assertEqual(updated["Displays"]["display-1"], original["Displays"]["display-1"])
+        self.assertEqual(updated["Spaces"]["space-1"]["Default"], original["Spaces"]["space-1"]["Default"])
+        self.assertEqual(updated["Spaces"]["space-1"]["Displays"]["display-1"],
+                         original["Spaces"]["space-1"]["Displays"]["display-1"])
+        self.assertEqual(updated["Spaces"]["space-1"]["Displays"]["display-2"], "$null")
+        self.assertEqual(updated["Spaces"]["space-2"]["Default"], original["Spaces"]["space-2"]["Default"])
+        self.assertEqual(updated["Spaces"]["space-1"]["extra"], "keep")
+        self.assertEqual(self.store, original)
+
+    def test_display_key_casing_is_reused_everywhere(self):
+        lower = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        upper = lower.upper()
+        self.store["Displays"][lower] = {"Type": "desktop", "Idle": self.idle}
+        self.store["Spaces"]["space-2"]["Displays"] = {upper: {"Type": "idle", "Idle": self.idle}}
+        updated = w.wallpaper_store_for_image(self.store, self.path, upper)
+        self.assertIn("Desktop", updated["Displays"][lower])
+        self.assertNotIn(upper, updated["Displays"])
+        self.assertEqual(updated["Displays"][lower]["Idle"], self.idle)
+        self.assertIn("Desktop", updated["Spaces"]["space-2"]["Displays"][upper])
+        self.assertNotIn(lower, updated["Spaces"]["space-2"]["Displays"])
+        self.assertEqual(updated["Spaces"]["space-2"]["Displays"][upper]["Idle"], self.idle)
+        self.assertIn("Desktop", updated["Spaces"]["space-1"]["Displays"][lower])
+        self.assertNotIn(upper, updated["Spaces"]["space-1"]["Displays"])
+
+    def test_invalid_display_id_is_rejected_without_editing_the_store(self):
+        original = copy.deepcopy(self.store)
+        with self.assertRaises(w.WallpaperError):
+            w.wallpaper_store_for_image(self.store, self.path, "display-1")
+        self.assertEqual(self.store, original)
+
+    def test_all_screens_updates_every_display_in_the_store(self):
+        self.assertFalse(w.arguments([]).all_screens)
+        self.assertTrue(w.arguments(["--all-screens"]).all_screens)
+        with patch.object(w.subprocess, "run", return_value=Mock(returncode=0, stdout="not-a-uuid")) as run, \
+                patch.object(w, "set_all_spaces") as all_spaces:
+            w.set_wallpaper(self.path, all_screens=True)
+        self.assertEqual(run.call_args.args[0][-1], "validate")
+        all_spaces.assert_called_once_with(self.path, None)
+
+    def test_unreadable_main_display_does_not_edit_the_store(self):
+        with patch.object(w.subprocess, "run", return_value=Mock(returncode=0, stdout="\n")), \
+                patch.object(w, "set_all_spaces") as all_spaces, self.assertRaises(w.WallpaperError):
+            w.set_wallpaper(self.path)
         all_spaces.assert_not_called()
 
     def test_invalid_image_never_edits_store(self):

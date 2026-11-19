@@ -14,8 +14,10 @@ network budget. Downloads are JPEG, at most 32 MiB. Unsplash images are never
 upscaled; Bing supplies its UHD version (usually 3840 px).
 
 Run once from Terminal before scheduling in your own user's crontab. By default,
-update all Spaces and displays via WallpaperAgent's store (macOS 14+). Use
---current-space for AppKit's active-desktop behavior, including on older macOS.
+update every Space on the main display (the menu-bar display; it changes only
+when the user picks a new main display) via WallpaperAgent's store (macOS 14+).
+Use --all-screens for every display, or --current-space for AppKit's
+active-desktop behavior on each connected display, including on older macOS.
 Use absolute paths for both Python and this script in cron (cron has a small PATH).
 For example, after checking `command -v python3`, using Homebrew on Apple Silicon:
   0 */3 * * * /opt/homebrew/bin/python3 /absolute/path/unsplash_wallpaper.py --quiet
@@ -63,6 +65,8 @@ USER_AGENT = "unsplash-wallpaper/1.0 (Python urllib)"
 PHOTO_ID = re.compile(r"[A-Za-z0-9_-]{1,80}\Z")
 IMAGE_NAME = re.compile(r"wallpaper-[A-Za-z0-9_-]{1,80}\.jpg\Z")
 BING_BASE = re.compile(r"/th\?id=OHR\.[A-Za-z0-9_.-]{1,200}\Z")
+DISPLAY_ID = re.compile(
+    r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\Z")
 MAX_IMAGE = 32 * 1024 * 1024
 MAX_PAGE = 2 * 1024 * 1024
 RNG = random.SystemRandom()
@@ -83,13 +87,24 @@ MAX_COOLDOWN = 86400
 # argv passes the filename as data, rather than interpolating it into source.
 SET_WALLPAPER = r"""
 ObjC.import('AppKit');
+ObjC.import('CoreFoundation');
+ObjC.import('CoreGraphics');
 function run(argv) {
     var screens = $.NSScreen.screens;
     if (!screens.count) throw Error('No displays; run in a logged-in desktop session');
     var url = $.NSURL.fileURLWithPath(argv[0]);
     var image = $.NSImage.alloc.initWithContentsOfURL(url);
     if (!image || !image.isValid) throw Error('macOS could not decode the image');
-    if (argv[1] === 'validate') return;
+    if (argv[1] === 'validate') {
+        // Index 0 is the menu-bar display. It changes only when the user picks
+        // a new main display; the key-window display would follow focus.
+        var number = screens.objectAtIndex(0).deviceDescription.objectForKey('NSScreenNumber');
+        if (!number) throw Error('Could not identify the main display');
+        var uuid = $.CGDisplayCreateUUIDFromDisplayID(number.unsignedIntValue);
+        var text = uuid ? $.CFUUIDCreateString(null, uuid) : null;
+        if (!text) throw Error('Could not identify the main display');
+        return ObjC.unwrap(text);
+    }
     var workspace = $.NSWorkspace.sharedWorkspace;
     for (var i = 0; i < screens.count; i++) {
         var error = Ref();
@@ -654,12 +669,39 @@ def wallpaper_command(command, **kwargs):
     return result
 
 
-def wallpaper_store_for_image(store, path):
-    """Replace desktop slots, keeping display/Space IDs and screensavers intact."""
+def preferred_display_key(store, display_id):
+    """Reuse an existing plist spelling so a second casing cannot shadow it."""
+    target = display_id.upper()
+
+    def matches(container):
+        displays = container.get("Displays") if isinstance(container, dict) else None
+        if not isinstance(displays, dict):
+            return []
+        return [key for key in displays if isinstance(key, str) and key.upper() == target]
+
+    found = matches(store)
+    spaces = store.get("Spaces")
+    if isinstance(spaces, dict):
+        for space in spaces.values():
+            found.extend(matches(space))
+    return found[0] if found else target
+
+
+def wallpaper_store_for_image(store, path, display_id=None):
+    """Replace desktop slots, keeping display/Space IDs and screensavers intact.
+
+    display_id updates that display's all-spaces slot and its slot on every
+    Space, leaving other displays and shared defaults alone. None updates every
+    display, every Space, and the defaults used for new desktops.
+    """
     if not isinstance(store, dict) or not {"SystemDefault", "Spaces", "Displays"} <= store.keys():
         raise WallpaperError("unrecognized macOS wallpaper store")
+    if display_id is not None and (not isinstance(display_id, str)
+                                    or DISPLAY_ID.match(display_id) is None):
+        raise WallpaperError("unrecognized main display id")
     updated = copy.deepcopy(store)
     slots = []
+    selected = None if display_id is None else preferred_display_key(updated, display_id)
 
     def add_slot(container, key):
         slot = container.get(key, "$null")
@@ -674,18 +716,27 @@ def wallpaper_store_for_image(store, path):
         displays = container.get("Displays", {})
         if not isinstance(displays, dict):
             raise WallpaperError("unrecognized macOS wallpaper displays")
-        for display_id in displays:
-            add_slot(displays, display_id)
+        if selected is None:
+            for key in displays:
+                add_slot(displays, key)
+            return
+        if "Displays" not in container:
+            displays = container["Displays"] = {}
+        keys = [key for key in displays if isinstance(key, str) and key.upper() == selected.upper()]
+        for key in keys or [selected]:
+            add_slot(displays, key)
 
-    add_slot(updated, "AllSpacesAndDisplays")
-    add_slot(updated, "SystemDefault")
+    if selected is None:
+        add_slot(updated, "AllSpacesAndDisplays")
+        add_slot(updated, "SystemDefault")
     add_displays(updated)
     if not isinstance(updated["Spaces"], dict):
         raise WallpaperError("unrecognized macOS wallpaper Spaces")
     for space in updated["Spaces"].values():
         if not isinstance(space, dict):
             raise WallpaperError("unrecognized macOS wallpaper Space")
-        add_slot(space, "Default")
+        if selected is None:
+            add_slot(space, "Default")
         add_displays(space)
 
     now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
@@ -720,8 +771,12 @@ def wallpaper_store_for_image(store, path):
     return updated
 
 
-def set_all_spaces(path):
-    """Pause only this user's agent so it cannot overwrite the atomic store edit."""
+def set_all_spaces(path, display_id=None):
+    """Pause only this user's agent so it cannot overwrite the atomic store edit.
+
+    display_id limits the change to one display on every Space. None updates
+    every display and the defaults for new desktops.
+    """
     store_path = Path.home() / "Library/Application Support/com.apple.wallpaper/Store/Index.plist"
     if not store_path.is_file():
         raise WallpaperError("all-Spaces wallpaper setting requires the macOS 14+ wallpaper store; "
@@ -756,7 +811,7 @@ def set_all_spaces(path):
             store = plistlib.loads(original)
         except (ValueError, TypeError, OverflowError) as exc:
             raise WallpaperError("invalid macOS wallpaper store") from exc
-        updated = wallpaper_store_for_image(store, path)
+        updated = wallpaper_store_for_image(store, path, display_id)
         fmt = plistlib.FMT_BINARY if original.startswith(b"bplist00") else plistlib.FMT_XML
         write_store(plistlib.dumps(updated, fmt=fmt, sort_keys=False))
         written = True
@@ -783,7 +838,17 @@ def set_all_spaces(path):
             raise resume_error
 
 
-def set_wallpaper(path, current_space=False):
+def primary_display_id(output):
+    """Accept the menu-bar display UUID printed by the validation script."""
+    text = output.strip() if isinstance(output, str) else ""
+    if len(text) >= 2 and text[0] == text[-1] == '"':
+        text = text[1:-1]
+    if DISPLAY_ID.match(text) is None:
+        raise WallpaperError("could not identify the main display")
+    return text.upper()
+
+
+def set_wallpaper(path, current_space=False, all_screens=False):
     result = wallpaper_command(
         ["/usr/bin/osascript", "-l", "JavaScript", "-", str(path),
          "apply" if current_space else "validate"], input=SET_WALLPAPER)
@@ -793,7 +858,7 @@ def set_wallpaper(path, current_space=False):
             raise BadImageError(message)
         raise WallpaperError(message)
     if not current_space:
-        set_all_spaces(path)
+        set_all_spaces(path, None if all_screens else primary_display_id(result.stdout))
 
 
 def bounded_int(low, high):
@@ -823,8 +888,10 @@ def arguments(argv=None):
     parser.add_argument("--timeout", type=bounded_int(1, 120), default=20, metavar="SEC",
                         help="network socket timeout (default: 20)")
     parser.add_argument("--download-only", action="store_true", help="download/choose an image without applying it")
+    parser.add_argument("--all-screens", action="store_true",
+                        help="update all Spaces on every display (default: all Spaces on the main display, macOS 14+)")
     parser.add_argument("--current-space", action="store_true",
-                        help="only update active desktops on connected displays (default: all Spaces, macOS 14+)")
+                        help="only update the active desktop on each connected display, including on older macOS")
     parser.add_argument("--offline", action="store_true", help="rotate cached images without network requests")
     parser.add_argument("--quiet", action="store_true", help="suppress success messages; keep errors and warnings")
     return parser.parse_args(argv)
@@ -855,7 +922,8 @@ def run(args):
                 selected, from_cache = choose_cached(cache, state), True
             while not args.download_only:
                 try:
-                    set_wallpaper(selected, current_space=args.current_space)
+                    set_wallpaper(selected, current_space=args.current_space,
+                                  all_screens=args.all_screens)
                 except BadImageError as exc:
                     # Each discard deletes a file, so this ends when the cache runs out.
                     warn(f"{exc}; discarding {selected.name}")
